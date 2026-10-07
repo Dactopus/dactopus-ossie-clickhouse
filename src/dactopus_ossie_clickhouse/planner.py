@@ -174,7 +174,7 @@ class Query:
             if not isinstance(item, dict) or not isinstance(item.get("field"), str):
                 raise PlanError(
                     f"order_by item {item!r}: use a list of objects such as "
-                    '{"field": "total_sales", "direction": "DESC"}'
+                    '{"field": "<measure or dimension>", "direction": "DESC"}'
                 )
             if set(item) - {"field", "direction", "nulls"} or not all(
                 isinstance(item.get(k), str | None) for k in ("direction", "nulls")

@@ -44,20 +44,23 @@ except ImportError:  # pragma: no cover  (build_server says which extra to insta
     pass
 
 DEFAULT_LIMIT = 100  # rows when a query sets no limit: an agent reads every one
+# Placeholders, not names: the description is the same for every model, and the
+# agent takes names from list_model rather than from an example.
 QUERY_TOOL = f"""Run an aggregation query and return its rows and SQL. The query follows Ossie
 Layer 3, {LAYER3_REVISION} §5.1.1: measures are metric names, dimensions are
 dataset.field; where filters rows before aggregation (dataset.field conditions,
-e.g. "date_dim.d_year = 1998"); having filters aggregated rows (metric names and
-the query's dimensions, e.g. "total_sales > 1000000"); each is a string or a list
+e.g. "<dataset>.<field> = 'value'"); having filters aggregated rows (metric names
+and the query's dimensions, e.g. "<metric> > 1000"); each is a string or a list
 (AND). A window metric such as a rank cannot be filtered: select it instead.
-order_by: [{{"field": "total_sales", "direction": "DESC"}}], default the first
+order_by: [{{"field": "<metric>", "direction": "DESC"}}], default the first
 measure descending, ties broken by the dimensions; NULLs sort as the highest
 value, so first in DESC unless "nulls": "LAST" (a key of this server; #246 names
 NULLS FIRST / LAST but gives the object no key for them), and a limit may cut
 them off. limit defaults to {DEFAULT_LIMIT}.
-Example: {{"measures": ["total_sales"], "dimensions": ["item.i_category"],
-"where": "date_dim.d_year = 1998", "limit": 5}}. A refusal carries error.code
-and suggestions to repair the query by."""
+Example: {{"measures": ["<metric>"], "dimensions": ["<dataset>.<field>"],
+"where": "<dataset>.<field> = 'value'", "order_by": [{{"field": "<metric>",
+"direction": "DESC"}}], "limit": 5}}. Names come from list_model. A refusal
+carries error.code and suggestions to repair the query by."""
 
 # --- pure views of a model, testable without a server ------------------------
 

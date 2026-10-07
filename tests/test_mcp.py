@@ -1,5 +1,7 @@
 """MCP server: tools are thin wrappers, checked against the library directly."""
 
+import re
+
 import pytest
 
 from dactopus_ossie_clickhouse import load_model
@@ -183,6 +185,9 @@ async def test_tools_listed(client):
         "fields",
     }
     assert LAYER3_REVISION in q.description
+    # The same for every model: no names an agent could take for its own model's.
+    names = {m.name for m in MODEL.metrics} | {d.name for d in MODEL.datasets}
+    assert not {n for n in names if re.search(rf"\b{n}\b", q.description)}
 
 
 @pytest.mark.anyio

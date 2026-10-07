@@ -93,7 +93,7 @@ def test_final_follows_the_engine_of_the_stored_rows(orders, under, final):
         tables["ossie_test", "orders_local"] = under
     ex = Executor(FakeClickHouse(tables), load_model(FIXTURE))
     assert ex.catalog["orders"].dedup is final
-    assert ("FINAL" in ex.planner.sql(Query(metrics=("revenue",)))) is final
+    assert ("FINAL" in ex.planner.sql(Query(measures=("revenue",)))) is final
     assert not ex.catalog["orders_raw"].dedup  # overridden
     undecided = [p for p in ex.check() if "cannot see" in p]
     if orders[0] == "Distributed" and not under:
@@ -130,10 +130,10 @@ def test_dedup_final_forces_final(tmp_path):
 
 
 def test_dedup_with_final(ex):
-    r = ex.execute(Query(metrics=("revenue",)))
+    r = ex.execute(Query(measures=("revenue",)))
     assert "FROM ossie_test.orders AS orders FINAL" in r.sql
     assert r.rows == [(65.0,)]  # 15 + 20 + 30, not 10 + 15 + 20 + 30
-    raw = ex.execute(Query(metrics=("raw_revenue",)))
+    raw = ex.execute(Query(measures=("raw_revenue",)))
     assert "FINAL" not in raw.sql and raw.rows == [(75.0,)]
 
 
@@ -163,13 +163,13 @@ def test_final_through_a_view_or_merge_table(ex, tmp_path, wrapped, revenue):
     )
     ex.client.command(f"CREATE {wrapped}")
     r = _with_sources(ex, tmp_path, orders="ossie_test.wrapped").execute(
-        Query(metrics=("revenue",))
+        Query(measures=("revenue",))
     )
     assert r.rows == [(revenue,)] and ("FINAL" in r.sql) is (revenue == 65.0)
 
 
 def test_dictionary_read_with_dictget(ex):
-    r = ex.execute(Query(metrics=("revenue",), dimensions=("country.name",)))
+    r = ex.execute(Query(measures=("revenue",), dimensions=("country.name",)))
     assert "dictGetOrNull('ossie_test.country', 'name', orders.country_code)" in r.sql
     assert "JOIN" not in r.sql
     assert set(r.rows) == {(None, 30.0), ("France", 20.0), ("Germany", 15.0)}
@@ -177,7 +177,7 @@ def test_dictionary_read_with_dictget(ex):
 
 def test_dictionary_key_column_is_the_join_key(ex):
     # dictGet* cannot read the key; unknown keys are NULL as with a LEFT JOIN.
-    r = ex.execute(Query(metrics=("revenue",), dimensions=("country.code",)))
+    r = ex.execute(Query(measures=("revenue",), dimensions=("country.code",)))
     assert "dictGetOrNull('ossie_test.country', 'code'" not in r.sql
     assert set(r.rows) == {(None, 30.0), ("FR", 20.0), ("DE", 15.0)}
 
@@ -195,7 +195,7 @@ def _with_sources(ex, tmp_path, **sources):
 def test_quoted_source(ex, tmp_path):
     # dbt-clickhouse writes every source quoted.
     q = _with_sources(ex, tmp_path, orders="`ossie_test`.`orders`", country='"ossie_test".country')
-    r = q.execute(Query(metrics=("revenue",), dimensions=("country.name",)))
+    r = q.execute(Query(measures=("revenue",), dimensions=("country.name",)))
     assert 'FROM "ossie_test"."orders" AS orders FINAL' in r.sql
     assert "dictGetOrNull('ossie_test.country', 'name'" in r.sql
     assert set(r.rows) == {(None, 30.0), ("France", 20.0), ("Germany", 15.0)}
@@ -205,7 +205,7 @@ def test_quoted_source(ex, tmp_path):
 def test_dictionary_with_special_name(ex, tmp_path, name):
     # dictGet* takes the name unquoted and cannot address one with a dot: join it.
     q = _with_sources(ex, tmp_path, country=f"ossie_test.`{name}`")
-    r = q.execute(Query(metrics=("revenue",), dimensions=("country.name",)))
+    r = q.execute(Query(measures=("revenue",), dimensions=("country.name",)))
     if "." in name:
         assert f'LEFT JOIN ossie_test."{name}" AS country' in r.sql and "dictGet" not in r.sql
     else:
@@ -222,7 +222,7 @@ def test_dictionary_joined_on_superset_of_its_key(ex, tmp_path):
     )
     p.write_text(text.replace("to_columns: [code]", "to_columns: [code, name]"))
     r = Executor(ex.client, load_model(p)).execute(
-        Query(metrics=("revenue",), dimensions=("country.name",))
+        Query(measures=("revenue",), dimensions=("country.name",))
     )
     assert "LEFT JOIN ossie_test.country AS country" in r.sql and "dictGet" not in r.sql
     assert r.rows == [(None, 65.0)]
@@ -246,23 +246,21 @@ def test_inlined_expressions_keep_their_precedence(ex, tmp_path):
     p.write_text(text)
     e = Executor(ex.client, load_model(p))
     # Amounts 15, 20, 30: (amount - 5) * 2 > 25 keeps 20 and 30, not amount - 5 * 2.
-    assert e.execute(Query(metrics=("revenue",), filters=("orders.net * 2 > 25",))).rows == [
-        (50.0,)
-    ]
+    assert e.execute(Query(measures=("revenue",), where=("orders.net * 2 > 25",))).rows == [(50.0,)]
     # 100 / (65 / 3) is 4.6, not 100 / 65 / 3.
-    r = e.execute(Query(metrics=("revenue",), filters=("100 / avg_order > 4",)))
+    r = e.execute(Query(measures=("revenue",), having=("100 / avg_order > 4",)))
     assert r.rows == [(65.0,)]
 
 
 def test_nan_and_inf_become_none(ex):
-    r = ex.execute(Query(metrics=("spread",), dimensions=("orders.order_id",), limit=1))
+    r = ex.execute(Query(measures=("spread",), dimensions=("orders.order_id",), limit=1))
     assert r.rows[0][1] is None
-    assert ex.execute(Query(metrics=("zero_ratio",))).rows == [(None,)]
+    assert ex.execute(Query(measures=("zero_ratio",))).rows == [(None,)]
 
 
 def test_aggregate_over_no_rows_is_null(ex):
     """SQL's SUM over no rows is NULL; ClickHouse's is 0 unless told otherwise."""
-    q = Query(metrics=("revenue",), filters=("orders.amount > 1000",))
+    q = Query(measures=("revenue",), where=("orders.amount > 1000",))
     assert ex.execute(q).rows == [(None,)]
 
 
@@ -280,7 +278,7 @@ def test_odd_sources_do_not_break_introspection(ex, tmp_path, source, problem):
     p.write_text(text)
     odd = Executor(ex.client, load_model(p))
     assert any(problem in x for x in odd.check())
-    assert odd.execute(Query(metrics=("revenue",))).rows == [(65.0,)]
+    assert odd.execute(Query(measures=("revenue",))).rows == [(65.0,)]
 
 
 def test_check_reports_database_level_problems(ex, tmp_path):
@@ -334,7 +332,7 @@ def test_backslash_in_a_column_name(ex, tmp_path):
         "  - name: total\n"
         "    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(esc.v)}]}\n"
     )
-    r = Executor(ex.client, load_model(p)).execute(Query(metrics=("total",)))
+    r = Executor(ex.client, load_model(p)).execute(Query(measures=("total",)))
     assert r.rows == [(2.0,)]
     assert 'SUM(esc."a\\\\x41")' in r.sql
 

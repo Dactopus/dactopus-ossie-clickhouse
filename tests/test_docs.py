@@ -21,9 +21,9 @@ SQL = html.unescape(re.search(r'<pre id="sql">(.*?)</pre>', PAGE, re.S)[1])
 STEPS = json.loads(re.search(r"const STEPS = (\[.*?\]);\n", PAGE, re.S)[1])
 MODEL = load_model(str(ROOT / "tests" / "fixtures" / "web_analytics.yaml"))
 QUESTION = Query(
-    metrics=("revenue", "purchases"),
+    measures=("revenue", "purchases"),
     dimensions=("purchases.purchase_month", "sessions.source_medium", "purchases.currency"),
-    filters=("sessions.country = 'United States'",),
+    where=("sessions.country = 'United States'",),
 )
 
 
@@ -51,7 +51,7 @@ def refusal(ex: Executor, q: Query) -> str:
 
 
 def test_page_shows_the_sql_the_planner_writes():
-    assert STEPS[0][2] == QUESTION.filters[0]
+    assert STEPS[0][2] == QUESTION.where[0]
     assert SQL == Executor(fake_clickhouse(), MODEL).planner.sql(QUESTION, pretty=True)
 
 
@@ -63,7 +63,7 @@ def test_page_marks_every_sql_line_and_only_lines_that_exist():
 
 
 def test_page_quotes_the_fan_out_refusal():
-    q = Query(metrics=("session_conversion_rate",), dimensions=("purchases.currency",))
+    q = Query(measures=("session_conversion_rate",), dimensions=("purchases.currency",))
     assert STEPS[6][2] == refusal(Executor(fake_clickhouse(), MODEL), q)
 
 

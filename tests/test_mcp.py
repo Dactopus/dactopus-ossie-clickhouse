@@ -3,7 +3,16 @@
 import pytest
 
 from dactopus_ossie_clickhouse import load_model
-from dactopus_ossie_clickhouse.mcp_server import describe, instructions, search, summary
+from dactopus_ossie_clickhouse.executor import Result
+from dactopus_ossie_clickhouse.mcp_server import (
+    answer,
+    describe,
+    instructions,
+    refusal,
+    search,
+    summary,
+)
+from dactopus_ossie_clickhouse.planner import LAYER3_REVISION, QUERY_SCHEMA, Code, Suggestion
 from tests.test_model import FIXTURE
 
 MODEL = load_model(FIXTURE)
@@ -89,6 +98,31 @@ def test_describe_shows_the_expression_the_planner_runs():
     assert m["expression"] == "SUM(store_sales.ss_ext_sales_price)"
 
 
+def test_answer_names_the_layer3_revision():
+    from datetime import date
+    from decimal import Decimal
+
+    r = Result(["d", "v"], [(date(1998, 1, 2), Decimal("1.50"))], "SELECT 1", ["Date", "Decimal"])
+    assert answer(r) == {
+        "language": LAYER3_REVISION,
+        "columns": ["d", "v"],
+        "rows": [["1998-01-02", "1.50"]],
+        "row_count": 1,
+        "sql": "SELECT 1",
+    }
+    assert LAYER3_REVISION == "apache/ossie#246@cc0d070"
+
+
+def test_refusal_is_the_ossie_529_error_envelope():
+    out = refusal(Code.E_NAME_NOT_FOUND, "unknown metric 'x'", (Suggestion("name", "y"),))
+    assert out == {
+        "status": "error",
+        "language": LAYER3_REVISION,
+        "error": {"code": "E_NAME_NOT_FOUND", "message": "unknown metric 'x'", "retryable": False},
+        "suggestions": [{"kind": "name", "message": "y"}],
+    }
+
+
 # --- through the protocol, against ClickHouse ---------------------------------
 
 
@@ -137,13 +171,18 @@ async def test_tools_listed(client):
         "query",
     }
     q = next(t for t in tools.tools if t.name == "query")
-    assert set(q.input_schema["properties"]) == {
-        "metrics",
+    assert q.input_schema["required"] == ["query"]
+    assert q.input_schema["properties"]["query"] == QUERY_SCHEMA | {"title": "Query"}
+    assert set(QUERY_SCHEMA["properties"]) == {
         "dimensions",
-        "filters",
+        "measures",
+        "where",
+        "having",
         "order_by",
         "limit",
+        "fields",
     }
+    assert LAYER3_REVISION in q.description
 
 
 @pytest.mark.anyio
@@ -161,25 +200,91 @@ async def test_tools_match_library(client):
 
 
 @pytest.mark.anyio
-async def test_query_and_error(client):
+async def test_query(client):
     r = await client.call_tool(
         "query",
-        {"metrics": ["total_sales"], "dimensions": ["item.i_category"],
-         "filters": ["date_dim.d_year = 1998"], "limit": 3},
+        {"query": {"measures": ["total_sales"], "dimensions": ["item.i_category"],
+                   "where": "date_dim.d_year = 1998", "limit": 3}},
     )  # fmt: skip
     out = r.structured_content
+    assert not r.is_error and out["language"] == LAYER3_REVISION
     assert out["columns"] == ["i_category", "total_sales"] and out["row_count"] == 3
     assert "LEFT JOIN tpcds.item" in out["sql"] and "ORDER BY total_sales DESC" in out["sql"]
     values = [float(row[1]) for row in out["rows"]]
     assert values == sorted(values, reverse=True)
-    r = await client.call_tool("query", {"metrics": ["total_revenue"]})
-    assert not r.is_error and "did you mean: total_sales" in r.structured_content["error"]
-    # A query that plans but fails in ClickHouse is a result too, never an exception.
+    # The #246 example shape: having, order_by objects, a list of where predicates.
     r = await client.call_tool(
-        "query", {"metrics": ["total_sales"], "filters": ["date_dim.d_year = 'abc'"]}
-    )
-    assert not r.is_error and r.structured_content["error"].startswith("ClickHouse: ")
-    assert "\n" not in r.structured_content["error"]
+        "query",
+        {"query": {"dimensions": ["item.i_category"], "measures": ["total_sales"],
+                   "where": ["date_dim.d_year = 1998", "item.i_category IS NOT NULL"],
+                   "having": "total_sales > 100000000",
+                   "order_by": [{"field": "item.i_category", "direction": "ASC"}]}},
+    )  # fmt: skip
+    out = r.structured_content
+    assert [row[0] for row in out["rows"]] == sorted(row[0] for row in out["rows"])
+    assert "HAVING" in out["sql"] and "LIMIT 100" in out["sql"]  # the default limit
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("query", "code", "message"),
+    [
+        (
+            {"measures": ["total_revenue"]},
+            "E_NAME_NOT_FOUND",
+            "unknown metric 'total_revenue' (did you mean: total_sales",
+        ),
+        (
+            {"metrics": ["total_sales"]},
+            "QUERY_INVALID",
+            "unknown query clause 'metrics'; use measures",
+        ),
+        ({"measures": ["total_sales"], "limit": -1}, "QUERY_INVALID", "limit must be"),
+        (
+            {"measures": ["total_sales"], "order_by": ["total_sales desc"]},
+            "QUERY_INVALID",
+            "use a list of objects such as",
+        ),
+        (
+            {"measures": ["total_sales"], "order_by": [{"field": "total_sales", "direction": 1}]},
+            "QUERY_INVALID",
+            "all strings",
+        ),
+        (
+            {"measures": ["total_sales"], "order_by": "total_sales"},
+            "QUERY_INVALID",
+            "use a list of objects",
+        ),
+        ({"measures": "total_sales"}, "QUERY_INVALID", "must be a list of strings"),
+        ({"measures": ["total_sales"], "where": "total_sales > 1"}, "E_AGGREGATE_IN_WHERE", ""),
+        ({}, "E_EMPTY_AGGREGATION_QUERY", ""),
+        ({"fields": ["item.i_brand"]}, "UNSUPPORTED_QUERY", "scalar queries"),
+        # Plans, but ClickHouse fails it: a backend error, on one line.
+        (
+            {"measures": ["total_sales"], "where": "date_dim.d_year = 'abc'"},
+            "BACKEND_ERROR",
+            "ClickHouse: ",
+        ),
+    ],
+)
+async def test_refusals_are_tool_errors(client, query, code, message):
+    r = await client.call_tool("query", {"query": query})
+    out = r.structured_content
+    assert r.is_error and out["status"] == "error" and out["language"] == LAYER3_REVISION
+    assert out["error"]["code"] == code and message in out["error"]["message"]
+    assert out["error"]["retryable"] is False and "\n" not in out["error"]["message"]
+    assert r.content[0].text == f"{code}: {out['error']['message']}"
+
+
+@pytest.mark.anyio
+async def test_name_suggestions_are_structured(client):
+    r = await client.call_tool("query", {"query": {"measures": ["total_sale"]}})
+    assert r.structured_content["suggestions"][0] == {"kind": "name", "message": "total_sales"}
+    r = await client.call_tool("query", {"query": {"filters": ["x"]}})
+    assert r.structured_content["suggestions"] == [
+        {"kind": "name", "message": "where"},
+        {"kind": "name", "message": "having"},
+    ]
 
 
 @pytest.mark.anyio
@@ -194,7 +299,6 @@ async def test_concurrent_queries_share_one_process(tpcds):
     from dactopus_ossie_clickhouse.mcp_server import build_server
 
     async with Client(build_server(MODEL, connect), raise_exceptions=True) as c:
-        calls = [c.call_tool("query", {"filters": ["sleep(0.3) = 0"], "metrics": ["total_sales"]})
-                 for _ in range(3)]  # fmt: skip
-        results = await asyncio.gather(*calls)
-    assert [r.structured_content.get("error") for r in results] == [None, None, None]
+        q = {"where": "sleep(0.3) = 0", "measures": ["total_sales"]}
+        results = await asyncio.gather(*[c.call_tool("query", {"query": q}) for _ in range(3)])
+    assert [r.is_error for r in results] == [False, False, False]

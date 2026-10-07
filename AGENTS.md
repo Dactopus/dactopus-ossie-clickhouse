@@ -8,8 +8,8 @@ dactopus-ossie-clickhouse is an open-source implementation of the
 [Apache Ossie](https://github.com/apache/ossie) semantic model standard for
 ClickHouse. It reads an Ossie data description, translates metric definitions
 into ClickHouse SQL, answers questions posed in business terms (metrics,
-dimensions, filters), and serves the description and queries to AI agents over
-MCP. See [README.md](README.md) for the full product description.
+dimensions, conditions), and serves the description and queries to AI agents
+over MCP. See [README.md](README.md) for the full product description.
 
 Licensed under Apache 2.0.
 
@@ -69,9 +69,11 @@ Python library with a CLI entry point. The parts that constrain code:
   Lower layers never import higher ones.
 - The MCP server (`mcp_server.py`, `[mcp]` extra) is a thin adapter over
   the library. No logic lives only in the MCP layer; each tool is one
-  library call, and errors go back as results with an `error` field, never
-  as exceptions, so suggestions reach the agent. Keep `client_factory` as
-  the only place that decides which ClickHouse connection a caller gets.
+  library call. A refused query goes back as a tool error in the envelope
+  of apache/ossie#529 (`isError`, `structuredContent.error.code`,
+  `suggestions`), never as an exception, so suggestions reach the agent.
+  Keep `client_factory` as the only place that decides which ClickHouse
+  connection a caller gets.
 - Access control is ClickHouse's. Queries run as the connected user; the
   model is trimmed (`access.py`) to the sources and columns that user can
   read, as revealed by `system.tables` and `system.columns`. A hidden object
@@ -96,9 +98,9 @@ Python library with a CLI entry point. The parts that constrain code:
 - Query planning is deterministic: datasets from `source`, joins from
   `relationships`, one `SELECT` per question. Joins are `LEFT JOIN` from
   one root dataset, along the one path of relationships to each dataset
-  the question touches (two paths are ambiguous, #246 §6.9), only along
-  relationships whose `to_columns` cover a primary or unique key of the
-  target. Generated SQL carries
+  the question touches (two paths are `E_AMBIGUOUS_PATH`, #246 §6.9),
+  only along relationships whose `to_columns` cover a primary or unique
+  key of the target. Generated SQL carries
   `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
   and `aggregate_functions_null_for_empty = 1` so an aggregate over no
   rows is NULL, not 0 (counts stay 0).
@@ -112,7 +114,14 @@ Python library with a CLI entry point. The parts that constrain code:
   metric missing from a group is its value over no rows.
 - Name resolution is case-insensitive (spec rule); emitted SQL uses physical
   names exactly as the model writes them (ClickHouse is case-sensitive).
-- Planner errors name the nearest known object; agents recover from that.
+- The query is the aggregation query of apache/ossie#246 §5.1.1
+  (`LAYER3_REVISION`, an open draft): `measures`, `dimensions`, `where`,
+  `having`, `order_by`, `limit`. Follow the draft, not an own variant;
+  when it changes, update the shape and the revision together.
+- Every `PlanError` carries a `Code`: #246's where its trigger matches,
+  otherwise #529's common codes (`QUERY_INVALID`, `UNSUPPORTED_QUERY`).
+  Never invent an `E_*` code. Planner errors name the nearest known
+  object, in the text and as `suggestions`; agents recover from that.
 
 ## Testing
 
@@ -148,10 +157,13 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 - ClickHouse's short aggregate names are approximate: `quantile`,
   `median`, `uniq`. A spec function that is exact translates to an exact
   one; only `APPROX_*` may use them.
-- NULLs sort last in both directions, ClickHouse's default (the spec is
-  silent): `NULL_ORDERING` on the parser dialect, `nulls_first=False` in
-  the planner. Keep it when parsing switches to the Ossie dialect.
-  `NULLS FIRST | LAST` is rejected: the spec's syntax has none.
+- In expressions (window `ORDER BY`), NULLs sort last in both directions,
+  ClickHouse's default (the spec is silent): `NULL_ORDERING` on the parser
+  dialect. Keep it when parsing switches to the Ossie dialect. `NULLS
+  FIRST | LAST` in an expression is rejected: the spec's syntax has none.
+  A query's explicit `order_by` follows #246 (NULL highest: last ascending,
+  first descending); the default order is the first measure descending,
+  NULLs last.
 - SQLGlot adds no parentheses for precedence, and its Python operators
   (`1 - p`) skip them when `p` is the same operator. `rewrite_tree`
   parenthesizes every operator under another operator, so a rewrite builds

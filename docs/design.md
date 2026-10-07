@@ -111,7 +111,7 @@ Known mismatch: the spec's own example of a ratio, `avg_orders`
 on apache/ossie `main`), declares `datatype: Decimal`, and the answer is
 a float. `datatype` is not checked against results.
 
-## NULLs sort last in both directions
+## NULLs sort last in both directions, except in an explicit `order_by`
 
 The spec does not define where NULLs go in `ORDER BY`, and its window
 syntax (`ORDER BY order_expr [ASC|DESC]`) has no `NULLS FIRST | LAST` for
@@ -125,14 +125,27 @@ and the planner matched it, so a running total ordered by a key with NULLs
 started from their sum: on TPC-DS, with `LEFT JOIN`s, the 129,850 sales
 without a matching date came first in `cumulative_sales`.
 
-Chosen: NULLs last both ways. It is ClickHouse's default, so the generated
-SQL carries no `NULLS` clause, and it agrees with DuckDB, the reference
-engine in tests, so no expected value needs pinning. For a query's
-`order_by` it also keeps rows without a value at the end of a top-N list
-in either direction. The parser dialect sets `NULL_ORDERING`; the Ossie
-dialect from apache/ossie PR #222 inherits SQLGlot's default, so switching
-to it must keep the setting. An explicit `NULLS FIRST | LAST` is rejected,
-as the spec's syntax has none. Reopen if the spec defines NULL ordering.
+Chosen for expressions (window `ORDER BY` in fields and metrics): NULLs
+last both ways. It is ClickHouse's default, so the generated SQL carries
+no `NULLS` clause, and it agrees with DuckDB, the reference engine in
+tests, so no expected value needs pinning. The parser dialect sets
+`NULL_ORDERING`; the Ossie dialect from apache/ossie PR #222 inherits
+SQLGlot's default, so switching to it must keep the setting. An explicit
+`NULLS FIRST | LAST` in an expression is rejected, as the spec's syntax
+has none.
+
+A query's own `order_by` follows the Layer 3 draft, apache/ossie#246 §5.1
+(`cc0d070`), which answers apache/ossie#498 for queries: NULL sorts as the
+highest value, last ascending and first descending, Postgres's and
+Snowflake's default, and an entry may say `nulls` explicitly. The planner
+emits `NULLS FIRST` where ClickHouse's default differs, so the row order
+is the same on any engine. Without an `order_by` the planner still sorts
+by the first measure descending with NULLs last: #246 leaves the order of
+such a query to the engine, and an explicit `NULLS LAST` keeps rows
+without a value at the end of a top-N list. #246 applies its rule inside
+`OVER (...)` too; windows keep NULLs last until the spec settles it, so
+the two disagree there. Reopen when #246 or the expression language
+merges.
 
 NaN is not NULL and engines disagree on it too: ClickHouse puts NaN after
 the values and before NULLs in both directions; DuckDB and Postgres treat
@@ -200,7 +213,7 @@ section 6.9 resolves it: the one path of many-to-one relationships is
 used, two or more are ambiguous (`E_AMBIGUOUS_PATH`), none is
 `E_NO_PATH`, and a path visits no dataset twice. The datasets in the
 middle are joined like the others (section 6.2, datasets involved in a
-query), so a row filter may read them, and each relationship on the path
+query), so `where` may filter them, and each relationship on the path
 must cover a key of its target.
 
 Any second path is ambiguous, a direct relationship next to a longer
@@ -265,9 +278,10 @@ The planner refuses both after it picks the root, on the rewritten tree
 Only columns inside an aggregate's argument or its `FILTER (WHERE ...)`
 count. A window function reads
 grouped rows, and its `PARTITION BY` and `ORDER BY` columns are grouping
-keys. The check covers selected metrics and aggregate filters, including
-metrics named in a filter. The error names what made the root (a metric,
-a dimension or a filter) so an agent can split the question.
+keys. The check covers selected metrics and `having` conditions,
+including metrics named in one. The error names what made the root (a
+metric, a dimension, a `where` or `having` condition) so an agent can
+split the question.
 
 The cost: a correct question is refused when its intended population is
 the root's references, such as distinct users per purchased item through
@@ -291,8 +305,8 @@ metrics is answered from its own root and the results are merged on the
 dimensions, as apache/ossie#246 (`cc0d070`) requires in section 6.2,
 step A.7, and section 6.6. A group is the metrics whose aggregates read
 the same datasets. It is planned as a question of its own with the
-question's dimensions and row filters: a row filter applies to every
-metric (step A.6.1). Revenue next to returns by region was refused; an
+question's dimensions and `where`, which applies to every metric (step
+A.6.1). Revenue next to returns by region was refused; an
 agent had to ask twice and combine the rows, which the MCP server's
 instructions forbid.
 
@@ -310,14 +324,19 @@ planner computes it by replacing each aggregate with its value over no
 rows, 0 for counts and NULL otherwise, and each group marks its rows so
 the merge can tell a missing group from a NULL value.
 
-Aggregate filters run on the merged rows (step A.9) and may name metrics,
-selected or not, and the question's dimensions. Refused: an aggregate
-function written into such a filter, and a window metric, which #246
-evaluates over the merged rows (step A.10) and a group would evaluate
-over its own. A question whose dimension or row filter one group cannot
-reach, such as an `orders` field next to a `returns` metric, is refused
-with that group's own error, which names the datasets it cannot join;
-the single-root error would only say the facts do not join.
+`having` runs on the merged rows (step A.9) and may name metrics, selected
+or not, and the question's dimensions. Refused: an aggregate function
+written into `having`, and a window metric, which #246 evaluates over the
+merged rows (step A.10) and a group would evaluate over its own. A
+question whose dimension or `where` one group cannot reach, such as an
+`orders` field next to a `returns` metric, is refused with that group's
+own error and code, which name the datasets it cannot join; the
+single-root error would only say the facts do not join.
+
+Facts that share no dimension at all are stitched only without
+dimensions: each one's total in one row, as §6.6 row 4 reads. With a
+dimension, one of them cannot reach it, and the question is refused with
+`E3013_NO_STITCHING_DIMENSION` (next section).
 
 `tests/test_stitch.py` compares answers with DuckDB running the `FULL OUTER
 JOIN` plan, on the F_PRELUDE data of the Ossie compliance suite
@@ -330,6 +349,38 @@ returns once per order.
 Refusals no longer advise asking for each metric in its own question: the
 advice was given only when each metric planned alone, and such a question
 is now stitched.
+
+## Query shape and refusal codes from the Layer 3 drafts
+
+The query is the aggregation query of apache/ossie#246 §5.1.1 at
+`cc0d070`, an open draft of Ossie's Layer 3, and the MCP tool takes it as
+one JSON object. Taken before it merges so the shape is tried on a working
+executor and the findings go back to the draft (dev@ossie, thread
+"Proposal: an MCP server for Ossie", 2026-10-07); the revision is named in
+the tool description and in every answer, so a client knows which draft it
+talks to. If the draft changes, the shape follows it.
+
+Refusals carry #246's code where its trigger matches the planner's
+reason, and a common code of the `execute_query` draft (apache/ossie#529,
+`938957e`) otherwise: `QUERY_INVALID`, `UNSUPPORTED_QUERY`,
+`BACKEND_ERROR`. No codes of this project's own: an agent repairs a query
+the same way on any engine only if the codes are shared. The planner's
+"no join from one root" splits by #246's cases. Facts that share
+no stitching dimension (no dataset reachable from each through many-to-one
+relationships, §6.8.2), read by one metric or by two measures with a
+dimension, are `E3013_NO_STITCHING_DIMENSION`, as Appendix A words it
+("two unrelated facts referenced together"): the question pairs every row
+of one with every row of the other on any engine, so the agent should ask
+it differently. Two measures of such facts without dimensions are
+answered with each one's total (previous section). Datasets of a measure and its dimensions or conditions with
+no relationship path between them are `E_NO_PATH`. A path the planner
+cannot follow (relationships pointing away from every dataset it could
+start from) is `UNSUPPORTED_QUERY`, not `E_NO_PATH` or E3013, which would
+tell the agent the question is wrong when only this engine cannot answer
+it. Of #529 only the error envelope is
+followed (`isError`, `structuredContent` with `status`, `error`,
+`suggestions`); results stay rows in JSON, not its CSV, and no
+`outputSchema` claims its contract.
 
 ## Remote MCP server, designed, not built
 

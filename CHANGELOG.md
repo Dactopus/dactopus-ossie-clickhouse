@@ -7,6 +7,29 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: a question is the aggregation query of Ossie's Layer 3 draft,
+  apache/ossie#246 §5.1.1 at `cc0d070`. The MCP tool `query` takes one
+  JSON object, `{"query": {"measures": [...], "dimensions": [...], "where":
+  ..., "having": ..., "order_by": [{"field": ..., "direction": "DESC"}],
+  "limit": ...}}`, in place of the arguments `metrics`, `filters` and
+  `order_by` strings. `Query` has `measures`, `where`, `having` and
+  `order_by` of `Order`; the CLI has `-w` and `--having` in place of `-f`,
+  and `-m` is spelled `--measure`. A condition is no longer moved between
+  `WHERE` and `HAVING`: one in the wrong clause is refused.
+- Breaking: a refused query is a tool error (`isError`) in the envelope of
+  the `execute_query` draft, apache/ossie#529: `structuredContent` holds
+  `status`, `language` (the #246 revision), `error` with `code`, `message`
+  and `retryable`, and `suggestions`. Before, it was a result with an
+  `error` string. Every `PlanError` has a `code` (#246's where one applies,
+  such as `E_AMBIGUOUS_PATH` for two paths to a dataset, otherwise
+  `QUERY_INVALID` or `UNSUPPORTED_QUERY`) and `suggestions`; the CLI
+  prints the code. An answer carries `language` too.
+- An explicit `order_by` sorts NULL as the highest value, first
+  descending, as #246 says, unless the entry's `nulls` says `LAST`. The
+  default order, first measure descending, still puts NULLs last.
+
 ## [0.6.0] - 2026-10-13
 
 ### Added

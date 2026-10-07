@@ -97,7 +97,8 @@ async def test_cli_json_and_mcp_show_the_same_values(clickhouse, model, shown, c
     assert main([*args, *(a for d in DIMENSIONS for a in ("-d", d))]) == 0
     cli = [list(r.values()) for r in json.loads(capsys.readouterr().out)]
     async with Client(build_server(load_model(model), lambda: clickhouse)) as c:
-        mcp = (await c.call_tool("query", {"dimensions": list(DIMENSIONS)})).structured_content
+        query = {"query": {"dimensions": list(DIMENSIONS)}}
+        mcp = (await c.call_tool("query", query)).structured_content
     assert cli == mcp["rows"] == [[str(v) if k == 6 else v for k, v in enumerate(r)] for r in shown]
 
 

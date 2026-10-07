@@ -1,8 +1,11 @@
 """MCP server: a thin adapter over the library for AI agents.
 
 Four tools, no logic of their own: everything they do is a library call.
-Errors come back as results with an ``error`` field so the planner's
-"did you mean" hints reach the agent verbatim.
+``query`` takes the aggregation query of Ossie Layer 3 (apache/ossie#246
+§5.1.1) as a JSON object. A refusal comes back as a tool error in the
+envelope of apache/ossie#529 (``isError``, ``structuredContent.error`` with
+a #246 code where one applies, ``suggestions``), never as an exception, so
+the planner's "did you mean" hints reach the agent verbatim.
 
 Runs over stdio with ClickHouse credentials from the environment, so one
 process serves one ClickHouse user and access control applies unchanged.
@@ -12,16 +15,49 @@ identity to a ClickHouse connection.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
+from dataclasses import replace
 from importlib.metadata import version
-from typing import Any
+from typing import Annotated, Any
 
+import pydantic_core
+from clickhouse_connect.driver.exceptions import OperationalError
 from ossie import OssieDocument
+from pydantic import WithJsonSchema
 
 from dactopus_ossie_clickhouse.access import Policy
-from dactopus_ossie_clickhouse.executor import Executor, connect
-from dactopus_ossie_clickhouse.planner import PlanError, Query
+from dactopus_ossie_clickhouse.executor import Executor, Result, connect
+from dactopus_ossie_clickhouse.planner import (
+    LAYER3_REVISION,
+    QUERY_SCHEMA,
+    Code,
+    PlanError,
+    Query,
+    Suggestion,
+)
 from dactopus_ossie_clickhouse.translate import pick_expression
+
+try:  # module level: the SDK resolves the query tool's return annotation here
+    from mcp.types import CallToolResult, TextContent
+except ImportError:  # pragma: no cover  (build_server says which extra to install)
+    pass
+
+DEFAULT_LIMIT = 100  # rows when a query sets no limit: an agent reads every one
+QUERY_TOOL = f"""Run an aggregation query and return its rows and SQL. The query follows Ossie
+Layer 3, {LAYER3_REVISION} §5.1.1: measures are metric names, dimensions are
+dataset.field; where filters rows before aggregation (dataset.field conditions,
+e.g. "date_dim.d_year = 1998"); having filters aggregated rows (metric names and
+the query's dimensions, e.g. "total_sales > 1000000"); each is a string or a list
+(AND). A window metric such as a rank cannot be filtered: select it instead.
+order_by: [{{"field": "total_sales", "direction": "DESC"}}], default the first
+measure descending, ties broken by the dimensions; NULLs sort as the highest
+value, so first in DESC unless "nulls": "LAST" (a key of this server; #246 names
+NULLS FIRST / LAST but gives the object no key for them), and a limit may cut
+them off. limit defaults to {DEFAULT_LIMIT}.
+Example: {{"measures": ["total_sales"], "dimensions": ["item.i_category"],
+"where": "date_dim.d_year = 1998", "limit": 5}}. A refusal carries error.code
+and suggestions to repair the query by."""
 
 # --- pure views of a model, testable without a server ------------------------
 
@@ -67,12 +103,14 @@ def instructions(model: OssieDocument) -> str:
     the model's part for clients that ignore server instructions."""
     text = (
         f"Semantic model '{model.name}' over ClickHouse. Ask in business terms: pick metrics "
-        "and dimensions by name, never write SQL. Start with list_model. Never add up or "
-        "rank rows yourself: for a total, run query without dimensions; for a comparison, "
-        "query the exact dimensions you need. If the model has no metric or field for what "
-        "is asked, say so; do not approximate it with filters on other fields. Every number "
-        "you state must come from a query result: rounding and formatting are fine, but do "
-        "not derive, estimate or recall other numbers, such as the counts behind a rate."
+        "(as measures) and dimensions by name, never write SQL. Start with list_model. "
+        "When a query is refused, repair it from the error's message and suggestions. "
+        "Never add up or rank rows yourself: for a total, run query without dimensions; for "
+        "a comparison, query the exact dimensions you need. If the model has no metric or "
+        "field for what is asked, say so; do not approximate it with filters on other fields. "
+        "Every number you state must come from a query result: rounding and formatting are "
+        "fine, but do not derive, estimate or recall other numbers, such as the counts "
+        "behind a rate."
     )
     if model_text := _ai(model).get("instructions"):
         text += f"\n\nInstructions of this model:\n{model_text}"
@@ -134,6 +172,31 @@ def describe(model: OssieDocument, name: str) -> dict[str, Any]:
     return {"error": f"unknown object {name!r}" + (f"; similar: {close}" if close else "")}
 
 
+def answer(r: Result) -> dict[str, Any]:
+    """A query's rows, JSON-ready, with the Layer 3 revision the query followed."""
+    return pydantic_core.to_jsonable_python(
+        {
+            "language": LAYER3_REVISION,
+            "columns": r.columns,
+            "rows": r.shown_rows(),
+            "row_count": len(r.rows),
+            "sql": r.sql,
+        }
+    )
+
+
+def refusal(
+    code: Code, message: str, suggestions: tuple[Suggestion, ...] = (), retryable: bool = False
+) -> dict[str, Any]:
+    """A refused or failed query in the error envelope of apache/ossie#529."""
+    return {
+        "status": "error",
+        "language": LAYER3_REVISION,
+        "error": {"code": str(code), "message": message, "retryable": retryable},
+        "suggestions": [{"kind": s.kind, "message": s.message} for s in suggestions],
+    }
+
+
 # --- the server ----------------------------------------------------------------
 
 
@@ -174,36 +237,25 @@ def build_server(
         """Full detail for one dataset, field (dataset.field) or metric, including AI hints."""
         return describe(m, name)
 
-    @server.tool()
-    def query(
-        metrics: list[str] = [],  # noqa: B006
-        dimensions: list[str] = [],  # noqa: B006
-        filters: list[str] = [],  # noqa: B006
-        order_by: list[str] = [],  # noqa: B006
-        limit: int = 100,
-    ) -> dict[str, Any]:
-        """Run a semantic query. metrics and dimensions are names from the model
-        (dimensions as dataset.field); filters are SQL-like conditions over
-        dataset.field, e.g. "date_dim.d_year = 1998", or over a metric name,
-        e.g. "total_sales > 1000000", which filters the aggregated rows
-        (a window metric such as a rank cannot be filtered: select it instead);
-        order_by lists metric or dimension names, "name desc" for descending,
-        default: first metric descending, ties broken by the dimensions; rows
-        with a NULL come last either way, so limit may cut them off. Returns
-        rows and the SQL."""
+    @server.tool(description=QUERY_TOOL)
+    def query(query: Annotated[dict[str, Any], WithJsonSchema(QUERY_SCHEMA)]) -> CallToolResult:
         try:
-            r = executor.execute(
-                Query(tuple(metrics), tuple(dimensions), tuple(filters), tuple(order_by), limit)
-            )
+            q = Query.from_dict(query)
+            r = executor.execute(q if q.limit is not None else replace(q, limit=DEFAULT_LIMIT))
         except PlanError as e:
-            return {"error": str(e)}
+            return _error(refusal(e.code, str(e), e.suggestions))
         except Exception as e:  # ClickHouse errors are useful to the agent too
-            return {"error": f"ClickHouse: {str(e).splitlines()[0][:400]}"}
-        return {
-            "columns": r.columns,
-            "rows": r.shown_rows(),
-            "row_count": len(r.rows),
-            "sql": r.sql,
-        }
+            message = f"ClickHouse: {str(e).splitlines()[0][:400]}"
+            return _error(refusal(Code.BACKEND_ERROR, message, (), isinstance(e, OperationalError)))
+        out = answer(r)
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(out))], structured_content=out
+        )
+
+    def _error(out: dict[str, Any]) -> CallToolResult:
+        text = f"{out['error']['code']}: {out['error']['message']}"
+        return CallToolResult(
+            content=[TextContent(type="text", text=text)], structured_content=out, is_error=True
+        )
 
     return server

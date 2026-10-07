@@ -14,7 +14,13 @@ import pytest
 
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.executor import Executor
-from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
+from dactopus_ossie_clickhouse.planner import (
+    Order,
+    PlanError,
+    Planner,
+    Query,
+    unanswerable_metrics,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stitch.yaml"
 ROWS = {
@@ -105,31 +111,32 @@ CASES = [
         ),
         f"SELECT region, total_revenue, total_returns FROM ({merged(RETAIL)})",
     ),
-    # Aggregate filters run on the merged rows (§6.2 step A.9), on a metric not
-    # selected too.
+    # having runs on the merged rows (§6.2 step A.9), on a metric not selected too.
     (
-        Query(("total_revenue", "total_returns"), ("customers.region",), ("total_returns > 6",)),
+        Query(
+            ("total_revenue", "total_returns"), ("customers.region",), having=("total_returns > 6",)
+        ),
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) WHERE total_returns > 6",
     ),
     (
-        Query(("total_returns",), ("customers.region",), ("order_count > 1",)),
+        Query(("total_returns",), ("customers.region",), having=("order_count > 1",)),
         f"SELECT region, total_returns FROM ({merged()}) WHERE order_count > 1",
     ),
     (
         Query(
             ("total_revenue", "total_returns"),
             ("customers.region",),
-            ("customers.region <> 'EAST'", "total_revenue > 0 OR total_returns > 0"),
+            having=("customers.region <> 'EAST'", "total_revenue > 0 OR total_returns > 0"),
         ),
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
         "WHERE region <> 'EAST' AND (total_revenue > 0 OR total_returns > 0)",
     ),
-    # An aggregate filter may name a dimension too: it reads the merged column.
+    # having may name a dimension too: it reads the merged column.
     (
         Query(
             ("total_revenue", "total_returns"),
             ("customers.region",),
-            ("customers.region <> 'EAST' AND total_returns > 6",),
+            having=("customers.region <> 'EAST' AND total_returns > 6",),
         ),
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
         "WHERE region <> 'EAST' AND total_returns > 6",
@@ -140,11 +147,11 @@ ORDERED = [
         Query(
             ("total_revenue", "total_returns"),
             ("customers.region",),
-            order_by=("total_returns desc",),
+            order_by=(Order("total_returns", "DESC"),),
             limit=2,
         ),
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
-        "ORDER BY total_returns DESC LIMIT 2",
+        "ORDER BY total_returns DESC NULLS FIRST LIMIT 2",
     ),
     # Default order: the first metric descending, NULLs last.
     (
@@ -244,7 +251,7 @@ def test_a_group_that_cannot_reach_a_dimension_names_its_metrics():
     """An orders field next to a returns metric: the refusal is the returns group's,
     not the single-root one that only says the facts do not join."""
     with pytest.raises(
-        PlanError, match=r"'total_returns' cannot be .*: datasets \['orders', 'returns'\]"
+        PlanError, match=r"'total_returns' cannot be .*: no dataset among \['orders', 'returns'\]"
     ):
         Planner(load_model(FIXTURE)).sql(
             Query(("total_revenue", "total_returns"), ("orders.status",))

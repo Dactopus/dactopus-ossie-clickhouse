@@ -8,7 +8,7 @@ messages, issues.
 
 The failure mode this project guards against is SQL that runs and returns
 the wrong value. If you see one, open an issue with the model (or the part
-of it involved), the question (metrics, dimensions, filters), the SQL from
+of it involved), the question (measures, dimensions, where, having), the SQL from
 `dactopus-ossie-clickhouse sql`, and what the value should be, with the spec section
 or the hand-written query that says so.
 

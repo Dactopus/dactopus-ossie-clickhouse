@@ -924,6 +924,18 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     assert message in str(e.value) and e.value.code == Code.UNSUPPORTED_QUERY
 
 
+def test_model_names_win_over_the_expression_check():
+    # A metric named like no identifier is still a name of the model.
+    planner = _with_metrics(**{"gross-margin": "SUM(store_sales.ss_net_profit)", "const": "1"})
+    sql = planner.sql(Query(measures=("Gross-Margin",), dimensions=("item.i_brand",)))
+    assert 'AS "gross-margin"' in sql and 'ORDER BY "gross-margin" DESC' in sql
+    # A query that reads no dataset is refused, not a crash.
+    with pytest.raises(PlanError) as e:
+        planner.sql(Query(measures=("const",)))
+    assert "reads no column of any dataset" in str(e.value)
+    assert e.value.code == Code.UNSUPPORTED_QUERY
+
+
 @pytest.mark.parametrize(
     "query",
     [

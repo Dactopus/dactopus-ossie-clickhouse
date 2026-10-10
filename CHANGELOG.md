@@ -37,6 +37,7 @@ a minor release may change the Python API.
   `QUERY_INVALID`, `UNSUPPORTED_QUERY`) and `suggestions`; the CLI prints
   the code. `list_model` describes the binding: model revision, profile
   and Layer 3 revisions, what is refused.
+- The `mcp` extra needs mcp 2.2 or later.
 - An explicit `order_by` sorts NULL as the highest value, first
   descending, as #246 says, unless the entry's `nulls` says `LAST`. The
   default order, first measure descending, still puts NULLs last.

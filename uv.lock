@@ -377,6 +377,7 @@ mcp = [
 [package.dev-dependencies]
 dev = [
     { name = "duckdb" },
+    { name = "jsonschema" },
     { name = "mcp" },
     { name = "pytest" },
     { name = "ruff" },
@@ -386,7 +387,7 @@ dev = [
 requires-dist = [
     { name = "apache-ossie", git = "https://github.com/apache/ossie.git?subdirectory=python&rev=adfa9e4" },
     { name = "clickhouse-connect", specifier = ">=1,<2" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2,<3" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.2,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "sqlglot", specifier = ">=30.22,<31" },
 ]
@@ -395,7 +396,8 @@ provides-extras = ["mcp"]
 [package.metadata.requires-dev]
 dev = [
     { name = "duckdb", specifier = ">=1.0" },
-    { name = "mcp", specifier = ">=2,<3" },
+    { name = "jsonschema", specifier = ">=4.26" },
+    { name = "mcp", specifier = ">=2.2,<3" },
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
 ]

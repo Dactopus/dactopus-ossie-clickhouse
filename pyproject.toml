@@ -32,13 +32,13 @@ Homepage = "https://github.com/Dactopus/dactopus-ossie-clickhouse"
 Issues = "https://github.com/Dactopus/dactopus-ossie-clickhouse/issues"
 
 [project.optional-dependencies]
-mcp = ["mcp>=2,<3"]
+mcp = ["mcp>=2.2,<3"]  # execute_query sets its schemas on the SDK's Tool, as of 2.2
 
 [project.scripts]
 dactopus-ossie-clickhouse = "dactopus_ossie_clickhouse.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6", "duckdb>=1.0", "mcp>=2,<3"]
+dev = ["pytest>=8", "ruff>=0.6", "duckdb>=1.0", "mcp>=2.2,<3", "jsonschema>=4.26"]
 
 [build-system]
 requires = ["hatchling"]

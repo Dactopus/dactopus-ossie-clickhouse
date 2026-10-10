@@ -356,13 +356,17 @@ The query is the aggregation query of apache/ossie#246 §5.1.1 at
 `cc0d070`, an open draft of Ossie's Layer 3, and the MCP tool takes it as
 one JSON object. Taken before it merges so the shape is tried on a working
 executor and the findings go back to the draft (dev@ossie, thread
-"Proposal: an MCP server for Ossie", 2026-10-07); the revision is named in
-the tool description and in every answer, so a client knows which draft it
-talks to. If the draft changes, the shape follows it.
+"Proposal: an MCP server for Ossie", 2026-10-07). The tool is that of the
+`execute_query` profile draft, apache/ossie#529 `0.4-draft` at `b5418ee`,
+which binds the #246 object to MCP; its schemas are published unchanged
+and its offline checker passes on captured replies. The binding, named by
+`list_model`, carries both revisions. If a draft changes, the shape
+follows it.
 
 Refusals carry #246's code where its trigger matches the planner's
-reason, and a common code of the `execute_query` draft (apache/ossie#529,
-`938957e`) otherwise: `QUERY_INVALID`, `UNSUPPORTED_QUERY`,
+reason, and a common code of the `execute_query` draft (apache/ossie#529)
+otherwise: `INVALID_ARGUMENT` for a value its query schema rejects,
+`QUERY_INVALID`, `UNSUPPORTED_QUERY`, `SOURCE_UNAVAILABLE`,
 `BACKEND_ERROR`. No codes of this project's own: an agent repairs a query
 the same way on any engine only if the codes are shared. The planner's
 "no join from one root" splits by #246's cases. Facts that share
@@ -377,10 +381,25 @@ no relationship path between them are `E_NO_PATH`. A path the planner
 cannot follow (relationships pointing away from every dataset it could
 start from) is `UNSUPPORTED_QUERY`, not `E_NO_PATH` or E3013, which would
 tell the agent the question is wrong when only this engine cannot answer
-it. Of #529 only the error envelope is
-followed (`isError`, `structuredContent` with `status`, `error`,
-`suggestions`); results stay rows in JSON, not its CSV, and no
-`outputSchema` claims its contract.
+it.
+`E_PRIMARY_KEY_REQUIRED` stays for a join to a dataset with no declared
+key: #246 §4.2 lets an engine require primary keys, so it is not a
+planner gap passed off as an invalid question.
+
+The profile's reply is followed whole. Rows go out as embedded CSV, the
+profile's own encoding (NULL is an unquoted `\N`, a string starting with
+a backslash gets one more), not ClickHouse's CSV output, which quotes the
+string `\N` instead and so differs from the profile. Types come from
+the ClickHouse column type; a `DateTime` is an instant, so it is
+`DateTimeTz`, in ISO 8601 with its offset, where the CLI prints ClickHouse's
+text. A value of no profile type, such as a `Time`, goes out as text as
+ClickHouse prints it (`-01:02:03`), as in the CLI. `data_source_id` is the model name and a hash of the whole
+model: the profile forbids reusing an id for another revision, and an
+agent holding an old one is refused with `SOURCE_UNAVAILABLE` and the
+current id as a suggestion. Without a `limit`, 100 rows return and the
+reply says `truncated` if there were more (one more row is asked for to
+tell); a query's own `limit` is its meaning, so that answer is
+`complete`.
 
 ## Remote MCP server, designed, not built
 

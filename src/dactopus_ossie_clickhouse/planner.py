@@ -34,7 +34,8 @@ class Code(StrEnum):
 
     E_* and E3013_* are the codes of apache/ossie#246 (Appendix A). Where #246
     has none, the common codes of the execute_query profile (apache/ossie#529):
-    QUERY_INVALID for a query that is wrong, UNSUPPORTED_QUERY for one this
+    INVALID_ARGUMENT for a clause value its query schema rejects,
+    QUERY_INVALID for a query that is otherwise wrong, UNSUPPORTED_QUERY for one this
     version cannot answer, SOURCE_UNAVAILABLE for a model the connected user
     cannot read at all, BACKEND_ERROR for ClickHouse failing a query."""
 
@@ -43,12 +44,14 @@ class Code(StrEnum):
     E_AMBIGUOUS_PATH = "E_AMBIGUOUS_PATH"
     E3013_NO_STITCHING_DIMENSION = "E3013_NO_STITCHING_DIMENSION"
     E_EMPTY_AGGREGATION_QUERY = "E_EMPTY_AGGREGATION_QUERY"
+    E_EMPTY_SCALAR_QUERY = "E_EMPTY_SCALAR_QUERY"
     E_MIXED_QUERY_SHAPE = "E_MIXED_QUERY_SHAPE"
     E_AGGREGATE_IN_WHERE = "E_AGGREGATE_IN_WHERE"
     E_WINDOW_IN_WHERE = "E_WINDOW_IN_WHERE"
     E_NON_AGGREGATE_IN_HAVING = "E_NON_AGGREGATE_IN_HAVING"
     E_MIXED_PREDICATE_LEVEL = "E_MIXED_PREDICATE_LEVEL"
     E_PRIMARY_KEY_REQUIRED = "E_PRIMARY_KEY_REQUIRED"
+    INVALID_ARGUMENT = "INVALID_ARGUMENT"
     QUERY_INVALID = "QUERY_INVALID"
     UNSUPPORTED_QUERY = "UNSUPPORTED_QUERY"
     SOURCE_UNAVAILABLE = "SOURCE_UNAVAILABLE"
@@ -146,115 +149,112 @@ class Query:
 
     @classmethod
     def from_dict(cls, obj: Any) -> Query:
-        """A query given as the JSON object of #246 §5.1.1 (QUERY_SCHEMA)."""
+        """A query given as the Layer 3 JSON object of the execute_query profile
+        (apache/ossie#529, its query schema): #246 §5.1 with `order_by` objects.
+
+        A value the schema rejects is INVALID_ARGUMENT; a shape it rejects (both
+        fields and dimensions or measures, or neither) gets the #246 code."""
         if not isinstance(obj, dict):
-            raise PlanError(f"a query is a JSON object with {', '.join(_CLAUSES)}")
+            raise PlanError(
+                f"a query is a JSON object with {', '.join(_CLAUSES)}", Code.INVALID_ARGUMENT
+            )
         for key in obj:
             if key in _RENAMED:
                 hint = " or ".join(_RENAMED[key])
                 raise PlanError(
                     f"unknown query clause {key!r}; use {hint}",
-                    suggestions=tuple(Suggestion("name", n) for n in _RENAMED[key]),
+                    Code.INVALID_ARGUMENT,
+                    tuple(Suggestion("name", n) for n in _RENAMED[key]),
                 )
             if key not in _CLAUSES:
-                raise _not_found(f"unknown query clause {key!r}", key, _CLAUSES, Code.QUERY_INVALID)
+                raise _not_found(
+                    f"unknown query clause {key!r}", key, _CLAUSES, Code.INVALID_ARGUMENT
+                )
 
-        def strings(key: str, one: bool = False) -> tuple[str, ...]:
-            v = obj.get(key) or []
-            if one and isinstance(v, str):
-                v = [v]
-            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
-                kind = "a string or a list of strings" if one else "a list of strings"
-                raise PlanError(f"query clause {key!r} must be {kind}")
+        def text(v: Any) -> bool:
+            return isinstance(v, str) and not v.isspace() and v != ""
+
+        def strings(key: str) -> tuple[str, ...]:
+            v = obj.get(key, [])
+            if not isinstance(v, list) or not all(text(x) for x in v):
+                raise PlanError(
+                    f"query clause {key!r} must be a list of non-blank strings",
+                    Code.INVALID_ARGUMENT,
+                )
+            return tuple(v)
+
+        def predicates(key: str) -> tuple[str, ...]:
+            v = obj.get(key, [])
+            if key in obj and text(v):
+                return (v,)
+            if not isinstance(v, list) or not all(text(x) for x in v) or (key in obj and not v):
+                raise PlanError(
+                    f"query clause {key!r} must be a non-blank string or a non-empty list "
+                    "of them (AND)",
+                    Code.INVALID_ARGUMENT,
+                )
             return tuple(v)
 
         order = []
-        items = obj.get("order_by") or []
-        for item in items if isinstance(items, list) else [items]:
-            if not isinstance(item, dict) or not isinstance(item.get("field"), str):
-                raise PlanError(
-                    f"order_by item {item!r}: use a list of objects such as "
-                    '{"field": "<measure or dimension>", "direction": "DESC"}'
-                )
-            if set(item) - {"field", "direction", "nulls"} or not all(
-                isinstance(item.get(k), str | None) for k in ("direction", "nulls")
+        items = obj.get("order_by", [])
+        if not isinstance(items, list) or ("order_by" in obj and not items):
+            raise PlanError(
+                'order_by must be a non-empty list of objects such as {"field": "<measure or '
+                'dimension>", "direction": "DESC"}',
+                Code.INVALID_ARGUMENT,
+            )
+        for item in items:
+            if (
+                not isinstance(item, dict)
+                or not text(item.get("field"))
+                or set(item) - {"field", "direction", "nulls"}
+                or item.get("direction", "ASC") not in ("ASC", "DESC")
+                or item.get("nulls", "LAST") not in ("FIRST", "LAST")
             ):
                 raise PlanError(
-                    f"order_by item {item!r}: keys are field, direction and nulls, all strings"
+                    f"order_by item {item!r}: keys are field (a selected measure or dimension), "
+                    'direction ("ASC" or "DESC") and nulls ("FIRST" or "LAST")',
+                    Code.INVALID_ARGUMENT,
                 )
-            order.append(Order(item["field"], item.get("direction") or "ASC", item.get("nulls")))
+            order.append(Order(item["field"], item.get("direction", "ASC"), item.get("nulls")))
         limit = obj.get("limit")
-        if limit is not None and (type(limit) is not int or limit < 0):
-            raise PlanError(f"limit must be a non-negative integer, got {limit!r}")
-        return cls(
+        if type(limit) is float and limit.is_integer():  # JSON Schema's integer: 5.0 is one
+            limit = int(limit)
+        if "limit" in obj and (type(limit) is not int or limit < 0):
+            raise PlanError(
+                f"limit must be a non-negative integer, got {limit!r}", Code.INVALID_ARGUMENT
+            )
+        q = cls(
             strings("measures"),
             strings("dimensions"),
-            strings("where", one=True),
-            strings("having", one=True),
+            predicates("where"),
+            predicates("having"),
             tuple(order),
             limit,
             strings("fields"),
         )
+        # The profile reads the shape from the clauses present, empty or not.
+        if "fields" in obj:
+            if mixed := [k for k in ("dimensions", "measures", "having") if k in obj]:
+                raise PlanError(
+                    f"a query has either fields (a scalar query) or {' and '.join(mixed)} "
+                    "(of an aggregation query), not both",
+                    Code.E_MIXED_QUERY_SHAPE,
+                )
+            if not q.fields:
+                raise PlanError(
+                    "a scalar query needs at least one field", Code.E_EMPTY_SCALAR_QUERY
+                )
+        elif not q.measures and not q.dimensions:
+            raise PlanError(
+                "a query needs at least one measure or dimension", Code.E_EMPTY_AGGREGATION_QUERY
+            )
+        return q
 
 
 _CLAUSES = ("dimensions", "measures", "where", "having", "order_by", "limit", "fields")
 # Clauses of the query shape before Layer 3 (0.2), which agents may still send.
 _RENAMED = {"metrics": ("measures",), "filters": ("where", "having")}
-_PREDICATES = {
-    "anyOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
-}
-# JSON Schema of Query.from_dict's input: #246 §5.1.1, plus `nulls` (#246 names
-# NULLS FIRST / LAST but gives the object form no key for them) and `fields`.
-QUERY_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "dimensions": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Fields to group by, as dataset.field.",
-        },
-        "measures": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Metric names from the model.",
-        },
-        "where": _PREDICATES
-        | {
-            "description": "Row filter before aggregation, over dataset.field; no metrics or "
-            "aggregates. A list means AND.",
-        },
-        "having": _PREDICATES
-        | {
-            "description": "Filter on aggregated rows, over metric names and the query's "
-            "dimensions. A list means AND.",
-        },
-        "order_by": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["field"],
-                "properties": {
-                    "field": {"type": "string"},
-                    "direction": {"enum": ["ASC", "DESC", "asc", "desc"]},
-                    "nulls": {
-                        "enum": ["FIRST", "LAST", "first", "last"],
-                        "description": "This server's extension: #246 has no key for it.",
-                    },
-                },
-            },
-            "description": "Selected measures or dimensions. NULLs sort as the highest "
-            "value (last ascending, first descending) unless nulls says otherwise.",
-        },
-        "limit": {"type": "integer", "minimum": 0},
-        "fields": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Scalar query; not supported.",
-        },
-    },
-}
 
 
 def source_table(source: str) -> exp.Table:

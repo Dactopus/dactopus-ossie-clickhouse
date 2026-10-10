@@ -65,14 +65,18 @@ Python library with a CLI entry point. The parts that constrain code:
 
 ## Architecture rules
 
-- Layering: model loader -> translator -> planner -> executor -> MCP adapter.
-  Lower layers never import higher ones.
+- Layering: model loader -> translator -> planner -> executor ->
+  `execute_query` (the profile) -> MCP adapter. Lower layers never import
+  higher ones.
 - The MCP server (`mcp_server.py`, `[mcp]` extra) is a thin adapter over
   the library. No logic lives only in the MCP layer; each tool is one
-  library call. A refused query goes back as a tool error in the envelope
-  of apache/ossie#529 (`isError`, `structuredContent.error.code`,
-  `suggestions`), never as an exception, so suggestions reach the agent.
-  Keep `client_factory` as the only place that decides which ClickHouse
+  library call. `execute_query` follows the profile draft apache/ossie#529
+  (`PROFILE_REVISION`): its schemas, copied unchanged into `schemas/`, are
+  the tool's `inputSchema` and `outputSchema`; `execute_query.call` makes
+  the whole reply, rows as embedded CSV. A refused query goes back as a
+  tool error (`isError`, `structuredContent.error.code`, `suggestions`),
+  never as an exception, so suggestions reach the agent. Keep
+  `client_factory` as the only place that decides which ClickHouse
   connection a caller gets.
 - Access control is ClickHouse's. Queries run as the connected user; the
   model is trimmed (`access.py`) to the sources and columns that user can
@@ -116,10 +120,13 @@ Python library with a CLI entry point. The parts that constrain code:
   names exactly as the model writes them (ClickHouse is case-sensitive).
 - The query is the aggregation query of apache/ossie#246 §5.1.1
   (`LAYER3_REVISION`, an open draft): `measures`, `dimensions`, `where`,
-  `having`, `order_by`, `limit`. Follow the draft, not an own variant;
-  when it changes, update the shape and the revision together.
+  `having`, `order_by`, `limit`, as #529's query schema writes it.
+  `Query.from_dict` accepts exactly what that schema accepts. Follow the
+  drafts, not an own variant; when one changes, update the shape, the
+  schemas and the revision together.
 - Every `PlanError` carries a `Code`: #246's where its trigger matches,
-  otherwise #529's common codes (`QUERY_INVALID`, `UNSUPPORTED_QUERY`).
+  otherwise #529's common codes (`INVALID_ARGUMENT`, `QUERY_INVALID`,
+  `UNSUPPORTED_QUERY`).
   Never invent an `E_*` code. Planner errors name the nearest known
   object, in the text and as `suggestions`; agents recover from that.
 

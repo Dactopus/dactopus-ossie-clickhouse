@@ -9,23 +9,34 @@ a minor release may change the Python API.
 
 ### Changed
 
-- Breaking: a question is the aggregation query of Ossie's Layer 3 draft,
-  apache/ossie#246 §5.1.1 at `cc0d070`. The MCP tool `query` takes one
-  JSON object, `{"query": {"measures": [...], "dimensions": [...], "where":
-  ..., "having": ..., "order_by": [{"field": ..., "direction": "DESC"}],
-  "limit": ...}}`, in place of the arguments `metrics`, `filters` and
-  `order_by` strings. `Query` has `measures`, `where`, `having` and
-  `order_by` of `Order`; the CLI has `-w` and `--having` in place of `-f`,
-  and `-m` is spelled `--measure`. A condition is no longer moved between
-  `WHERE` and `HAVING`: one in the wrong clause is refused.
-- Breaking: a refused query is a tool error (`isError`) in the envelope of
-  the `execute_query` draft, apache/ossie#529: `structuredContent` holds
-  `status`, `language` (the #246 revision), `error` with `code`, `message`
-  and `retryable`, and `suggestions`. Before, it was a result with an
-  `error` string. Every `PlanError` has a `code` (#246's where one applies,
-  such as `E_AMBIGUOUS_PATH` for two paths to a dataset, otherwise
-  `QUERY_INVALID` or `UNSUPPORTED_QUERY`) and `suggestions`; the CLI
-  prints the code. An answer carries `language` too.
+- Breaking: the MCP tool `query` is `execute_query`, the tool of the
+  `execute_query` profile draft, apache/ossie#529 `0.4-draft` at
+  `b5418ee`, and passes that profile's conformance checker
+  (`validation/validate_mcp.py`). Its arguments are `data_source_id`
+  (named by `list_model` and the server instructions; it changes when the
+  model does) and `query`, a Layer 3 query object, apache/ossie#246 §5 at
+  `cc0d070`: `{"measures": [...], "dimensions": [...], "where": ...,
+  "having": ..., "order_by": [{"field": ..., "direction": "DESC"}],
+  "limit": ...}`, in place of the arguments `metrics`, `filters` and
+  `order_by` strings. `inputSchema` and `outputSchema` are the profile's.
+  `Query` has `measures`, `where`, `having` and `order_by` of `Order`; the
+  CLI has `-w` and `--having` in place of `-f`, and `-m` is spelled
+  `--measure`. A condition is no longer moved between `WHERE` and
+  `HAVING`: one in the wrong clause is refused.
+- Breaking: an answer embeds its rows as CSV (`text/csv`, NULL as `\N`)
+  and its `structuredContent` is the profile's: `model` with a revision,
+  `preview` of the first 100 rows with logical types, `result` with
+  `row_count`, `completeness` and the SQL under `extensions`. Without a
+  `limit`, 100 rows come back and the answer says `truncated` when there
+  were more; before, the limit was silent. A refused query is a tool error
+  (`isError`): `error` with `code`, `message` and `retryable`, and
+  `suggestions`; before, it was a result with an `error` string. Every
+  `PlanError` has a `code` (#246's where one applies, such as
+  `E_AMBIGUOUS_PATH` for two paths to a dataset, otherwise
+  `INVALID_ARGUMENT` for a value the query schema rejects,
+  `QUERY_INVALID`, `UNSUPPORTED_QUERY`) and `suggestions`; the CLI prints
+  the code. `list_model` describes the binding: model revision, profile
+  and Layer 3 revisions, what is refused.
 - An explicit `order_by` sorts NULL as the highest value, first
   descending, as #246 says, unless the entry's `nulls` says `LAST`. The
   default order, first measure descending, still puts NULLs last.

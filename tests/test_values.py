@@ -3,6 +3,7 @@
 clickhouse-connect reads Time as a timedelta and DateTime as a datetime; each
 surface used to print them its own way (#40)."""
 
+import datetime as dt
 import json
 
 import pytest
@@ -89,17 +90,27 @@ def test_shown_values_filter_back_to_their_row(clickhouse, model, shown):
 
 @pytest.mark.anyio
 async def test_cli_json_and_mcp_show_the_same_values(clickhouse, model, shown, capsys):
+    """A Time reads the same in both. Over MCP the execute_query profile types a
+    DateTime as an instant in ISO 8601 with its offset: the same wall time."""
     from mcp import Client
 
+    from dactopus_ossie_clickhouse.execute_query import Binding
     from dactopus_ossie_clickhouse.mcp_server import build_server
 
     args = ["query", str(model), "--url", clickhouse.url, "--json"]
     assert main([*args, *(a for d in DIMENSIONS for a in ("-d", d))]) == 0
     cli = [list(r.values()) for r in json.loads(capsys.readouterr().out)]
-    async with Client(build_server(load_model(model), lambda: clickhouse)) as c:
-        query = {"query": {"dimensions": list(DIMENSIONS)}}
-        mcp = (await c.call_tool("query", query)).structured_content
-    assert cli == mcp["rows"] == [[str(v) if k == 6 else v for k, v in enumerate(r)] for r in shown]
+    assert cli == [[str(v) if k == 6 else v for k, v in enumerate(r)] for r in shown]
+    doc = load_model(model)
+    async with Client(build_server(doc, lambda: clickhouse)) as c:
+        query = {"dimensions": list(DIMENSIONS)}
+        args = {"data_source_id": Binding.of(doc).data_source_id, "query": query}
+        mcp = (await c.call_tool("execute_query", args)).structured_content["preview"]["rows"]
+    for c_row, m_row in zip(cli, mcp, strict=True):
+        assert m_row[0] == str(c_row[0]) and m_row[6] == c_row[6]
+        assert m_row[1:3] == c_row[1:3]
+        for c, m in zip(c_row[3:6], m_row[3:6], strict=True):
+            assert dt.datetime.fromisoformat(m).replace(tzinfo=None) == dt.datetime.fromisoformat(c)
 
 
 @pytest.fixture

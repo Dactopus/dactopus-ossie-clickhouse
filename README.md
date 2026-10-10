@@ -84,7 +84,10 @@ A question is the aggregation query of Ossie's Layer 3 draft,
 [apache/ossie#246](https://github.com/apache/ossie/pull/246) §5.1.1
 (revision `cc0d070`, not yet merged): `measures` (metric names),
 `dimensions` (`dataset.field`), `where`, `having`, `order_by`, `limit`.
-Over MCP it is one JSON object:
+Over MCP it is one JSON object, passed to the tool `execute_query` of the
+`execute_query` profile draft
+[apache/ossie#529](https://github.com/apache/ossie/pull/529) (`0.4-draft`)
+with the model's `data_source_id`; the rows come back as CSV:
 
 ```json
 {"measures": ["total_sales"], "dimensions": ["item.i_brand"],
@@ -94,9 +97,9 @@ Over MCP it is one JSON object:
 
 A refused question carries a code: #246's where one applies
 (`E_NAME_NOT_FOUND`, `E_NO_PATH`, `E_AGGREGATE_IN_WHERE` and others),
-otherwise one of the common codes of the `execute_query` profile draft,
-[apache/ossie#529](https://github.com/apache/ossie/pull/529)
-(`QUERY_INVALID`, `UNSUPPORTED_QUERY`, `BACKEND_ERROR`). Not supported
+otherwise one of the profile's common codes (`INVALID_ARGUMENT`,
+`QUERY_INVALID`, `UNSUPPORTED_QUERY`, `SOURCE_UNAVAILABLE`,
+`BACKEND_ERROR`). Not supported
 yet, refused with `UNSUPPORTED_QUERY`: scalar queries (`fields`), ad-hoc
 aggregates in `measures`, and the questions #246 answers by aggregating
 facts separately and combining them.

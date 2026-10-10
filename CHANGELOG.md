@@ -25,7 +25,7 @@ a minor release may change the Python API.
   `HAVING`: one in the wrong clause is refused.
 - Breaking: an answer embeds its rows as CSV (`text/csv`, NULL as `\N`)
   and its `structuredContent` is the profile's: `model` with a revision,
-  `preview` of the first 100 rows with logical types, `result` with
+  `preview` of the first 10 rows with logical types, `result` with
   `row_count`, `completeness` and the SQL under `extensions`. Without a
   `limit`, 100 rows come back and the answer says `truncated` when there
   were more; before, the limit was silent. A refused query is a tool error

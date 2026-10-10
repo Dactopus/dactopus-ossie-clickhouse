@@ -32,6 +32,9 @@ CONTRACT_VERSION = "0.4-draft"
 # The commit of apache/ossie#529 whose text and schemas this module follows.
 PROFILE_REVISION = "apache/ossie#529@b5418ee"
 MAX_ROWS = 100  # rows when a query sets no limit: an agent reads every one
+# Rows also in structuredContent. Hosts show an agent both it and the CSV, so a
+# short preview, as the profile advises, keeps the rows from being read twice.
+PREVIEW_ROWS = 10
 EXTENSION = "io.github.dactopus/clickhouse"  # our key in the profile's `extensions`
 CSV_META = "org.apache.ossie/execute_query"  # the profile's key in a CSV resource's _meta
 CSV_URI = "file:///result.csv"
@@ -164,7 +167,7 @@ def refusal(
 
 
 def answer(binding: Binding, r: Result, q: Query) -> Reply:
-    """A query's rows: all of them as CSV, the first MAX_ROWS also as a preview."""
+    """A query's rows: all of them as CSV, the first PREVIEW_ROWS also as a preview."""
     types = [datatype(t) for t in r.types] if r.types else [None] * len(r.columns)
     columns = [
         {"name": c} | ({"datatype": t} if t else {}) for c, t in zip(r.columns, types, strict=True)
@@ -199,9 +202,9 @@ def answer(binding: Binding, r: Result, q: Query) -> Reply:
         "model": {"id": binding.model, "revision": binding.revision},
         "preview": {
             "columns": columns,
-            "rows": rows[:MAX_ROWS],
-            "row_count": min(n, MAX_ROWS),
-            "has_more": n > MAX_ROWS,
+            "rows": rows[:PREVIEW_ROWS],
+            "row_count": min(n, PREVIEW_ROWS),
+            "has_more": n > PREVIEW_ROWS,
             "selection": "first_rows",
         },
         "result": {

@@ -232,7 +232,10 @@ async def test_rows_past_the_ceiling_are_reported_truncated(client):
     )
     out = r.structured_content
     assert out["result"]["completeness"] == "complete" and out["result"]["row_count"] == 200
-    assert out["preview"]["row_count"] == 100 and out["preview"]["has_more"]
+    assert out["preview"]["row_count"] == 10 and out["preview"]["has_more"]
+    assert out["preview"]["rows"] == [
+        r.content[1].resource.text.split("\r\n")[i].split(",") for i in range(1, 11)
+    ]
 
 
 @pytest.mark.anyio

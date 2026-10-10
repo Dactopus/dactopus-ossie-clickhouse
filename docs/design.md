@@ -400,6 +400,10 @@ current id as a suggestion. Without a `limit`, 100 rows return and the
 reply says `truncated` if there were more (one more row is asked for to
 tell); a query's own `limit` is its meaning, so that answer is
 `complete`.
+The preview in `structuredContent` holds the first 10 rows, the profile's
+economical default: Claude Code shows an agent both the CSV and
+`structuredContent` (measured 2026-10-10), so a full preview would make
+it read every row twice.
 
 ## Remote MCP server, designed, not built
 

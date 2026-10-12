@@ -248,7 +248,8 @@ function written into such a filter, and a window metric, which #246
 evaluates over the merged rows (step A.10) and a group would evaluate
 over its own. A question whose dimension or row filter one group cannot
 reach, such as an `orders` field next to a `returns` metric, is refused
-with the error of the single-root plan.
+with that group's own error, which names the datasets it cannot join;
+the single-root error would only say the facts do not join.
 
 `tests/test_stitch.py` compares answers with DuckDB running the `FULL OUTER
 JOIN` plan, on the F_PRELUDE data of the Ossie compliance suite

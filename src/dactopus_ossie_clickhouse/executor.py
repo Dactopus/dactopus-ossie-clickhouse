@@ -12,7 +12,7 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import clickhouse_connect
 from ossie import OssieDataset, OssieDocument
@@ -63,7 +63,7 @@ class Result:
     columns: list[str]
     rows: list[tuple]
     sql: str
-    types: list[str] = field(default_factory=list)  # ClickHouse type of each column
+    types: list[str]  # ClickHouse type of each column
 
     def shown_rows(self) -> list[list]:
         """Rows as the CLI and the MCP server show them: a Time or DateTime as

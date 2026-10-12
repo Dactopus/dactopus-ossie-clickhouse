@@ -276,6 +276,10 @@ class Planner:
             d.name.upper(): {f.name.upper(): f for f in d.fields or []} for d in self.model.datasets
         }
         self._metrics = {m.name.upper(): m for m in self.model.metrics or []}
+        self._out: dict[str, list[OssieRelationship]] = {}
+        for r in self.model.relationships or []:
+            if r.to.upper() in self._datasets:
+                self._out.setdefault(r.from_dataset.upper(), []).append(r)
 
     # --- resolution ---------------------------------------------------------
 
@@ -375,11 +379,7 @@ class Planner:
 
     def _outgoing(self, name: str) -> list[OssieRelationship]:
         """Relationships from ``name`` to a dataset of the model."""
-        return [
-            r
-            for r in self.model.relationships or []
-            if r.from_dataset.upper() == name.upper() and r.to.upper() in self._datasets
-        ]
+        return self._out.get(name.upper(), [])
 
     def _paths(self, start: str, target: str) -> list[tuple[OssieRelationship, ...]]:
         """Up to two acyclic paths of relationships from ``start`` to ``target``

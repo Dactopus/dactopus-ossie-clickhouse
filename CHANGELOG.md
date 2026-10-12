@@ -34,8 +34,9 @@ a minor release may change the Python API.
   (`customer_lifetime_value` of the TPC-DS model is 57919.727998855364
   in the CLI, where it was 57919.72). Division by zero no longer fails
   the query: the value is shown as NULL, but inside the query it is
-  infinite, so it sorts as the largest value and passes a filter such as
-  `ratio > 1`, as division of integers already did. Division of integers
+  infinite (NaN for 0 / 0), so it sorts before or after every number and
+  a positive one passes a filter such as `ratio > 1`, as division of
+  integers already did. Division of integers
   is unchanged: it was already `Float64`.
 
 ## [0.5.0] - 2026-10-12

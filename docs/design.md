@@ -88,11 +88,14 @@ project compares with: the dividend of every `/` becomes `Float64`, as
 DuckDB divides. `AVG` of a `Decimal` is already `Float64` in ClickHouse,
 and division of integers too. Division by zero then gives `inf` or `nan`,
 which the executor shows as NULL, where a `Decimal` division by zero
-failed the whole query. Inside the query the value stays infinite: it
-sorts as the largest and passes `ratio > 1` in a filter, as division of
-integers always did. The dividend is `x * 1.0`, as for percentiles: ClickHouse
-refuses it for a date or a string, as Postgres does, where `toFloat64`
-would divide a day count or a parsed number.
+failed the whole query. Inside the query the value stays infinite, or
+NaN for 0 / 0: `inf` sorts above every number and passes `ratio > 1` in
+a filter, `-inf` sorts below, and NaN sorts last in both directions and
+fails every comparison, as division of integers always did. DuckDB
+gives `inf` too; Postgres refuses the division. The dividend is
+`x * 1.0`, as for percentiles: ClickHouse refuses it for a date or a
+string, as Postgres does, where `toFloat64` would divide a day count or a
+parsed number.
 
 Two alternatives were rejected:
 

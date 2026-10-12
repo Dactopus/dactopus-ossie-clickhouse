@@ -546,7 +546,8 @@ class Planner:
 
     def _stitch(self, q: Query, where: list[str], having: list[str]) -> exp.Select | None:
         """Metrics no one root answers together, each answered from its own root and
-        merged on the dimensions (#246 §6.2 step A.7, §6.6); None if that fails too.
+        merged on the dimensions (#246 §6.2 step A.7, §6.6); None if they form one
+        group, or a group is refused even on its own.
 
         Metrics are grouped by the datasets their aggregates read, and each group is
         planned as a question of its own with the dimensions and the row filters,
@@ -578,8 +579,18 @@ class Planner:
             try:
                 branch = Query(tuple(members), q.dimensions, tuple(where))
                 branches.append((set(members), self.plan(branch)))
-            except PlanError:
-                return None
+            except PlanError as e:
+                try:
+                    self.plan(Query(tuple(members)))
+                except PlanError:
+                    return None  # refused alone too: the single-root error says why
+                # A dimension or row filter the group cannot reach: its own refusal
+                # names the datasets, the single-root one only says the facts do not join.
+                raise PlanError(
+                    "metrics of different datasets are answered each on their own, and "
+                    f"{', '.join(map(repr, members))} cannot be with this question's "
+                    f"dimensions and row filters: {e}"
+                ) from None
         for n, tree in metric_trees.items():
             if tree.find(exp.Window):
                 raise PlanError(

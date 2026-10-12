@@ -238,3 +238,14 @@ def test_one_metric_over_both_facts_is_still_refused():
     assert "return_rate" in unanswerable_metrics(model)
     with pytest.raises(PlanError):
         Planner(model).sql(Query(("return_rate",), ("customers.region",)))
+
+
+def test_a_group_that_cannot_reach_a_dimension_names_its_metrics():
+    """An orders field next to a returns metric: the refusal is the returns group's,
+    not the single-root one that only says the facts do not join."""
+    with pytest.raises(
+        PlanError, match=r"'total_returns' cannot be .*: datasets \['orders', 'returns'\]"
+    ):
+        Planner(load_model(FIXTURE)).sql(
+            Query(("total_revenue", "total_returns"), ("orders.status",))
+        )

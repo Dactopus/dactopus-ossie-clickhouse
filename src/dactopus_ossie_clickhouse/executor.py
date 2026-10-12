@@ -7,11 +7,12 @@ Learns what it needs from the server (`system.tables`, `system.columns`,
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import clickhouse_connect
 from ossie import OssieDataset, OssieDocument
@@ -62,6 +63,14 @@ class Result:
     columns: list[str]
     rows: list[tuple]
     sql: str
+    types: list[str] = field(default_factory=list)  # ClickHouse type of each column
+
+    def shown_rows(self) -> list[list]:
+        """Rows as the CLI and the MCP server show them: a Time or DateTime as
+        ClickHouse prints it, other values unchanged."""
+        return [
+            [_as_printed(v, t) for v, t in zip(row, self.types, strict=True)] for row in self.rows
+        ]
 
 
 class Executor:
@@ -277,7 +286,7 @@ class Executor:
         sql = self.planner.sql(q)
         res = self.client.query(sql)
         rows = [tuple(_non_finite_to_none(v) for v in row) for row in res.result_rows]
-        return Result(list(res.column_names), rows, sql)
+        return Result(list(res.column_names), rows, sql, [t.name for t in res.column_types])
 
 
 def _unquote(s: str) -> str:
@@ -287,3 +296,27 @@ def _unquote(s: str) -> str:
 def _non_finite_to_none(v):
     """ClickHouse yields nan and inf where SQL yields NULL; neither is JSON."""
     return None if isinstance(v, float) and not math.isfinite(v) else v
+
+
+def _as_printed(v, type_name: str):
+    """A Time, Time64, DateTime or DateTime64 value as ClickHouse's toString prints it.
+
+    clickhouse-connect reads Time as a timedelta, whose str() of -01:02:03 is
+    "-1 day, 22:57:57" and pydantic's "-PT1H2M3S"; datetimes get a T over MCP and
+    a space in the CLI. ClickHouse's own text reads the same everywhere and goes
+    back into a filter. Fractions show the column's digits; clickhouse-connect
+    keeps microseconds, so digits 7 to 9 are 0."""
+    while type_name.startswith(("Nullable(", "LowCardinality(")):
+        type_name = type_name[type_name.index("(") + 1 : -1]
+    kind, _, args = type_name.partition("(")
+    digits = int(args.split(",")[0].rstrip(")")) if kind in ("Time64", "DateTime64") else 0
+    if isinstance(v, dt.timedelta) and kind in ("Time", "Time64"):
+        us = v // dt.timedelta(microseconds=1)
+        s, fraction = divmod(abs(us), 1_000_000)
+        text = f"{'-' if us < 0 else ''}{s // 3600:02d}:{s // 60 % 60:02d}:{s % 60:02d}"
+    elif isinstance(v, dt.datetime) and kind in ("DateTime", "DateTime64"):
+        # Already the wall time of the column's time zone, which toString prints.
+        text, fraction = v.strftime("%Y-%m-%d %H:%M:%S"), v.microsecond
+    else:
+        return v
+    return f"{text}.{fraction:06d}000"[: len(text) + 1 + digits] if digits else text

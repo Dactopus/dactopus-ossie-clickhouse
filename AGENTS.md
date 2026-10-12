@@ -95,8 +95,10 @@ Python library with a CLI entry point. The parts that constrain code:
   the executor built. Keep that boundary.
 - Query planning is deterministic: datasets from `source`, joins from
   `relationships`, one `SELECT` per question. Joins are `LEFT JOIN` from
-  one root dataset, only along relationships whose `to_columns` cover a
-  primary or unique key of the target. Generated SQL carries
+  one root dataset, along the one path of relationships to each dataset
+  the question touches (two paths are ambiguous, #246 §6.9), only along
+  relationships whose `to_columns` cover a primary or unique key of the
+  target. Generated SQL carries
   `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
   and `aggregate_functions_null_for_empty = 1` so an aggregate over no
   rows is NULL, not 0 (counts stay 0).

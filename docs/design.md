@@ -189,6 +189,41 @@ target with no declared key is refused too, where the validator skips the
 check: nothing then rules out fan-out. The model still loads; questions
 that need such a join fail, and `validate` reports the relationship.
 
+## Paths of several relationships
+
+A question may touch a dataset the root reaches only through others, such
+as order lines to orders to customers. apache/ossie#246 (`cc0d070`)
+section 6.9 resolves it: the one path of many-to-one relationships is
+used, two or more are ambiguous (`E_AMBIGUOUS_PATH`), none is
+`E_NO_PATH`, and a path visits no dataset twice. The datasets in the
+middle are joined like the others (section 6.2, datasets involved in a
+query), so a row filter may read them, and each relationship on the path
+must cover a key of its target.
+
+Any second path is ambiguous, a direct relationship next to a longer
+path included, as rule 2 says ("two or more paths"). The table of error
+codes under Semantic 5 (section 6.1) says "equally-valid", which could
+be read as preferring the shortest path; the planner does not, since the
+paths can mean different things: `store_sales` to `date_dim` is the
+sale's date, `store_sales` to `store` to `date_dim` could be the store's
+closing date. Only paths to datasets the question touches count: two
+paths elsewhere in the model do not refuse a question that does not need
+them.
+
+The root is a dataset the question names; a dataset it does not name is
+never chosen as the root, so dimensions of two dimension tables stay
+refused even when a fact reaches both. A dictionary at the end of a path
+is read with `dictGetOrNull` on the key column of the dataset before it;
+one in the middle is joined, since the next join reads its columns. A
+dataset reached through relationships that each cover a key of their from
+side is one to one with the root, so its rows do not repeat (next
+section).
+
+`tests/test_paths.py` compares answers with DuckDB on data with an
+orphan at each step of the path: both land in one NULL group, inner joins
+lose them, and planning from the dimension outward shows a region no fact
+reaches.
+
 ## Refuse a metric over another dataset's rows
 
 A question is one `SELECT` over the root's rows with many-to-one joins,

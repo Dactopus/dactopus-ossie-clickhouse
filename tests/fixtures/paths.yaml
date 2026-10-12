@@ -1,0 +1,66 @@
+# Test model: order lines and refunds reach customers only through orders,
+# a path of two relationships. Created by tests/test_paths.py.
+version: "0.2.0.dev0"
+name: paths_model
+datasets:
+  - name: customers
+    source: ossie_paths.customers
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: region
+        expression: {dialects: [{dialect: ANSI_SQL, expression: region}]}
+  - name: orders
+    source: ossie_paths.orders
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: customer_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: customer_id}]}
+      - name: status
+        expression: {dialects: [{dialect: ANSI_SQL, expression: status}]}
+  - name: lines
+    source: ossie_paths.lines
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: order_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}
+      - name: amount
+        expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
+  - name: refunds
+    source: ossie_paths.refunds
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: order_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}
+      - name: amount
+        expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
+relationships:
+  - name: lines_to_order
+    from: lines
+    to: orders
+    from_columns: [order_id]
+    to_columns: [id]
+  - name: refunds_to_order
+    from: refunds
+    to: orders
+    from_columns: [order_id]
+    to_columns: [id]
+  - name: orders_to_customer
+    from: orders
+    to: customers
+    from_columns: [customer_id]
+    to_columns: [id]
+metrics:
+  - name: line_amount
+    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(lines.amount)}]}
+  - name: line_count
+    expression: {dialects: [{dialect: ANSI_SQL, expression: COUNT(lines.id)}]}
+  - name: refund_amount
+    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(refunds.amount)}]}

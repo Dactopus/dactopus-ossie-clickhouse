@@ -159,10 +159,11 @@ data must already be in ClickHouse.
 
 ## Limits
 
-- One root dataset per group of metrics, with direct relationships to
-  every dataset it touches. Chains through an intermediate dataset are
-  not supported. Metrics of different facts are stitched, so each
-  dimension and row filter must be reachable from each fact.
+- One root dataset per group of metrics, which reaches every dataset it
+  touches through many-to-one relationships, along one path to each. Two
+  paths to the same dataset are refused as ambiguous. Metrics of
+  different facts are stitched, so each dimension and row filter must be
+  reachable from each fact.
 - Metrics are computed over the root's rows. A question whose metric
   would count a joined dataset's rows repeatedly, or only those the root
   references, is refused with a message, not answered with a wrong

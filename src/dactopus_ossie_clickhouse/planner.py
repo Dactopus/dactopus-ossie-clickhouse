@@ -57,7 +57,8 @@ class Query:
     filters: tuple[str, ...] = ()
     # Metric or dimension names, "name desc" for descending. Empty with metrics
     # and dimensions: first metric descending, so callers that rank rows
-    # themselves (agents do, and get it wrong) see the top rows first.
+    # themselves (agents do, and get it wrong) see the top rows first. Ties
+    # are broken by the dimensions, ascending.
     order_by: tuple[str, ...] = ()
     limit: int | None = None
 
@@ -534,9 +535,8 @@ class Planner:
             sel = sel.group_by(*group)
         if having:
             sel = sel.having(exp.and_(*having))
-        order_by = q.order_by or ((f"{q.metrics[0]} desc",) if q.metrics and group else ())
-        if order_by:
-            sel = sel.order_by(*self._order(order_by, q, selects))
+        if order := self._order(q, selects):
+            sel = sel.order_by(*order)
         if q.limit is not None:
             sel = sel.limit(q.limit)
         if dict_keys:
@@ -649,21 +649,23 @@ class Planner:
 
             conditions = [rewrite_tree(t).transform(to_merged) for t in having_trees]
             sel = sel.having(exp.and_(*conditions))
-        order_by = q.order_by or ((f"{q.metrics[0]} desc",) if dims else ())
-        if order_by:
-            sel = sel.order_by(*self._order(order_by, q, selects))
+        if order := self._order(q, selects):
+            sel = sel.order_by(*order)
         if q.limit is not None:
             sel = sel.limit(q.limit)
         sel.set("settings", _settings())
         return sel
 
-    def _order(
-        self, order_by: tuple[str, ...], q: Query, selects: list[exp.Expression]
-    ) -> list[exp.Expression]:
-        """ORDER BY over selected aliases; names are metrics, dataset.field, or field names."""
+    def _order(self, q: Query, selects: list[exp.Expression]) -> list[exp.Expression]:
+        """ORDER BY over selected aliases; names are metrics, dataset.field, or field names.
+
+        Without order_by, the first metric descending. Then each dimension not
+        ordered yet, ascending: rows are grouped by the dimensions, so ties are
+        broken and a limit keeps the same rows on every run."""
         aliases = {e.alias.upper(): e.alias for e in selects}
         for ref in q.dimensions:  # allow the dataset.field spelling too
             aliases[ref.upper()] = self.field_ref(ref)[1].name
+        order_by = q.order_by or ((f"{q.metrics[0]} desc",) if q.metrics and q.dimensions else ())
         out = []
         for item in order_by:
             name, _, direction = item.partition(" ")
@@ -677,6 +679,12 @@ class Planner:
                     f"{_suggest(name, dict.fromkeys(aliases.values()))}"
                 )
             out.append(exp.Ordered(this=exp.column(alias), desc=desc, nulls_first=False))
+        ordered = {o.this.name.upper() for o in out}
+        for ref in q.dimensions:
+            alias = self.field_ref(ref)[1].name
+            if alias.upper() not in ordered:
+                ordered.add(alias.upper())
+                out.append(exp.Ordered(this=exp.column(alias), desc=False, nulls_first=False))
         return out
 
     def _table(self, ds: OssieDataset) -> exp.Expression:

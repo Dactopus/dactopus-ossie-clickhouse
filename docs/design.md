@@ -108,6 +108,14 @@ as `None`, so ClickHouse's order keeps every row without a value at the
 end. A test ordering by a key that can be NaN pins its expected value by
 hand.
 
+Rows that tie on the ordered keys are then ordered by each dimension not
+ordered yet, ascending. ClickHouse returns tied rows in whatever order its
+threads produce them, so without this a `limit` could keep different rows
+on each run of the same question. The rows are grouped by the dimensions,
+so no two of them tie on all of them. Ties are common in stitched answers:
+every dimension value missing from the first metric's fact has NULL there
+(#42).
+
 ## Window frames limited to the spec's
 
 The spec lists three frames: `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT

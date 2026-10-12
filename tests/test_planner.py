@@ -142,7 +142,7 @@ def test_dimension_filter_join_snapshot():
         "LEFT JOIN tpcds.date_dim AS date_dim ON store_sales.ss_sold_date_sk = date_dim.d_date_sk "
         "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.i_item_sk "
         "WHERE date_dim.d_year = 1998 "
-        "GROUP BY item.i_brand ORDER BY total_sales DESC LIMIT 10 " + SETTINGS
+        "GROUP BY item.i_brand ORDER BY total_sales DESC, i_brand ASC LIMIT 10 " + SETTINGS
     )
 
 
@@ -172,11 +172,15 @@ def test_order_by():
     q = Query(metrics=("total_profit", "total_sales"), dimensions=("item.i_brand",))
     assert "ORDER BY total_profit DESC" in P.sql(q)
     assert "ORDER BY" not in P.sql(Query(metrics=("total_sales",)))
-    assert "ORDER BY" not in P.sql(Query(dimensions=("item.i_brand",)))
+    # Then each dimension ascending, so ties come in one order and a limit keeps
+    # the same rows on every run.
+    assert "ORDER BY i_brand ASC SETTINGS" in P.sql(Query(dimensions=("item.i_brand",)))
     q = Query(
         metrics=("total_sales",), dimensions=("item.i_brand",), order_by=("total_sales desc",)
     )
-    assert P.sql(q).endswith("GROUP BY item.i_brand ORDER BY total_sales DESC " + SETTINGS)
+    assert P.sql(q).endswith(
+        "GROUP BY item.i_brand ORDER BY total_sales DESC, i_brand ASC " + SETTINGS
+    )
     q = Query(
         metrics=("total_sales",),
         dimensions=("item.i_brand",),
@@ -302,7 +306,7 @@ def test_aggregate_filters_go_to_having():
     assert sql.endswith(
         "WHERE date_dim.d_year = 1998 GROUP BY item.i_brand "
         "HAVING SUM(store_sales.ss_ext_sales_price) > 1000000 AND COUNT(*) > 10 "
-        "ORDER BY total_sales DESC " + SETTINGS
+        "ORDER BY total_sales DESC, i_brand ASC " + SETTINGS
     )
     # No dimensions: HAVING without GROUP BY is still one SELECT.
     assert P.sql(Query(metrics=("total_sales",), filters=("total_sales > 1",))).endswith(
@@ -333,7 +337,7 @@ def test_filter_on_unselected_metric_adds_its_join():
     )
     assert sql.endswith(
         "GROUP BY item.i_brand HAVING (SUM(store_sales.ss_ext_sales_price) / "
-        "COUNT(DISTINCT customer.c_customer_sk)) > 1 ORDER BY total_sales DESC "
+        "COUNT(DISTINCT customer.c_customer_sk)) > 1 ORDER BY total_sales DESC, i_brand ASC "
         "SETTINGS join_use_nulls = 1, aggregate_functions_null_for_empty = 1"
     )
 
@@ -475,7 +479,7 @@ def test_catalog_final_and_dictionary():
         "FROM tpcds.store_sales AS store_sales FINAL "
         "GROUP BY dictGetOrNull('tpcds.item', 'i_brand', store_sales.ss_item_sk), "
         "CASE WHEN dictHas('tpcds.item', store_sales.ss_item_sk) THEN store_sales.ss_item_sk "
-        "ELSE NULL END ORDER BY total_sales DESC " + SETTINGS
+        "ELSE NULL END ORDER BY total_sales DESC, i_brand ASC, i_item_sk ASC " + SETTINGS
     )
     # A dictionary joined on something other than its key is a plain LEFT JOIN.
     catalog["item"] = TableInfo("Dictionary", frozenset(), dictionary_key="i_item_id")

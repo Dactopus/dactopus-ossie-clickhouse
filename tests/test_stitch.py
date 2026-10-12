@@ -124,6 +124,16 @@ CASES = [
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
         "WHERE region <> 'EAST' AND (total_revenue > 0 OR total_returns > 0)",
     ),
+    # An aggregate filter may name a dimension too: it reads the merged column.
+    (
+        Query(
+            ("total_revenue", "total_returns"),
+            ("customers.region",),
+            ("customers.region <> 'EAST' AND total_returns > 6",),
+        ),
+        f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
+        "WHERE region <> 'EAST' AND total_returns > 6",
+    ),
 ]
 ORDERED = [
     (

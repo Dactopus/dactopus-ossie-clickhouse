@@ -215,7 +215,7 @@ def _empty_value(tree: exp.Expression) -> exp.Expression:
 
     def empty(node: exp.Expression) -> exp.Expression:
         agg = node.this if isinstance(node, exp.Filter) else node  # COUNT(x) FILTER (...)
-        if isinstance(agg, exp.AggFunc) and not _window_function(agg):
+        if isinstance(agg, exp.AggFunc):
             counts = isinstance(agg, exp.Count | exp.CountIf | exp.ApproxDistinct)
             return exp.Literal.number(0) if counts else exp.Null()
         return node
@@ -460,6 +460,8 @@ class Planner:
 
         where: list[exp.Expression] = []
         having: list[exp.Expression] = []  # filters over aggregates or metric names
+        row_filters: list[str] = []
+        aggregate_filters: list[str] = []
         # Every part is rewritten once, before inspecting: APPROX_PERCENTILE is a
         # plain function name to SQLGlot and an aggregate only after rewrite.
         grouped = {e.sql() for e in group}
@@ -474,6 +476,7 @@ class Planner:
                 )
             if not tree.find(exp.AggFunc):
                 where.append(tree)
+                row_filters.append(f)
                 continue
             # HAVING may only see aggregates and GROUP BY expressions.
             for col in tree.find_all(exp.Column):
@@ -488,6 +491,7 @@ class Planner:
                         "dimension of this query; add it to dimensions or put it in its own filter"
                     )
             having.append(tree)
+            aggregate_filters.append(f)
             checked.append((label, _aggregate_inputs(tree)))
 
         used = set().union(*touched.values())
@@ -497,7 +501,7 @@ class Planner:
             for label, inputs in checked:
                 _check_rows(label, inputs, root.name, touched, one_to_one)
         except PlanError:
-            stitched = self._stitch(q)
+            stitched = self._stitch(q, row_filters, aggregate_filters)
             if stitched is not None:
                 return stitched
             raise
@@ -540,7 +544,7 @@ class Planner:
         sel.set("settings", _settings())
         return sel
 
-    def _stitch(self, q: Query) -> exp.Select | None:
+    def _stitch(self, q: Query, where: list[str], having: list[str]) -> exp.Select | None:
         """Metrics no one root answers together, each answered from its own root and
         merged on the dimensions (#246 §6.2 step A.7, §6.6); None if that fails too.
 
@@ -552,12 +556,9 @@ class Planner:
         NULL-safe equality would, and no dimensions leave one row of totals (§6.6
         row 4). A metric missing from a group shows its value over no rows
         (_empty_value). Aggregate filters run after the merge (step A.9) and may
-        name metrics, selected or not, and the question's dimensions."""
+        name metrics, selected or not, and the question's dimensions. ``where`` and
+        ``having`` are the question's filters as plan() split them."""
         names = list(dict.fromkeys(self.metric(n).name for n in q.metrics))
-        where, having = [], []
-        for f in q.filters:
-            tree = rewrite_tree(self.resolve(f, set(), metrics=True))
-            (having if tree.find(exp.AggFunc) else where).append(f)
         having_trees = []
         for f in having:
             tree = parse(f)

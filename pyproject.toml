@@ -36,7 +36,6 @@ mcp = ["mcp>=2,<3"]
 
 [project.scripts]
 dactopus-ossie-clickhouse = "dactopus_ossie_clickhouse.cli:main"
-ossie-clickhouse = "dactopus_ossie_clickhouse.cli:old_name_main"  # until 0.5.0
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6", "duckdb>=1.0", "mcp>=2,<3"]

@@ -115,7 +115,9 @@ Python library with a CLI entry point. The parts that constrain code:
   one dataset (`docs/design.md`). Metrics no one root answers together
   are stitched: each group of metrics planned from its own root, merged
   with `UNION ALL` and `GROUP BY` on the dimensions (#246 section 6.6); a
-  metric missing from a group is its value over no rows.
+  metric missing from a group is its value over no rows. Facts that share
+  no dimension are stitched only without dimensions (each one's total);
+  with one, the question is refused with `E3013_NO_STITCHING_DIMENSION`.
 - Name resolution is case-insensitive (spec rule); emitted SQL uses physical
   names exactly as the model writes them (ClickHouse is case-sensitive).
 - The query is the aggregation query of apache/ossie#246 §5.1.1

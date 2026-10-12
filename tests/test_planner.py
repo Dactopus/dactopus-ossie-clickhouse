@@ -336,7 +336,7 @@ def test_filter_on_unselected_metric_adds_its_join():
         "ON store_sales.ss_customer_sk = customer.c_customer_sk" in sql
     )
     assert sql.endswith(
-        "GROUP BY item.i_brand HAVING (SUM(store_sales.ss_ext_sales_price) / "
+        "GROUP BY item.i_brand HAVING ((SUM(store_sales.ss_ext_sales_price) * 1.0) / "
         "COUNT(DISTINCT customer.c_customer_sk)) > 1 ORDER BY total_sales DESC, i_brand ASC "
         "SETTINGS join_use_nulls = 1, aggregate_functions_null_for_empty = 1"
     )

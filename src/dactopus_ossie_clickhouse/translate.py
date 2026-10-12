@@ -363,6 +363,19 @@ def rewrite(node: exp.Expression) -> exp.Expression:
         for agg in aggs:
             agg.replace(exp.Filter(this=agg.copy(), expression=node.expression.copy()))
         return node.this
+    # ClickHouse keeps the dividend's scale when it divides a Decimal: 10.00 / 350.00 is
+    # 0.02, and SUM(price) / 3 drops digits the same way. Postgres (numeric) and DuckDB
+    # (double) give 0.0285714..., so the dividend becomes Float64, as DuckDB divides;
+    # integers already divide to Float64 in ClickHouse. x * 1.0, not toFloat64, which
+    # would divide a date's day count or a parsed string where ClickHouse refuses both.
+    if isinstance(node, exp.Div):
+        # Idempotent: a metric inlined into a filter is rewritten again with it. The
+        # quotient of a division is Float64 already (a / b / c).
+        this = node.this.unnest()
+        floated = isinstance(this, exp.Mul) and this.expression == exp.Literal.number("1.0")
+        if not floated and not isinstance(this, exp.Div):
+            node.set("this", exp.Mul(this=node.this, expression=exp.Literal.number("1.0")))
+        return node
     if isinstance(node, exp.CurrentTime):
         return _f("toTime", _f("now"))
     if isinstance(node, exp.Extract) and node.name.upper() in _EXTRACT_PARTS:

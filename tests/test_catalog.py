@@ -181,6 +181,27 @@ PERCENTILES = [
 ]
 
 
+# Division of Decimal values, which ClickHouse would cut to the dividend's scale.
+DECIMAL_BASE = (
+    "(SELECT toDecimal64(arrayJoin([10, 350]), 2) AS x, toInt32(3) AS i)",
+    "(SELECT UNNEST(CAST([10, 350] AS DECIMAL(18, 2)[])) AS x, 3 AS i)",
+)
+DIVISIONS = ["MIN(x) / MAX(x)", "SUM(x) / COUNT(x)", "SUM(x) / 3", "MAX(i) / 2", "SUM(x) / MAX(i)"]
+
+
+@pytest.mark.parametrize("expr", DIVISIONS)
+def test_division_keeps_digits(expr, clickhouse, duck):
+    check(expr, DUCK, clickhouse, duck, *DECIMAL_BASE)
+
+
+@pytest.mark.parametrize("dividend", ["toDate('2026-01-01')", "'3'"])
+def test_division_refuses_non_numbers(dividend, clickhouse):
+    # Postgres refuses a date or a string dividend; toFloat64 would take a day count
+    # or parse the string.
+    with pytest.raises(Exception, match="Illegal types"):
+        clickhouse.query(f"SELECT {to_clickhouse(f'{dividend} / 2')}")
+
+
 @pytest.mark.parametrize("base", PERCENTILE_BASES)
 @pytest.mark.parametrize("expr", PERCENTILES)
 def test_percentile_cont_is_exact(expr, base, clickhouse, duck):

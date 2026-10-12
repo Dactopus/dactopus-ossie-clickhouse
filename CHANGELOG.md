@@ -7,6 +7,19 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Fixed
+
+- Division of a `Decimal` lost digits: ClickHouse keeps the dividend's
+  scale, so `SUM(refunds.amount) / SUM(orders.amount)` gave 0.02 where
+  Postgres and DuckDB give 0.0286. The dividend of `/` is now `Float64`,
+  as DuckDB divides, so a ratio of `Decimal` values is a float
+  (`customer_lifetime_value` of the TPC-DS model is 57919.727998855364
+  in the CLI, where it was 57919.72). Division by zero no longer fails
+  the query: the value is shown as NULL, but inside the query it is
+  infinite, so it sorts as the largest value and passes a filter such as
+  `ratio > 1`, as division of integers already did. Division of integers
+  is unchanged: it was already `Float64`.
+
 ## [0.5.0] - 2026-10-12
 
 ### Added

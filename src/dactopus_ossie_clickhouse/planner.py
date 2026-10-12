@@ -197,6 +197,18 @@ def unanswerable_metrics(model: OssieDocument) -> dict[str, str]:
     return out
 
 
+def _settings() -> list[exp.Expression]:
+    """Settings every generated SELECT carries, so ClickHouse answers as SQL does.
+
+    join_use_nulls: unmatched LEFT JOIN columns are NULL, not the type's default.
+    aggregate_functions_null_for_empty: an aggregate over no rows (no GROUP BY, or a
+    FILTER that matches nothing) is NULL, not 0; counts stay 0."""
+    return [
+        exp.EQ(this=exp.var(name), expression=exp.Literal.number(1))
+        for name in ("join_use_nulls", "aggregate_functions_null_for_empty")
+    ]
+
+
 def _empty_value(tree: exp.Expression) -> exp.Expression:
     """A metric over no rows: what a stitched group missing from the metric's fact
     shows. #246 §6.11.5: NULL for SUM, 0 for COUNT, 0 for COALESCE(SUM(x), 0)."""
@@ -525,10 +537,7 @@ class Planner:
             sel = sel.limit(q.limit)
         if dict_keys:
             sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
-        # ClickHouse fills unmatched LEFT JOIN columns with defaults unless told otherwise.
-        sel.set(
-            "settings", [exp.EQ(this=exp.var("join_use_nulls"), expression=exp.Literal.number(1))]
-        )
+        sel.set("settings", _settings())
         return sel
 
     def _stitch(self, q: Query) -> exp.Select | None:
@@ -644,9 +653,7 @@ class Planner:
             sel = sel.order_by(*self._order(order_by, q, selects))
         if q.limit is not None:
             sel = sel.limit(q.limit)
-        sel.set(
-            "settings", [exp.EQ(this=exp.var("join_use_nulls"), expression=exp.Literal.number(1))]
-        )
+        sel.set("settings", _settings())
         return sel
 
     def _order(

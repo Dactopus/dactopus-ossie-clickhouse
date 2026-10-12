@@ -90,7 +90,9 @@ questions it refuses.
   relationships whose `to_columns` cover a primary or unique key of the
   target (many-to-one). `SETTINGS`
   [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls)
-  so unmatched rows get NULL, not ClickHouse defaults.
+  so unmatched rows get NULL, not ClickHouse defaults, and
+  [`aggregate_functions_null_for_empty = 1`](https://clickhouse.com/docs/operations/settings/settings#aggregate_functions_null_for_empty)
+  so a sum over no rows is NULL, as in SQL, not 0.
 - Metrics of different facts, such as revenue and returns by region, are
   each computed from their own root and merged on the dimensions
   ([stitching](docs/design.md#stitch-metrics-of-several-facts)): every

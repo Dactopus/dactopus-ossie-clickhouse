@@ -97,7 +97,9 @@ Python library with a CLI entry point. The parts that constrain code:
   `relationships`, one `SELECT` per question. Joins are `LEFT JOIN` from
   one root dataset, only along relationships whose `to_columns` cover a
   primary or unique key of the target. Generated SQL carries
-  `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults.
+  `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
+  and `aggregate_functions_null_for_empty = 1` so an aggregate over no
+  rows is NULL, not 0 (counts stay 0).
   Metrics run over the root's rows, so the planner refuses an aggregate
   that reads only joined datasets unless repeats cannot change it or the
   join is on a key of the root, an aggregate expression that reads no root

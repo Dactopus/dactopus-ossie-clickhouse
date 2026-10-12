@@ -152,6 +152,13 @@ ORDERED = [
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
         "ORDER BY total_revenue DESC NULLS LAST",
     ),
+    # WEST and the NULL region tie at one order: the dimension breaks the tie, so
+    # the limit keeps WEST on every run.
+    (
+        Query(("order_count", "total_returns"), ("customers.region",), limit=2),
+        f"SELECT region, order_count, total_returns FROM ({merged()}) "
+        "ORDER BY order_count DESC, region ASC NULLS LAST LIMIT 2",
+    ),
 ]
 
 

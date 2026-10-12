@@ -26,6 +26,12 @@ a minor release may change the Python API.
   `MAX` and `ANY_VALUE`; generated SQL now sets
   `aggregate_functions_null_for_empty = 1`. Counts stay 0.
 
+- Rows that tie on the requested or default order, such as the regions a
+  stitched question gives no revenue, came back in whatever order
+  ClickHouse produced them, so a `limit` could keep different rows on each
+  run, and a question without metrics was not ordered at all. Ties are now
+  broken by the dimensions, ascending (#42).
+
 ### Removed
 
 - The advice to ask for each metric in its own question: it was given only

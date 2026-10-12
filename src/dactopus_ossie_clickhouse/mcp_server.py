@@ -188,8 +188,9 @@ def build_server(
         e.g. "total_sales > 1000000", which filters the aggregated rows
         (a window metric such as a rank cannot be filtered: select it instead);
         order_by lists metric or dimension names, "name desc" for descending,
-        default: first metric descending; rows with a NULL come last either way,
-        so limit may cut them off. Returns rows and the SQL."""
+        default: first metric descending, ties broken by the dimensions; rows
+        with a NULL come last either way, so limit may cut them off. Returns
+        rows and the SQL."""
         try:
             r = executor.execute(
                 Query(tuple(metrics), tuple(dimensions), tuple(filters), tuple(order_by), limit)

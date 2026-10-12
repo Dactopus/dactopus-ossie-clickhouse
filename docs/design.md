@@ -132,7 +132,8 @@ them, or ClickHouse fixes them.
 The spec has no cardinality attribute. A relationship is used only when its
 `to_columns` cover the primary key or a unique key of the target, which is
 what makes a `LEFT JOIN` safe against fan-out. Star schemas need nothing
-more; one-to-many and multi-fact questions wait for demand.
+more; one-to-many questions wait for demand. Metrics of several facts are
+stitched (below).
 
 The spec calls `to_columns` "Primary/unique key columns"; covering, a
 superset of a key, is how the reference validator reads it
@@ -199,13 +200,59 @@ revenue, where it would be wrong. The spec does not say which rows a
 metric spanning datasets is computed over; apache/ossie#354 (open) asks
 every metric to be grain-safe, and #343 (open) gives metrics a home
 dataset, which would replace guessing the home from the expression.
-Answering several facts in one question (each metric from its own root,
-joined on the dimensions) waits for demand.
+A question whose metrics no one root answers together is stitched instead
+(next section); a single metric that reads two datasets is still refused.
 
 A metric that refuses in every question (a repeat-sensitive aggregate over
 each of two datasets, a bare `COUNT(*)`, an unknown field) is hidden from
 agents like an untranslatable one, since every attempt would cost a turn,
 and is reported by `validate`.
+
+## Stitch metrics of several facts
+
+When no one root answers a question's metrics together, each group of
+metrics is answered from its own root and the results are merged on the
+dimensions, as apache/ossie#246 (`cc0d070`) requires in section 6.2,
+step A.7, and section 6.6. A group is the metrics whose aggregates read
+the same datasets. It is planned as a question of its own with the
+question's dimensions and row filters: a row filter applies to every
+metric (step A.6.1). Revenue next to returns by region was refused; an
+agent had to ask twice and combine the rows, which the MCP server's
+instructions forbid.
+
+The merge is `UNION ALL` of the groups' rows and `GROUP BY` on the
+dimensions, where #246 describes a `FULL OUTER JOIN`. The rows are the
+same: every group of either side appears (section 6.6, row 3), and a NULL
+dimension value on two sides makes one row, as the NULL-safe equality
+(`IS NOT DISTINCT FROM`) #246 requires would. `GROUP BY` gives that for
+any number of groups; chained joins would need the keys coalesced after
+each one. With no dimensions it leaves one row of totals (row 4).
+
+A metric missing from a group shows its value over no rows (section
+6.11.5): NULL for `SUM`, 0 for `COUNT`, 0 for `COALESCE(SUM(x), 0)`. The
+planner computes it by replacing each aggregate with its value over no
+rows, 0 for counts and NULL otherwise, and each group marks its rows so
+the merge can tell a missing group from a NULL value.
+
+Aggregate filters run on the merged rows (step A.9) and may name metrics,
+selected or not, and the question's dimensions. Refused: an aggregate
+function written into such a filter, and a window metric, which #246
+evaluates over the merged rows (step A.10) and a group would evaluate
+over its own. A question whose dimension or row filter one group cannot
+reach, such as an `orders` field next to a `returns` metric, is refused
+with the error of the single-root plan.
+
+`tests/test_stitch.py` compares answers with DuckDB running the `FULL OUTER
+JOIN` plan, on the F_PRELUDE data of the Ossie compliance suite
+(apache/ossie#237) with one more orphan return. On that data each
+plausible wrong plan gives another answer: the dimension's values with
+`LEFT JOIN` loses the NULL group, a `FULL OUTER JOIN` by plain equality
+splits it in two, and one `SELECT` from orders loses a region and counts
+returns once per order.
+
+Refusals no longer advise asking for each metric in its own question: the
+advice was given only when each metric planned alone, and such a question
+is now stitched.
 
 ## Remote MCP server, designed, not built
 

@@ -7,6 +7,23 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- Metrics of several facts in one question, such as revenue and returns
+  by region: each fact is aggregated on its own and the results are
+  merged on the dimensions, as apache/ossie#246 describes. Every region
+  of either fact appears, a NULL region from both makes one row, and a
+  fact without rows in a region gives what its metric gives over no rows
+  (NULL for a sum, 0 for a count). Without dimensions the answer is one
+  row of totals. Such questions were refused, and so was a metric of a
+  dimension table next to a fact's, such as staff next to sales by state.
+
+### Removed
+
+- The advice to ask for each metric in its own question: it was given only
+  when each metric could be answered alone, and such questions are now
+  answered together.
+
 ## [0.4.0] - 2026-10-10
 
 ### Changed

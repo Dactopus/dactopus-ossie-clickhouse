@@ -623,11 +623,6 @@ def _with_metrics(**expressions: str) -> Planner:
             Query(metrics=("total_sales",), filters=("store_productivity > 1",)),
             "filter 'store_productivity > 1' applies SUM(store.s_number_employees)",
         ),
-        (
-            Query(metrics=("total_sales", "headcount"), dimensions=("store.s_state",)),
-            "metric 'headcount' aggregates store rows, but this question is answered over "
-            "store_sales rows (because of metric 'total_sales')",
-        ),
         # Even a repeat-safe aggregate is about other rows: only customers who bought.
         (
             Query(metrics=("customers",), filters=("store_sales.ss_quantity > 1",)),
@@ -655,7 +650,7 @@ def _with_metrics(**expressions: str) -> Planner:
         ),
         # A FILTER column counts for its aggregate: this counts sales once per store.
         (
-            Query(metrics=("total_sales", "tn_stores")),
+            Query(metrics=("tn_stores",), dimensions=("store_sales.ss_quantity",)),
             "metric 'tn_stores' aggregates store rows",
         ),
         # Only the root's key makes a join one-to-one: sales repeat per store_extra row.
@@ -687,48 +682,67 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     assert message in str(e.value)
 
 
-_SPLIT = ". Ask for each metric in its own question"
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Each metric from its own root, merged on the dimension.
+        Query(metrics=("total_sales", "headcount"), dimensions=("store.s_state",)),
+        Query(metrics=("total_sales", "headcount"), dimensions=("store.s_state", "store.s_city")),
+        # No dimension: one row of totals.
+        Query(metrics=("headcount", "items")),
+        # A FILTER column counts for its aggregate: stores, not sales once per store.
+        Query(metrics=("total_sales", "tn_stores")),
+        # A filter on a metric of the other dataset, selected or not.
+        Query(metrics=("total_sales",), dimensions=("store.s_state",), filters=("headcount > 10",)),
+    ],
+)
+def test_stitches_metrics_that_no_one_root_answers(query):
+    planner = _with_metrics(
+        headcount="SUM(store.s_number_employees)",
+        items="COUNT(item.i_item_sk)",
+        tn_stores="COUNT(*) FILTER (WHERE store.s_state = 'TN')",
+    )
+    assert " UNION ALL " in planner.sql(query)
 
 
 @pytest.mark.parametrize(
-    ("query", "hint"),
+    ("query", "message"),
     [
-        # Each metric plans alone by the dimension: match the rows of the first answer.
+        # headcount cannot be grouped by item: no root answers it, alone or not.
         (
-            Query(metrics=("total_sales", "headcount"), dimensions=("store.s_state",)),
-            _SPLIT + "; for the others over the rows of the first answer, such as its top 5, "
-            'filter them with "store.s_state IN (...)" listing the values it returned, or '
-            'with the single filter "store.s_state IN (...) OR store.s_state IS NULL" if one '
-            "is NULL",
+            Query(metrics=("headcount", "items"), dimensions=("item.i_brand",)),
+            "datasets ['item', 'store'] are not joined by direct relationships",
         ),
-        # Datasets not joined from one root, no dimension: separate questions answer it.
-        (Query(metrics=("headcount", "items")), _SPLIT),
-        # One IN list cannot pick the (state, city) pairs of the first answer.
+        # Both read store: the dimension, not the mix of metrics, is the cause.
+        (
+            Query(metrics=("headcount", "stores"), dimensions=("store_sales.ss_quantity",)),
+            "metric 'headcount' aggregates store rows",
+        ),
+        # A window over merged rows would rank each side's rows apart.
+        (
+            Query(metrics=("total_sales", "headcount_rank"), dimensions=("store.s_state",)),
+            "metric 'headcount_rank' is a window over the merged rows",
+        ),
         (
             Query(
                 metrics=("total_sales", "headcount"),
-                dimensions=("store.s_state", "store.s_city"),
+                dimensions=("store.s_state",),
+                filters=("SUM(store.s_number_employees) > 10",),
             ),
-            _SPLIT,
+            "applies an aggregate function to metrics answered from different datasets",
         ),
-        # headcount cannot be grouped by item either: no split answers it.
-        (Query(metrics=("headcount", "items"), dimensions=("item.i_brand",)), None),
-        # The dimension, not the mix of metrics, is the cause.
-        (Query(metrics=("headcount", "stores"), dimensions=("store_sales.ss_quantity",)), None),
     ],
 )
-def test_refusal_advises_a_split_only_when_it_answers(query, hint):
+def test_stitching_refuses(query, message):
     planner = _with_metrics(
         headcount="SUM(store.s_number_employees)",
+        headcount_rank="RANK() OVER (ORDER BY SUM(store.s_number_employees) DESC)",
         stores="COUNT(store.s_store_sk)",
         items="COUNT(item.i_item_sk)",
     )
     with pytest.raises(PlanError) as e:
         planner.sql(query)
-    if hint is None:
-        assert _SPLIT not in str(e.value)
-    else:
-        assert str(e.value).endswith(hint)
+    assert message in str(e.value)
 
 
 @pytest.mark.parametrize(

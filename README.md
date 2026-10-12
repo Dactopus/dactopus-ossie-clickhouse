@@ -91,6 +91,11 @@ questions it refuses.
   target (many-to-one). `SETTINGS`
   [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls)
   so unmatched rows get NULL, not ClickHouse defaults.
+- Metrics of different facts, such as revenue and returns by region, are
+  each computed from their own root and merged on the dimensions
+  ([stitching](docs/design.md#stitch-metrics-of-several-facts)): every
+  region of either fact appears, and a fact without rows in a region
+  gives NULL for a sum and 0 for a count.
 - Filters over fields go to `WHERE`; filters that name a metric or contain
   an aggregate (`total_sales > 1000000`) go to `HAVING`, and may only use
   the question's own dimensions besides aggregates. A window metric
@@ -150,9 +155,10 @@ data must already be in ClickHouse.
 
 ## Limits
 
-- One root dataset per question, with direct relationships to every
-  dataset it touches. Chains through an intermediate dataset and
-  questions across two fact tables are not supported.
+- One root dataset per group of metrics, with direct relationships to
+  every dataset it touches. Chains through an intermediate dataset are
+  not supported. Metrics of different facts are stitched, so each
+  dimension and row filter must be reachable from each fact.
 - Metrics are computed over the root's rows. A question whose metric
   would count a joined dataset's rows repeatedly, or only those the root
   references, is refused with a message, not answered with a wrong
@@ -172,8 +178,8 @@ the TPC-DS reference model on ClickHouse 26.x. Until the major version is
 are the stable surface.
 
 Where it goes from here: PyPI once `apache-ossie` is published there; the
-upstream Ossie SQL dialect and compliance suite once they merge; multi-fact
-questions, fan-out protection for one-to-many joins, `source` as a query
+upstream Ossie SQL dialect and compliance suite once they merge;
+fan-out protection for one-to-many joins, `source` as a query
 and a remote multi-user MCP server on the first real request. Ask for one
 in the [issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues).
 

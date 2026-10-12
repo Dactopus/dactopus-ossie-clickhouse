@@ -89,6 +89,13 @@ CASES = [
         Query(("total_revenue", "total_returns")),
         "SELECT (SELECT SUM(amount) FROM orders), (SELECT SUM(amount) FROM returns)",
     ),
+    # Over no rows a sum is NULL and a count 0 (§6.11.5), not ClickHouse's 0 for both.
+    (
+        Query(("order_count", "total_returns"), (), ("customers.region = 'SOUTH'",)),
+        "SELECT (SELECT COUNT(o.id) FROM orders o JOIN customers c ON o.customer_id = c.id "
+        "WHERE c.region = 'SOUTH'), (SELECT SUM(x.amount) FROM returns x "
+        "JOIN customers c ON x.customer_id = c.id WHERE c.region = 'SOUTH')",
+    ),
     # A row filter applies to every metric (§6.2 step A.6.1).
     (
         Query(

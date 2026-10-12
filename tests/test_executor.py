@@ -260,6 +260,12 @@ def test_nan_and_inf_become_none(ex):
     assert ex.execute(Query(metrics=("zero_ratio",))).rows == [(None,)]
 
 
+def test_aggregate_over_no_rows_is_null(ex):
+    """SQL's SUM over no rows is NULL; ClickHouse's is 0 unless told otherwise."""
+    q = Query(metrics=("revenue",), filters=("orders.amount > 1000",))
+    assert ex.execute(q).rows == [(None,)]
+
+
 @pytest.mark.parametrize(
     "source, problem",
     [

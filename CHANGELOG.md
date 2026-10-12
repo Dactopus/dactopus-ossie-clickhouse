@@ -18,6 +18,14 @@ a minor release may change the Python API.
   row of totals. Such questions were refused, and so was a metric of a
   dimension table next to a fact's, such as staff next to sales by state.
 
+### Fixed
+
+- An aggregate over no rows is NULL, as the spec and SQL say, not 0: a
+  total whose filter matches nothing, and `SUM(x) FILTER (WHERE ...)` in a
+  group where nothing matches. ClickHouse answered 0 for `SUM`, `MIN`,
+  `MAX` and `ANY_VALUE`; generated SQL now sets
+  `aggregate_functions_null_for_empty = 1`. Counts stay 0.
+
 ### Removed
 
 - The advice to ask for each metric in its own question: it was given only

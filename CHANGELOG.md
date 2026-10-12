@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-12
+
 ### Added
 
 - Metrics of several facts in one question, such as revenue and returns

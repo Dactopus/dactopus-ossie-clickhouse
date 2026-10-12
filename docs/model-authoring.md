@@ -61,8 +61,10 @@ relationships:
 
 A question is answered from one root dataset (usually the fact table) with
 direct relationships to every other dataset it touches. Chains through an
-intermediate dataset and questions across two fact tables are not
-supported yet; see the README.
+intermediate dataset are not supported yet; see the README. Metrics of
+two fact tables in one question are each answered from their own root and
+merged on the dimensions, so a dimension both facts reach, such as a
+shared `customer`, lets an agent ask for both at once.
 
 Metrics are computed over the root's rows, so each row of a joined
 dataset appears once per root row that references it, and only if one

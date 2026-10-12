@@ -1,15 +1,17 @@
 """Turn a semantic query (metrics, dimensions, filters) into one ClickHouse SELECT.
 
 Minimum planner: one root dataset plus direct many-to-one joins to the
-datasets the query touches. Anything else is rejected with a message that
-names the nearest supported thing.
+datasets the query touches. Metrics that no one root can answer together
+are each answered from their own root and merged on the dimensions
+(stitching). Anything else is rejected with a message that names the
+nearest supported thing.
 """
 
 from __future__ import annotations
 
 import difflib
 import re
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import cache
 
 from ossie import OssieDataset, OssieDocument, OssieField, OssieRelationship
@@ -193,6 +195,21 @@ def unanswerable_metrics(model: OssieDocument) -> dict[str, str]:
                 "with it is refused"
             )
     return out
+
+
+def _empty_value(tree: exp.Expression) -> exp.Expression:
+    """A metric over no rows: what a stitched group missing from the metric's fact
+    shows. #246 §6.11.5: NULL for SUM, 0 for COUNT, 0 for COALESCE(SUM(x), 0)."""
+
+    def empty(node: exp.Expression) -> exp.Expression:
+        agg = node.this if isinstance(node, exp.Filter) else node  # COUNT(x) FILTER (...)
+        if isinstance(agg, exp.AggFunc) and not _window_function(agg):
+            counts = isinstance(agg, exp.Count | exp.CountIf | exp.ApproxDistinct)
+            return exp.Literal.number(0) if counts else exp.Null()
+        return node
+
+    out = tree.copy().transform(empty)
+    return exp.Null() if out.find(exp.Column) else out
 
 
 def _check_rows(
@@ -394,25 +411,6 @@ class Planner:
             )
         raise PlanError(f"ambiguous root dataset among {[c.name for c in candidates]}")
 
-    def _split_hint(self, q: Query) -> str:
-        """Advice to ask each metric in its own question, given only when each one plans."""
-        if len(q.metrics) < 2:
-            return ""
-        try:
-            for m in q.metrics:
-                self.plan(replace(q, metrics=(m,), order_by=(), limit=None))
-        except PlanError:
-            return ""
-        if len(q.dimensions) != 1:  # one IN list cannot pick pairs of values
-            return ". Ask for each metric in its own question"
-        d = q.dimensions[0]
-        return (
-            ". Ask for each metric in its own question; for the others over the rows of "
-            f'the first answer, such as its top 5, filter them with "{d} IN (...)" listing '
-            f'the values it returned, or with the single filter "{d} IN (...) OR {d} IS NULL" '
-            "if one is NULL"
-        )
-
     # --- assembly -----------------------------------------------------------
 
     def plan(self, q: Query) -> exp.Select:
@@ -486,8 +484,11 @@ class Planner:
             one_to_one = self._one_to_one(root.name)
             for label, inputs in checked:
                 _check_rows(label, inputs, root.name, touched, one_to_one)
-        except PlanError as e:
-            raise PlanError(f"{e}{self._split_hint(q)}") from None
+        except PlanError:
+            stitched = self._stitch(q)
+            if stitched is not None:
+                return stitched
+            raise
         sel = exp.select(*selects).from_(self._table(root))
         dict_keys: dict[str, exp.Expression] = {}  # dictionary dataset -> key expression
         for name in sorted(used - {root.name}):
@@ -525,6 +526,124 @@ class Planner:
         if dict_keys:
             sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
         # ClickHouse fills unmatched LEFT JOIN columns with defaults unless told otherwise.
+        sel.set(
+            "settings", [exp.EQ(this=exp.var("join_use_nulls"), expression=exp.Literal.number(1))]
+        )
+        return sel
+
+    def _stitch(self, q: Query) -> exp.Select | None:
+        """Metrics no one root answers together, each answered from its own root and
+        merged on the dimensions (#246 §6.2 step A.7, §6.6); None if that fails too.
+
+        Metrics are grouped by the datasets their aggregates read, and each group is
+        planned as a question of its own with the dimensions and the row filters,
+        which apply to every metric (#246 §6.2 step A.6.1). The groups' rows are
+        merged with UNION ALL and GROUP BY on the dimensions: every group of either
+        side appears (§6.6 row 3), a NULL dimension value merges into one row as
+        NULL-safe equality would, and no dimensions leave one row of totals (§6.6
+        row 4). A metric missing from a group shows its value over no rows
+        (_empty_value). Aggregate filters run after the merge (step A.9) and may
+        name metrics, selected or not, and the question's dimensions."""
+        names = list(dict.fromkeys(self.metric(n).name for n in q.metrics))
+        where, having = [], []
+        for f in q.filters:
+            tree = rewrite_tree(self.resolve(f, set(), metrics=True))
+            (having if tree.find(exp.AggFunc) else where).append(f)
+        having_trees = []
+        for f in having:
+            tree = parse(f)
+            for col in tree.find_all(exp.Column):
+                if not col.table and self.metric(col.name).name not in names:
+                    names.append(self.metric(col.name).name)  # filtered on, not selected
+            having_trees.append(tree)
+
+        metric_trees = {n: self._metric_tree(self.metric(n), set()) for n in names}
+        groups: dict[frozenset[str], list[str]] = {}
+        for n, tree in metric_trees.items():
+            groups.setdefault(frozenset(_homes(_aggregate_inputs(tree))), []).append(n)
+        if len(groups) < 2:
+            return None
+        branches = []
+        for members in groups.values():
+            try:
+                branch = Query(tuple(members), q.dimensions, tuple(where))
+                branches.append((set(members), self.plan(branch)))
+            except PlanError:
+                return None
+        for n, tree in metric_trees.items():
+            if tree.find(exp.Window):
+                raise PlanError(
+                    f"metric {n!r} is a window over the merged rows of metrics that are "
+                    "answered from different datasets; this version cannot answer it, "
+                    "ask for it in its own question"
+                )
+        for f, tree in zip(having, having_trees, strict=True):
+            if tree.find(exp.AggFunc):
+                raise PlanError(
+                    f"filter {f!r} applies an aggregate function to metrics answered from "
+                    "different datasets; this version cannot answer it, name a metric instead"
+                )
+
+        dims = [self.field_ref(d)[1].name for d in q.dimensions]
+        empties = {n: _empty_value(metric_trees[n]) for n in names}
+        marked = [  # groups with a metric whose value over no rows is not NULL
+            g
+            for g, (members, _) in enumerate(branches)
+            if any(not isinstance(empties[n], exp.Null) for n in members)
+        ]
+        parts = []
+        for g, (members, sel) in enumerate(branches):
+            planned = {e.alias.upper(): e.this for e in sel.expressions}
+            cols = [planned[d.upper()].as_(d) for d in dims]
+            cols += [
+                (planned[n.upper()] if n in members else exp.Null()).as_(f"__m{i}")
+                for i, n in enumerate(names)
+            ]
+            cols += [
+                (exp.Literal.number(1) if h == g else exp.Null()).as_(f"__b{h}") for h in marked
+            ]
+            part = sel.copy()
+            part.set("expressions", cols)
+            for arg in ("order", "settings"):
+                part.set(arg, None)
+            parts.append(part)
+
+        def merged(i: int, n: str) -> exp.Expression:
+            value = exp.AnyValue(this=exp.column(f"__m{i}"))  # any() skips NULLs
+            g = next(g for g, (members, _) in enumerate(branches) if n in members)
+            if g not in marked or isinstance(empties[n], exp.Null):
+                return value
+            present = exp.GT(
+                this=exp.Count(this=exp.column(f"__b{g}")), expression=exp.Literal.number(0)
+            )
+            return exp.If(this=present, true=value, false=empties[n])
+
+        values = {n: merged(i, n) for i, n in enumerate(names)}
+        selects = [exp.column(d).as_(d) for d in dims]
+        selects += [values[self.metric(n).name].copy().as_(self.metric(n).name) for n in q.metrics]
+        sel = exp.select(*selects).from_(exp.union(*parts, distinct=False).subquery("stitched"))
+        if dims:
+            sel = sel.group_by(*(exp.column(d) for d in dims))
+        if having_trees:
+            by_ref = {ref.upper(): name for ref, name in zip(q.dimensions, dims, strict=True)}
+
+            def to_merged(node: exp.Expression) -> exp.Expression:
+                if isinstance(node, exp.Column) and not node.table:
+                    return values[self.metric(node.name).name].copy()
+                if isinstance(node, exp.Column):
+                    ref = f"{node.table}.{node.name}"
+                    if ref.upper() not in by_ref:
+                        raise PlanError(f"filter column {ref} is not a dimension of this query")
+                    return exp.column(by_ref[ref.upper()])
+                return node
+
+            conditions = [rewrite_tree(t).transform(to_merged) for t in having_trees]
+            sel = sel.having(exp.and_(*conditions))
+        order_by = q.order_by or ((f"{q.metrics[0]} desc",) if dims else ())
+        if order_by:
+            sel = sel.order_by(*self._order(order_by, q, selects))
+        if q.limit is not None:
+            sel = sel.limit(q.limit)
         sel.set(
             "settings", [exp.EQ(this=exp.var("join_use_nulls"), expression=exp.Literal.number(1))]
         )

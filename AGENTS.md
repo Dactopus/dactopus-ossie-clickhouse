@@ -102,7 +102,10 @@ Python library with a CLI entry point. The parts that constrain code:
   that reads only joined datasets unless repeats cannot change it or the
   join is on a key of the root, an aggregate expression that reads no root
   column at all, and a metric whose `COUNT(*)` no other aggregate ties to
-  one dataset (`docs/design.md`).
+  one dataset (`docs/design.md`). Metrics no one root answers together
+  are stitched: each group of metrics planned from its own root, merged
+  with `UNION ALL` and `GROUP BY` on the dimensions (#246 section 6.6); a
+  metric missing from a group is its value over no rows.
 - Name resolution is case-insensitive (spec rule); emitted SQL uses physical
   names exactly as the model writes them (ClickHouse is case-sensitive).
 - Planner errors name the nearest known object; agents recover from that.

@@ -1,0 +1,63 @@
+# Test model: two facts (orders, returns) sharing one dimension (customers),
+# the F_PRELUDE fixture of apache/ossie#237 with one more orphan return.
+# Created by tests/test_stitch.py.
+version: "0.2.0.dev0"
+name: stitch_model
+datasets:
+  - name: customers
+    source: ossie_stitch.customers
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: region
+        expression: {dialects: [{dialect: ANSI_SQL, expression: region}]}
+      - name: segment
+        expression: {dialects: [{dialect: ANSI_SQL, expression: segment}]}
+  - name: orders
+    source: ossie_stitch.orders
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: customer_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: customer_id}]}
+      - name: amount
+        expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
+      - name: status
+        expression: {dialects: [{dialect: ANSI_SQL, expression: status}]}
+  - name: returns
+    source: ossie_stitch.returns
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: customer_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: customer_id}]}
+      - name: amount
+        expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
+relationships:
+  - name: orders_to_customer
+    from: orders
+    to: customers
+    from_columns: [customer_id]
+    to_columns: [id]
+  - name: returns_to_customer
+    from: returns
+    to: customers
+    from_columns: [customer_id]
+    to_columns: [id]
+metrics:
+  - name: total_revenue
+    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(orders.amount)}]}
+  - name: order_count
+    expression: {dialects: [{dialect: ANSI_SQL, expression: COUNT(orders.id)}]}
+  - name: completed_orders
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(orders.id) FILTER (WHERE orders.status = 'completed')"}]}
+  - name: revenue_or_zero
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COALESCE(SUM(orders.amount), 0)"}]}
+  - name: total_returns
+    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(returns.amount)}]}
+  - name: return_rate
+    description: Reads both facts in one metric, so no question can answer it.
+    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(returns.amount) / SUM(orders.amount)}]}

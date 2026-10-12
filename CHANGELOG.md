@@ -32,6 +32,20 @@ a minor release may change the Python API.
   run, and a question without metrics was not ordered at all. Ties are now
   broken by the dimensions, ascending (#42).
 
+- A `Time` value read differently in the CLI and over MCP, and neither
+  form was ClickHouse's: `-01:02:03` came out as `-1 day, 22:57:57` in
+  the CLI and `-PT1H2M3S` over MCP, `100:00:00` as `4 days, 4:00:00` and
+  `P4DT4H` (#40).
+
+### Changed
+
+- `Time`, `Time64`, `DateTime` and `DateTime64` values in the CLI's output
+  and the MCP server's rows are ClickHouse's text, the same in both and
+  usable as a filter literal: `2024-03-15 10:30:45.123` with the column's
+  fraction digits, without the time zone offset the CLI added and the `T`
+  MCP used. `Result.rows` keeps Python values; `Result.shown_rows()` gives
+  the text, and `Result.types` the ClickHouse type of each column.
+
 ### Removed
 
 - The advice to ask for each metric in its own question: it was given only

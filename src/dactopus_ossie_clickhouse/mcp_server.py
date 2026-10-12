@@ -201,7 +201,7 @@ def build_server(
             return {"error": f"ClickHouse: {str(e).splitlines()[0][:400]}"}
         return {
             "columns": r.columns,
-            "rows": [list(row) for row in r.rows],
+            "rows": r.shown_rows(),
             "row_count": len(r.rows),
             "sql": r.sql,
         }

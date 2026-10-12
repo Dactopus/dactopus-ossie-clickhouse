@@ -113,13 +113,13 @@ def _run(args: argparse.Namespace) -> int:
             return 0
         r = ex.execute(q)
         if args.json:
-            rows = [dict(zip(r.columns, row, strict=True)) for row in r.rows]
+            rows = [dict(zip(r.columns, row, strict=True)) for row in r.shown_rows()]
             print(
                 json.dumps(rows, default=lambda v: float(v) if isinstance(v, Decimal) else str(v))
             )
         else:
             print("\t".join(r.columns))
-            for row in r.rows:
+            for row in r.shown_rows():
                 print("\t".join("" if v is None else str(v) for v in row))
         return 0
 

@@ -59,9 +59,12 @@ relationships:
     to_columns: [i_item_sk]
 ```
 
-A question is answered from one root dataset (usually the fact table) with
-direct relationships to every other dataset it touches. Chains through an
-intermediate dataset are not supported yet; see the README. Metrics of
+A question is answered from one root dataset (usually the fact table) that
+reaches every other dataset it touches through many-to-one relationships,
+directly or through datasets in between, such as order lines to orders to
+customers. Each dataset must have one path from the root: a second
+relationship to it, or a direct one next to a longer path, makes the
+question ambiguous, and it is refused. Metrics of
 two fact tables in one question are each answered from their own root and
 merged on the dimensions, so a dimension both facts reach, such as a
 shared `customer`, lets an agent ask for both at once.

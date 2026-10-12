@@ -1,7 +1,7 @@
 """Turn a semantic query (metrics, dimensions, filters) into one ClickHouse SELECT.
 
-Minimum planner: one root dataset plus direct many-to-one joins to the
-datasets the query touches. Metrics that no one root can answer together
+Minimum planner: one root dataset plus many-to-one joins along the one path
+to each dataset the query touches. Metrics that no one root can answer together
 are each answered from their own root and merged on the dimensions
 (stitching). Anything else is rejected with a message that names the
 nearest supported thing.
@@ -373,54 +373,94 @@ class Planner:
 
     # --- joins --------------------------------------------------------------
 
-    def _relationship(self, root: OssieDataset, target: OssieDataset) -> OssieRelationship:
-        found = [
+    def _outgoing(self, name: str) -> list[OssieRelationship]:
+        """Relationships from ``name`` to a dataset of the model."""
+        return [
             r
             for r in self.model.relationships or []
-            if r.from_dataset.upper() == root.name.upper() and r.to.upper() == target.name.upper()
+            if r.from_dataset.upper() == name.upper() and r.to.upper() in self._datasets
         ]
-        if len(found) > 1:  # _root chose a dataset related to every other one
-            raise PlanError(
-                f"ambiguous join from {root.name!r} to {target.name!r}: relationships "
-                f"{[r.name for r in found]}; this version cannot choose between them"
-            )
-        r = found[0]
-        problem = join_problem(r, target)
-        if problem:
-            raise PlanError(problem)
-        return r
+
+    def _paths(self, start: str, target: str) -> list[tuple[OssieRelationship, ...]]:
+        """Up to two acyclic paths of relationships from ``start`` to ``target``
+        (apache/ossie#246 §6.9 rule 4); a second one already makes the join ambiguous."""
+        found: list[tuple[OssieRelationship, ...]] = []
+
+        def walk(at: str, path: tuple[OssieRelationship, ...], seen: frozenset[str]) -> None:
+            if at == target.upper():
+                found.append(path)
+                return
+            for r in self._outgoing(at):
+                if len(found) < 2 and r.to.upper() not in seen:
+                    walk(r.to.upper(), (*path, r), seen | {r.to.upper()})
+
+        walk(start.upper(), (), frozenset({start.upper()}))
+        return found
+
+    def _joins(self, root: OssieDataset, used: set[str]) -> list[OssieRelationship]:
+        """The relationships that join each used dataset to ``root``, nearest first.
+
+        apache/ossie#246 §6.9: the one path of many-to-one relationships to each
+        dataset, ambiguous when there are two. Datasets on a path that the query
+        does not name are joined too (§6.2, datasets involved in a query)."""
+        depth: dict[str, tuple[int, OssieRelationship]] = {}
+        for name in sorted(used - {root.name}):
+            paths = self._paths(root.name, name)
+            if len(paths) > 1:
+                shown = " and ".join(
+                    " -> ".join(repr(r.name) for r in p)
+                    for p in sorted(paths, key=lambda p: (len(p), [r.name for r in p]))
+                )
+                raise PlanError(
+                    f"ambiguous join from {root.name!r} to {name!r}: relationship paths "
+                    f"{shown}; this version cannot choose between them"
+                )
+            for i, r in enumerate(paths[0]):  # _root chose a dataset that reaches every other
+                depth[r.name] = (i, r)
+        joins = [r for _, r in sorted(depth.values(), key=lambda d: (d[0], d[1].name))]
+        for r in joins:
+            problem = join_problem(r, self.dataset(r.to))
+            if problem:
+                raise PlanError(problem)
+        return joins
 
     def _one_to_one(self, root: str) -> set[str]:
-        """Datasets joined from ``root`` on a key of ``root``: none of their rows repeats."""
-        found: dict[str, list[OssieRelationship]] = {}
-        for r in self.model.relationships or []:
-            if r.from_dataset.upper() == root.upper() and r.to.upper() in self._datasets:
+        """Datasets joined from ``root`` through relationships each on a key of its
+        from side, the only one between the two: none of their rows repeats."""
+        out: set[str] = set()
+        todo = [self.dataset(root)]
+        while todo:
+            ds = todo.pop()
+            found: dict[str, list[OssieRelationship]] = {}
+            for r in self._outgoing(ds.name):
                 found.setdefault(r.to.upper(), []).append(r)
-        ds = self.dataset(root)
-        return {
-            self._datasets[to].name
-            for to, rs in found.items()
-            if len(rs) == 1 and covers_key(rs[0].from_columns, ds)
-        }
+            for to, rs in found.items():
+                target = self._datasets[to]
+                if len(rs) == 1 and covers_key(rs[0].from_columns, ds) and target.name not in out:
+                    if target.name.upper() != root.upper():
+                        out.add(target.name)
+                        todo.append(target)
+        return out
+
+    def _reachable(self, name: str) -> set[str]:
+        """Datasets ``name`` reaches from the many side to the one side, itself included."""
+        seen, todo = {name.upper()}, [name.upper()]
+        while todo:
+            for r in self._outgoing(todo.pop()):
+                if r.to.upper() not in seen:
+                    seen.add(r.to.upper())
+                    todo.append(r.to.upper())
+        return {self._datasets[n].name for n in seen}
 
     def _root(self, used: set[str]) -> OssieDataset:
-        """The dataset that has direct relationships to every other used dataset."""
-        candidates = []
-        for name in sorted(used):
-            ds = self.dataset(name)
-            others = used - {name}
-            rels = {
-                r.to.upper()
-                for r in self.model.relationships or []
-                if r.from_dataset.upper() == ds.name.upper()
-            }
-            if all(o.upper() in rels for o in others):
-                candidates.append(ds)
+        """The used dataset that reaches every other one through many-to-one relationships."""
+        candidates = [self.dataset(n) for n in sorted(used) if used <= self._reachable(n)]
         if len(candidates) == 1:
             return candidates[0]
         if not candidates:
             raise PlanError(
-                f"datasets {sorted(used)} are not joined by direct relationships from one root"
+                f"datasets {sorted(used)} are not joined through many-to-one relationships "
+                "from one root"
             )
         raise PlanError(f"ambiguous root dataset among {[c.name for c in candidates]}")
 
@@ -508,21 +548,23 @@ class Planner:
             raise
         sel = exp.select(*selects).from_(self._table(root))
         dict_keys: dict[str, exp.Expression] = {}  # dictionary dataset -> key expression
-        for name in sorted(used - {root.name}):
-            target = self.dataset(name)
-            r = self._relationship(root, target)
+        joins = self._joins(root, used)
+        joined_from = {r.from_dataset.upper() for r in joins}
+        for r in joins:
+            source, target = self.dataset(r.from_dataset), self.dataset(r.to)
             info = (self.catalog or {}).get(target.name)
             if (
                 info
                 and info.dictionary_key
                 and [c.upper() for c in r.to_columns] == [info.dictionary_key.upper()]
+                and target.name.upper() not in joined_from  # nothing joins on from it
             ):
-                dict_keys[target.name] = exp.column(r.from_columns[0], table=root.name)
+                dict_keys[target.name] = exp.column(r.from_columns[0], table=source.name)
                 continue
             on = exp.and_(
                 *(
                     exp.EQ(
-                        this=exp.column(a, table=root.name),
+                        this=exp.column(a, table=source.name),
                         expression=exp.column(b, table=target.name),
                     )
                     for a, b in zip(r.from_columns, r.to_columns, strict=True)

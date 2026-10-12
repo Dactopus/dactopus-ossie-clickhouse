@@ -7,6 +7,22 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- Joins along a path of several relationships, such as order lines to
+  orders to customers: a question about line revenue by customer region
+  is answered, where it was refused. The dataset in the middle joins like
+  any other, so a row filter may read it. Two paths to a dataset a
+  question touches are refused as ambiguous, as apache/ossie#246 §6.9
+  says.
+
+### Changed
+
+- Breaking: a direct relationship next to a longer path to the same
+  dataset is refused as ambiguous (apache/ossie#246 §6.9), where 0.5.0
+  joined along the direct one. None of the models in this repository or
+  in dactopus-data-models has such a pair.
+
 ### Fixed
 
 - Division of a `Decimal` lost digits: ClickHouse keeps the dividend's

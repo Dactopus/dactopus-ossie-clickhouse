@@ -259,7 +259,10 @@ def test_deterministic():
             Query(metrics=("total_sales",), filters=("store_sales.ss_quantity IN (SELECT 1)",)),
             "not allowed",
         ),
-        (Query(dimensions=("item.i_brand", "store.s_state")), "not joined by direct relationships"),
+        (
+            Query(dimensions=("item.i_brand", "store.s_state")),
+            "not joined through many-to-one relationships",
+        ),
         (Query(metrics=("total_sales",), filters=("date_dim.d_year = ",)), "cannot parse"),
     ],
 )
@@ -714,7 +717,7 @@ def test_stitches_metrics_that_no_one_root_answers(query):
         # headcount cannot be grouped by item: no root answers it, alone or not.
         (
             Query(metrics=("headcount", "items"), dimensions=("item.i_brand",)),
-            "datasets ['item', 'store'] are not joined by direct relationships",
+            "datasets ['item', 'store'] are not joined through many-to-one relationships",
         ),
         # Both read store: the dimension, not the mix of metrics, is the cause.
         (
@@ -746,6 +749,99 @@ def test_stitching_refuses(query, message):
     with pytest.raises(PlanError) as e:
         planner.sql(query)
     assert message in str(e.value)
+
+
+def _area(m):
+    """store_area, a copy of store joined from store only."""
+    store = next(d for d in m["datasets"] if d["name"] == "store")
+    m["datasets"].append({**store, "name": "store_area"})
+    m["relationships"].append(
+        {"name": "store_to_area", "from": "store", "to": "store_area",
+         "from_columns": ["s_store_sk"], "to_columns": ["s_store_sk"]}
+    )  # fmt: skip
+
+
+def test_path_of_two_relationships():
+    """store_area is reached through store, which the query does not name
+    (apache/ossie#246 §6.9); values are compared in test_paths.py."""
+    sql = _variant(_area).sql(Query(metrics=("total_sales",), dimensions=("store_area.s_state",)))
+    assert (
+        "FROM tpcds.store_sales AS store_sales "
+        "LEFT JOIN tpcds.store AS store ON store_sales.ss_store_sk = store.s_store_sk "
+        "LEFT JOIN tpcds.store AS store_area ON store.s_store_sk = store_area.s_store_sk "
+    ) in sql
+
+
+def test_a_direct_and_a_longer_path_are_ambiguous():
+    def mutate(m):
+        _area(m)
+        m["relationships"].append(
+            {"name": "sales_to_area", "from": "store_sales", "to": "store_area",
+             "from_columns": ["ss_store_sk"], "to_columns": ["s_store_sk"]}
+        )  # fmt: skip
+
+    with pytest.raises(PlanError) as e:
+        _variant(mutate).sql(Query(metrics=("total_sales",), dimensions=("store_area.s_state",)))
+    assert "paths 'sales_to_area' and 'store_sales_to_store' -> 'store_to_area'" in str(e.value)
+    # Two paths to a dataset the question does not touch do not matter.
+    _variant(mutate).sql(Query(metrics=("total_sales",), dimensions=("store.s_state",)))
+
+
+def test_relationships_in_a_cycle():
+    """store and store_area join each other one to one: a path never visits a
+    dataset twice (apache/ossie#246 §6.9 rule 4), and either could be the root."""
+
+    def mutate(m):
+        _area(m)
+        m["relationships"].append(
+            {"name": "area_to_store", "from": "store_area", "to": "store",
+             "from_columns": ["s_store_sk"], "to_columns": ["s_store_sk"]}
+        )  # fmt: skip
+
+    planner = _variant(mutate)
+    assert "LEFT JOIN tpcds.store AS store_area" in planner.sql(
+        Query(metrics=("total_sales",), dimensions=("store_area.s_state",))
+    )
+    with pytest.raises(PlanError, match="ambiguous root dataset"):
+        planner.sql(Query(dimensions=("store.s_state", "store_area.s_city")))
+
+
+def test_one_to_one_through_a_path():
+    """store -> store_area -> area_copy, each on a key of its from side: no row of
+    area_copy repeats over store's, so a store metric may sum it."""
+
+    def mutate(m):
+        _area(m)
+        store = next(d for d in m["datasets"] if d["name"] == "store")
+        m["datasets"].append({**store, "name": "area_copy"})
+        m["relationships"].append(
+            {"name": "area_to_copy", "from": "store_area", "to": "area_copy",
+             "from_columns": ["s_store_sk"], "to_columns": ["s_store_sk"]}
+        )  # fmt: skip
+        e = "SUM(store.s_number_employees) - SUM(area_copy.s_number_employees)"
+        m["metrics"].append(
+            {"name": "gap", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": e}]}}
+        )
+
+    planner = _variant(mutate)
+    assert planner._one_to_one("store") == {"store_area", "area_copy"}
+    assert "LEFT JOIN tpcds.store AS area_copy" in planner.sql(
+        Query(metrics=("gap",), dimensions=("store.s_state",))
+    )
+
+
+def test_dictionary_on_a_path():
+    """A dictionary at the end of a path is read with dictGetOrNull on the key of
+    the dataset before it; one in the middle is joined, since the next join reads it."""
+    planner = _variant(_area)
+    catalog = {"store_area": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")}
+    query = Query(metrics=("total_sales",), dimensions=("store_area.s_state",))
+    sql = Planner(planner.model, catalog).sql(query)
+    assert "dictGetOrNull('tpcds.store', 's_state', store.s_store_sk)" in sql
+    assert "LEFT JOIN tpcds.store AS store ON" in sql and "AS store_area" not in sql
+    catalog = {"store": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")}
+    sql = Planner(planner.model, catalog).sql(query)
+    assert "dictGet" not in sql and "LEFT JOIN tpcds.store AS store ON" in sql
 
 
 @pytest.mark.parametrize(

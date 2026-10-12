@@ -62,7 +62,7 @@ class Code(StrEnum):
 class Suggestion:
     """Advice that comes with a refusal; ``kind`` as in apache/ossie#529."""
 
-    kind: str  # "name": a known name to use instead; "query": how to ask instead
+    kind: str  # "name": a known name to use instead
     message: str
 
 

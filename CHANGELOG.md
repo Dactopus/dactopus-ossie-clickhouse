@@ -37,6 +37,10 @@ a minor release may change the Python API.
   `QUERY_INVALID`, `UNSUPPORTED_QUERY`) and `suggestions`; the CLI prints
   the code. `list_model` describes the binding: model revision, profile
   and Layer 3 revisions, what is refused.
+- Breaking: over MCP a `DateTime` value is the profile's `DateTimeTz`, ISO
+  8601 with its offset (`2024-03-15T10:30:45+09:00`), where the CLI and
+  0.5.0's MCP rows print ClickHouse's text. A `Time` and other values of
+  no profile type stay ClickHouse's text.
 - The `mcp` extra needs mcp 2.2 or later.
 - An explicit `order_by` sorts NULL as the highest value, first
   descending, as #246 says, unless the entry's `nulls` says `LAST`. The

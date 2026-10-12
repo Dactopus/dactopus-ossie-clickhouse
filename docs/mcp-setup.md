@@ -113,9 +113,8 @@ code of the profile: `INVALID_ARGUMENT` for arguments or a clause value
 outside its schema, `SOURCE_UNAVAILABLE` for another `data_source_id`,
 `QUERY_INVALID` for an expression that does not parse,
 `UNSUPPORTED_QUERY` for one this version cannot answer, `BACKEND_ERROR`
-when ClickHouse fails it (`retryable` when the connection did). A
-suggestion of `kind` `name` is a known name to use instead; `query`
-advises how to ask instead.
+when ClickHouse fails it (`retryable` when the connection did).
+Suggestions are of `kind` `name`: a known name to use instead.
 The server's `instructions` tell the agent to start with `list_model`,
 name the `data_source_id` to pass, and tell it never to write SQL, never
 to add up or rank rows itself, and to state only numbers a query

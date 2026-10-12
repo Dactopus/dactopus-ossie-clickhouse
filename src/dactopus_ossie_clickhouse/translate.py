@@ -290,6 +290,16 @@ _ANONYMOUS = {
 }
 
 
+_ONE = exp.Literal.number("1.0")
+
+
+def _to_float(x: exp.Expression) -> exp.Expression:
+    """``x * 1.0``: Float64. Unlike toFloat64, ClickHouse refuses it for a Date,
+    DateTime or String, as Postgres does, where toFloat64 would take a date's day
+    count or parse the string."""
+    return exp.Mul(this=x, expression=_ONE.copy())
+
+
 def _percentile_cont(p: exp.Expression, arg: exp.Expression) -> exp.Expression:
     """Spec PERCENTILE_CONT (Postgres semantics): exact, interpolated between the two
     nearest values, NULL for an empty set.
@@ -300,18 +310,13 @@ def _percentile_cont(p: exp.Expression, arg: exp.Expression) -> exp.Expression:
     nan, which COALESCE and comparisons take for a value. OrNull makes that NULL and,
     unlike if(COUNT(x) = 0, ...), keeps a single aggregate that FILTER can apply to.
 
-    x * 1.0 makes the argument Float64. Unlike toFloat64, ClickHouse refuses it for a
-    Date, DateTime or String, which Postgres refuses too; quantileExactInclusive
-    alone would answer a date with its day count and toFloat64 would parse a string.
+    The argument is made Float64 with _to_float; quantileExactInclusive alone would
+    answer a date with its day count.
     """
-
-    def to_float(x: exp.Expression) -> exp.Expression:
-        return exp.Mul(this=x, expression=exp.Literal.number("1.0"))
-
     if isinstance(arg, exp.Distinct):
-        arg = exp.Distinct(expressions=[to_float(arg.expressions[0])])
+        arg = exp.Distinct(expressions=[_to_float(arg.expressions[0])])
     else:
-        arg = to_float(arg)
+        arg = _to_float(arg)
     return _param_agg("quantileExactInclusiveOrNull", p, arg)
 
 
@@ -366,15 +371,14 @@ def rewrite(node: exp.Expression) -> exp.Expression:
     # ClickHouse keeps the dividend's scale when it divides a Decimal: 10.00 / 350.00 is
     # 0.02, and SUM(price) / 3 drops digits the same way. Postgres (numeric) and DuckDB
     # (double) give 0.0285714..., so the dividend becomes Float64, as DuckDB divides;
-    # integers already divide to Float64 in ClickHouse. x * 1.0, not toFloat64, which
-    # would divide a date's day count or a parsed string where ClickHouse refuses both.
+    # integers already divide to Float64 in ClickHouse.
     if isinstance(node, exp.Div):
         # Idempotent: a metric inlined into a filter is rewritten again with it. The
         # quotient of a division is Float64 already (a / b / c).
         this = node.this.unnest()
-        floated = isinstance(this, exp.Mul) and this.expression == exp.Literal.number("1.0")
+        floated = isinstance(this, exp.Mul) and this.expression == _ONE
         if not floated and not isinstance(this, exp.Div):
-            node.set("this", exp.Mul(this=node.this, expression=exp.Literal.number("1.0")))
+            node.set("this", _to_float(node.this))
         return node
     if isinstance(node, exp.CurrentTime):
         return _f("toTime", _f("now"))

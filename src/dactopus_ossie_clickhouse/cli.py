@@ -71,15 +71,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
-def old_name_main(argv: list[str] | None = None) -> int:
-    """The command's name before 0.4.0, kept for 0.4.x so existing setups keep working."""
-    print(
-        "ossie-clickhouse is now dactopus-ossie-clickhouse; the old name goes away in 0.5.0",
-        file=sys.stderr,
-    )
-    return main(argv)
-
-
 def _run(args: argparse.Namespace) -> int:
     policy = Policy.load(args.policy) if getattr(args, "policy", None) else None
 

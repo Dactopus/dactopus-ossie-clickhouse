@@ -52,6 +52,10 @@ a minor release may change the Python API.
   when each metric could be answered alone, and such questions are now
   answered together.
 
+- The `ossie-clickhouse` command, the name before 0.4.0: run
+  `dactopus-ossie-clickhouse`, and point an MCP client's configuration at
+  it (`docs/mcp-setup.md`).
+
 ## [0.4.0] - 2026-10-10
 
 ### Changed

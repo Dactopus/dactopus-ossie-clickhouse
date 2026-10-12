@@ -242,10 +242,21 @@ reaches.
 
 ## Refuse a metric over another dataset's rows
 
-A question is one `SELECT` over the root's rows with many-to-one joins,
-so a joined row repeats once per root row that references it, and rows
-no root row references are absent. Two failures follow, and until this
-change both returned a plausible wrong number. The reference TPC-DS model's
+Each aggregate of a metric resolves on its own (apache/ossie#246,
+`cc0d070`, section 4.5 form 2, L353: "each operand resolves independently
+at the query's grain"). An aggregate whose dataset reaches the question's
+dimensions and `where` on its own is computed over that dataset's rows
+(section 6.2 step A.6.3), in a group of its own if another aggregate needs
+another root, and stitched (next sections). The rules below apply to the
+rest: aggregates computed over the question's root because their dataset
+cannot reach a dimension or condition, such as
+`MAX(store.s_number_employees)` by `item.i_brand`, which store reaches
+only through sales.
+
+A `SELECT` over the root's rows with many-to-one joins repeats a joined
+row once per root row that references it, and rows no root row references
+are absent. Two failures follow, and before these rules both returned a
+plausible wrong number. The reference TPC-DS model's
 `store_productivity`, `SUM(store_sales.ss_ext_sales_price) /
 NULLIF(SUM(store.s_number_employees), 0)`, summed each store's staff once
 per sale and came out about 458,000 times too small. In a GA4 model,
@@ -286,29 +297,53 @@ split the question.
 The cost: a correct question is refused when its intended population is
 the root's references, such as distinct users per purchased item through
 `sessions.user_id`. The planner cannot tell that from users next to
-revenue, where it would be wrong. The spec does not say which rows a
-metric spanning datasets is computed over; apache/ossie#354 (open) asks
-every metric to be grain-safe, and #343 (open) gives metrics a home
-dataset, which would replace guessing the home from the expression.
-A question whose metrics no one root answers together is stitched instead
-(next section); a single metric that reads two datasets is still refused.
+revenue, where it would be wrong. #246 is not clear here either: section
+6.2 step A.6.4 asks every row of the aggregate's dataset to appear, under
+a NULL group when it reaches no group value, and the contract written for
+it (L351) is for many-to-many edges; whether a coarser dataset's
+aggregate by a finer dataset's dimension follows it is a question for the
+spec. apache/ossie#354 (open) asks every metric to be grain-safe, and
+#343 (open) gives metrics a home dataset.
 
-A metric that refuses in every question (a repeat-sensitive aggregate over
-each of two datasets, a bare `COUNT(*)`, an unknown field) is hidden from
-agents like an untranslatable one, since every attempt would cost a turn,
-and is reported by `validate`.
+The population of an aggregate therefore depends on the question. In
+`customer_lifetime_value`, `SUM(store_sales.ss_ext_sales_price) /
+COUNT(DISTINCT customer.c_customer_sk)`, the count is of every customer
+in a total or by a customer field (TPC-DS: 100,000 customers, 52,624.71
+per customer), and of the customers who bought by a store field, which
+customer does not reach on its own. Before this change it was the buyers
+in every question (90,858, 57,919.73). `MAX(store.x)` next to sales by
+`store.s_state` is now the largest of every store in the state, not of
+those with sales.
+
+A metric refused in every question is hidden from agents like an
+untranslatable one, since every attempt would cost a turn, and is
+reported by `validate`. A question with the metric alone is the one most
+likely to be answered, since dimensions and `where` only add datasets to
+reach, so the check plans that question: an unknown field, a bare
+`COUNT(*)` in a model of several datasets, facts that share no dimension
+in one metric (`E3013_NO_STITCHING_DIMENSION`), a join every question
+needs that the model's keys do not allow. A metric that reads no dataset,
+such as `COUNT(*)` in a model of one dataset, needs a dimension, so it is
+not checked.
 
 ## Stitch metrics of several facts
 
-When no one root answers a question's metrics together, each group of
-metrics is answered from its own root and the results are merged on the
-dimensions, as apache/ossie#246 (`cc0d070`) requires in section 6.2,
-step A.7, and section 6.6. A group is the metrics whose aggregates read
-the same datasets. It is planned as a question of its own with the
-question's dimensions and `where`, which applies to every metric (step
-A.6.1). Revenue next to returns by region was refused; an
-agent had to ask twice and combine the rows, which the MCP server's
-instructions forbid.
+When no one root answers a question's aggregates together, each group of
+aggregates is answered from its own root and the results are merged on
+the dimensions, as apache/ossie#246 (`cc0d070`) requires in section 6.2,
+step A.7, and section 6.6. A group is the aggregates with the same root:
+the dataset an aggregate reads when it reaches the dimensions and `where`
+on its own, otherwise the question's root (previous section). It is
+planned as a question of its own with the question's dimensions and
+`where`, which applies to every aggregate (step A.6.1), and each metric
+is computed from its merged aggregates, as section 4.5 form 2 applies the
+arithmetic "after the operand aggregates have resolved". Revenue next to
+returns by region was refused; an agent had to ask twice and combine the
+rows, which the MCP server's instructions forbid. So was sales per
+employee, `SUM(store_sales.ss_ext_sales_price) /
+NULLIF(SUM(store.s_number_employees), 0)`: by `store.s_state` it is now
+the state's sales over the staff of all its stores (TPC-DS: 6 of 12
+stores have sales).
 
 The merge is `UNION ALL` of the groups' rows and `GROUP BY` on the
 dimensions, where #246 describes a `FULL OUTER JOIN`. The rows are the
@@ -318,11 +353,16 @@ dimension value on two sides makes one row, as the NULL-safe equality
 any number of groups; chained joins would need the keys coalesced after
 each one. With no dimensions it leaves one row of totals (row 4).
 
-A metric missing from a group shows its value over no rows (section
-6.11.5): NULL for `SUM`, 0 for `COUNT`, 0 for `COALESCE(SUM(x), 0)`. The
-planner computes it by replacing each aggregate with its value over no
-rows, 0 for counts and NULL otherwise, and each group marks its rows so
-the merge can tell a missing group from a NULL value.
+An aggregate missing from a group shows its value over no rows (section
+6.11.5): NULL for `SUM`, 0 for `COUNT`, so `COALESCE(SUM(x), 0)` gives 0
+and `COUNT(x) / NULLIF(COUNT(y), 0)` gives 0 where only `y` has rows.
+Each group marks its rows so the merge can tell a missing group from a
+NULL value.
+
+A holistic aggregate (`MEDIAN`, a percentile) in a group is computed once,
+over its group's rows at the question's grain: no partial result is
+aggregated again, so section 6.1 Semantic 4 (`E_UNSAFE_REAGGREGATION`,
+for plans that decompose an aggregate) does not apply.
 
 `having` runs on the merged rows (step A.9) and may name metrics, selected
 or not, and the question's dimensions. Refused: an aggregate function
@@ -334,17 +374,21 @@ own error and code, which name the datasets it cannot join; the
 single-root error would only say the facts do not join.
 
 Facts that share no dimension at all are stitched only without
-dimensions: each one's total in one row, as §6.6 row 4 reads. With a
-dimension, one of them cannot reach it, and the question is refused with
-`E3013_NO_STITCHING_DIMENSION` (next section).
+dimensions and only as separate metrics: each one's total in one row, as
+§6.6 row 4 reads. With a dimension, one of them cannot reach it, and the
+question is refused with `E3013_NO_STITCHING_DIMENSION` (next section);
+so is one metric that reads both, as the table of section 6.2 words it
+("in the same measure").
 
 `tests/test_stitch.py` compares answers with DuckDB running the `FULL OUTER
 JOIN` plan, on the F_PRELUDE data of the Ossie compliance suite
-(apache/ossie#237) with one more orphan return. On that data each
-plausible wrong plan gives another answer: the dimension's values with
-`LEFT JOIN` loses the NULL group, a `FULL OUTER JOIN` by plain equality
-splits it in two, and one `SELECT` from orders loses a region and counts
-returns once per order.
+(apache/ossie#237) with one more orphan return and a customer with
+neither orders nor returns. On that data each plausible wrong plan gives
+another answer: the dimension's values with `LEFT JOIN` loses the NULL
+group, a `FULL OUTER JOIN` by plain equality splits it in two, and one
+`SELECT` from orders loses a region and counts returns once per order;
+for one metric over orders and customers it counts customers once per
+order and misses the customer without orders.
 
 Refusals no longer advise asking for each metric in its own question: the
 advice was given only when each metric planned alone, and such a question

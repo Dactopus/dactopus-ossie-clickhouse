@@ -7,8 +7,35 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- A metric of aggregates over two datasets, such as sales per employee,
+  `SUM(store_sales.ss_ext_sales_price) /
+  NULLIF(SUM(store.s_number_employees), 0)`: each aggregate is computed
+  over its own dataset's rows and the results are merged on the
+  dimensions, as #246 §4.5 says of a metric's operands. Such a metric was
+  refused in every question, hidden from agents and reported by
+  `validate`; now it is answered wherever each dataset reaches the
+  question's dimensions.
+
 ### Changed
 
+- An aggregate over a dataset other than the question's root counts all
+  of that dataset's rows when the dataset reaches the dimensions on its
+  own, not only those the root's rows reference. In the TPC-DS model,
+  `customer_lifetime_value` in total divides sales by all 100,000
+  customers (52,624.71), where it divided by the 90,858 who bought
+  (57,919.73); by a customer field it counts that field's customers
+  who did not buy too, and by a store field it still divides by the
+  buyers. A `MAX` of store staff next to sales by state is of every store
+  in the state. Such a question is now stitched, so like other stitched
+  questions it refuses an aggregate function written into `having` and a
+  window metric.
+- `validate` reports, and agents do not see, a metric that is refused
+  when asked alone: that question is the one most likely to be
+  answered. Newly reported: one metric over two facts that share no
+  dimension, and a metric every question of which needs a join the
+  model's keys do not allow.
 - Breaking: the MCP tool `query` is `execute_query`, the tool of the
   `execute_query` profile draft, apache/ossie#529 `0.4-draft` at
   `b5418ee`, and passes that profile's conformance checker

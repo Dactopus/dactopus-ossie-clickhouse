@@ -163,11 +163,7 @@ async def test_tools_listed(client):
 @pytest.mark.anyio
 async def test_tools_match_library(client):
     r = await client.call_tool("list_model", {})
-    # store_productivity is refused in every question, so agents never see it.
-    seen = MODEL.model_copy(
-        update={"metrics": [m for m in MODEL.metrics if m.name != "store_productivity"]}
-    )
-    assert r.structured_content == summary(seen, BINDING)
+    assert r.structured_content == summary(MODEL, BINDING)
     r = await client.call_tool("describe_object", {"name": "total_sales"})
     assert r.structured_content == describe(MODEL, "total_sales")
     r = await client.call_tool("search_model", {"text": "profit"})

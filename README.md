@@ -124,7 +124,9 @@ questions it refuses.
   each computed from their own root and merged on the dimensions
   ([stitching](docs/design.md#stitch-metrics-of-several-facts)): every
   region of either fact appears, and a fact without rows in a region
-  gives NULL for a sum and 0 for a count.
+  gives NULL for a sum and 0 for a count. So is each aggregate of one
+  metric, as in sales per employee: staff is summed over the stores, not
+  once per sale.
 - `where` conditions over fields become `WHERE`; `having` conditions over
   metric names, aggregates (`total_sales > 1000000`) and the question's
   own dimensions become `HAVING`. A condition in the wrong clause is
@@ -195,10 +197,11 @@ data must already be in ClickHouse.
   paths to the same dataset are refused as ambiguous. Metrics of
   different facts are stitched, so each dimension and `where` condition
   must be reachable from each fact.
-- Metrics are computed over the root's rows. A question whose metric
+- An aggregate whose dataset cannot reach a dimension or condition of
+  the question on its own is computed over the root's rows. If that
   would count a joined dataset's rows repeatedly, or only those the root
-  references, is refused with a message, not answered with a wrong
-  number; see [model authoring](docs/model-authoring.md#keys-decide-which-joins-are-allowed).
+  references, the question is refused with a message, not answered with
+  a wrong number; see [model authoring](docs/model-authoring.md#keys-decide-which-joins-are-allowed).
 - Joins are many-to-one only, inferred from primary and unique keys.
 - No time grain and no derived-dimension syntax: declare a field per
   grain or band (see [model authoring](docs/model-authoring.md)). The

@@ -69,9 +69,14 @@ two fact tables in one question are each answered from their own root and
 merged on the dimensions, so a dimension both facts reach, such as a
 shared `customer`, lets an agent ask for both at once.
 
-Metrics are computed over the root's rows, so each row of a joined
-dataset appears once per root row that references it, and only if one
-does. The planner refuses what that would get wrong:
+Each aggregate of a metric is answered on its own the same way. In sales
+per employee, `SUM(sales.amount) / SUM(store.employees)`, sales are summed
+over sales and staff over stores, by any dimension both reach, such as
+`store.state`. An aggregate whose dataset cannot reach a dimension or
+condition of the question on its own (staff by `item.brand`: store reaches
+items only through sales) is computed over the root's rows, so each row of
+a joined dataset appears once per root row that references it, and only if
+one does. The planner refuses what that would get wrong:
 
 - An aggregate that reads only joined datasets, unless repeats do not
   change it: `MIN`, `MAX`, `ANY_VALUE`, `BOOL_AND`, `BOOL_OR`,
@@ -90,13 +95,13 @@ does. The planner refuses what that would get wrong:
   instead, `COUNT(orders.order_id)`, or keep it next to an aggregate that
   names the dataset, as in `SUM(orders.amount) / COUNT(*)`.
 
-`COUNT(DISTINCT customer.id)` next to a sales column, as in
-`SUM(sales.amount) / COUNT(DISTINCT customer.id)`, passes: it is about the
-customers who bought, which is what such a metric means. A metric that
-sums columns of two datasets, such as sales per employee written as
-`SUM(sales.amount) / SUM(store.employees)`, is refused in every question
-and reported by `validate`. To filter one dataset's metric by another
-dataset, give the first a field for it (`sessions.has_purchase`).
+So the population of an aggregate depends on the question. In
+`SUM(sales.amount) / COUNT(DISTINCT customer.id)`, the count is of every
+customer in a total or by a customer field, and of the customers who
+bought by a store field. For buyers in every question, count a column of
+sales: `COUNT(DISTINCT sales.customer_id)`. To filter one dataset's
+metric by another dataset, give the first a field for it
+(`sessions.has_purchase`).
 
 ## Expressions
 

@@ -347,6 +347,27 @@ def _window_function(agg: exp.AggFunc) -> bool:
     return isinstance(parent, exp.Window)
 
 
+def _atoms(tree: exp.Expression) -> list[exp.Expression]:
+    """The aggregates of a metric that #246 §4.5 form 2 resolves each on its own:
+    the outermost ones outside window functions, with their FILTER."""
+    out = []
+    for agg in tree.find_all(exp.AggFunc):
+        if _window_function(agg):
+            continue
+        node: exp.Expression | None = agg.parent
+        while node is not None and not (
+            isinstance(node, exp.AggFunc) and not _window_function(node)
+        ):
+            node = node.parent
+        if node is not None:
+            continue  # inside another aggregate
+        atom: exp.Expression = agg
+        while isinstance(atom.parent, exp.Filter | exp.RespectNulls | exp.IgnoreNulls):
+            atom = atom.parent
+        out.append(atom)
+    return out
+
+
 def _homes(inputs: Inputs) -> list[str]:
     return sorted({d for _, ds in inputs for d in ds})
 
@@ -363,10 +384,12 @@ def _repeated(inputs: Inputs, root: str, one_to_one: set[str]) -> Inputs:
 def unanswerable_metrics(model: OssieDocument) -> dict[str, str]:
     """Metrics the planner refuses in every question, with why.
 
-    One that names an unknown field or reads no column, and one with a
-    duplicate-sensitive aggregate over each of two datasets: whichever is the
-    root, the other one's rows repeat. Untranslatable metrics are reported by
-    untranslatable()."""
+    A question with the metric alone is the one most likely to be answered:
+    dimensions and where only add datasets to reach. One that names an unknown
+    field, reads no column, or reads facts that share no dimension is refused
+    there too. A metric that reads no dataset at all (COUNT(*) in a model of
+    one dataset) needs a dimension, so it is not checked. Untranslatable
+    metrics are reported by untranslatable()."""
     planner = Planner(model)
     skip = set(untranslatable(model)[1])
     out = {}
@@ -374,23 +397,14 @@ def unanswerable_metrics(model: OssieDocument) -> dict[str, str]:
         if m.name in skip:
             continue
         try:
-            # Through the planner, so names are the model's spelling, as in plan().
-            inputs = _aggregate_inputs(planner._metric_tree(m, set()))
+            read: set[str] = set()
+            planner._metric_tree(m, read)
+            if read:
+                planner.plan(Query((m.name,)))
         except PlanError as e:
             out[m.name] = str(e)
-            continue
         except ValueError:
             continue  # reads an untranslatable field, reported as such
-        homes = _homes(inputs)
-        refused = [_repeated(inputs, root, planner._one_to_one(root)) for root in homes]
-        if homes and all(refused):
-            aggs = ", ".join(r[0][0].sql("clickhouse") for r in refused)
-            out[m.name] = (
-                f"aggregates columns of {' and '.join(homes)} separately with functions that "
-                f"count repeated rows ({aggs}); whichever "
-                "is the root of a question, the other's rows repeat, so every question "
-                "with it is refused"
-            )
     return out
 
 
@@ -866,18 +880,39 @@ class Planner:
         used = set().union(*touched.values())
         try:
             root = self._root(used, touched)
-            one_to_one = self._one_to_one(root.name)
-            for label, inputs in checked:
-                _check_rows(label, inputs, root.name, touched, one_to_one)
         except PlanError as e:
             # Unrelated facts by a dimension: no dimension is shared, so stitching
             # cannot help (E3013); without dimensions their totals are answered.
             if e.code == Code.E3013_NO_STITCHING_DIMENSION and q.dimensions:
                 raise
-            stitched = self._stitch(q)
+            stitched = self._stitch(q, None)
             if stitched is not None:
                 return stitched
             raise
+        stitched = self._stitch(q, root.name)
+        if stitched is not None:
+            return stitched
+        one_to_one = self._one_to_one(root.name)
+        for label, inputs in checked:
+            _check_rows(label, inputs, root.name, touched, one_to_one)
+        sel = self._assemble(root, used, selects, group, where, having)
+        if order := self._order(q, selects):
+            sel = sel.order_by(*order)
+        if q.limit is not None:
+            sel = sel.limit(q.limit)
+        sel.set("settings", _settings())
+        return sel
+
+    def _assemble(
+        self,
+        root: OssieDataset,
+        used: set[str],
+        selects: list[exp.Expression],
+        group: list[exp.Expression],
+        where: list[exp.Expression],
+        having: list[exp.Expression],
+    ) -> exp.Select:
+        """SELECT ... FROM root LEFT JOIN ... WHERE ... GROUP BY ... HAVING ..."""
         sel = exp.select(*selects).from_(self._table(root))
         dict_keys: dict[str, exp.Expression] = {}  # dictionary dataset -> key expression
         joins = self._joins(root, used)
@@ -909,28 +944,26 @@ class Planner:
             sel = sel.group_by(*group)
         if having:
             sel = sel.having(exp.and_(*having))
-        if order := self._order(q, selects):
-            sel = sel.order_by(*order)
-        if q.limit is not None:
-            sel = sel.limit(q.limit)
         if dict_keys:
             sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
-        sel.set("settings", _settings())
         return sel
 
-    def _stitch(self, q: Query) -> exp.Select | None:
-        """Metrics no one root answers together, each answered from its own root and
-        merged on the dimensions (#246 §6.2 step A.7, §6.6); None if they form one
-        group, or a group is refused even on its own.
+    def _stitch(self, q: Query, root: str | None) -> exp.Select | None:
+        """Aggregates no one root answers together, each answered from its own root
+        and merged on the dimensions (#246 §6.2 step A.7, §6.6); None if they form
+        one group, or a group is refused even on its own.
 
-        Metrics are grouped by the datasets their aggregates read, and each group is
-        planned as a question of its own with the dimensions and where, which
-        applies to every metric (#246 §6.2 step A.6.1). The groups' rows are
-        merged with UNION ALL and GROUP BY on the dimensions: every group of either
-        side appears (§6.6 row 3), a NULL dimension value merges into one row as
-        NULL-safe equality would, and no dimensions leave one row of totals (§6.6
-        row 4). A metric missing from a group shows its value over no rows
-        (_empty_value). having runs after the merge (step A.9) and may name
+        Each aggregate of a metric resolves on its own (#246 §4.5 form 2): over the
+        rows of the dataset it reads, when that dataset reaches the dimensions and
+        where, which applies to every aggregate (§6.2 step A.6.1). Otherwise it
+        stays with ``root``, the question's root, as in a single SELECT. Each group
+        of aggregates with one root is planned as a question of its own, and the
+        groups' rows are merged with UNION ALL and GROUP BY on the dimensions:
+        every group of either side appears (§6.6 row 3), a NULL dimension value
+        merges into one row as NULL-safe equality would, and no dimensions leave
+        one row of totals (§6.6 row 4). An aggregate missing from a group shows its
+        value over no rows (_empty_value), and each metric is computed from its
+        merged aggregates. having runs after the merge (step A.9) and may name
         metrics, selected or not, and the question's dimensions."""
         names = list(dict.fromkeys(self.metric(n).name for n in q.measures))
         having_trees = []
@@ -941,35 +974,45 @@ class Planner:
                     names.append(self.metric(col.name).name)  # filtered on, not selected
             having_trees.append(tree)
 
-        metric_trees = {n: self._metric_tree(self.metric(n), set()) for n in names}
-        groups: dict[frozenset[str], list[str]] = {}
-        for n, tree in metric_trees.items():
-            groups.setdefault(frozenset(_homes(_aggregate_inputs(tree))), []).append(n)
+        base: set[str] = set()  # datasets of the dimensions and where
+        for ref in q.dimensions:
+            base.add(self.field_ref(ref)[0].name)
+        for f in q.where:
+            self.resolve(f, base, metrics=True)
+        # Each metric's tree with its aggregates replaced by __a{i}, and the aggregates.
+        outer: dict[str, exp.Expression] = {}
+        atoms: list[tuple[str, exp.Expression, set[str]]] = []  # metric, aggregate, datasets
+        for n in names:
+            tree = self._metric_tree(self.metric(n), set())
+            homes = set(_homes(_aggregate_inputs(tree)))
+            for node in _atoms(tree):
+                read = {c.table for c in node.find_all(exp.Column)} or homes  # COUNT(*)
+                atoms.append((n, node.copy(), read))
+                placeholder = exp.column(f"__a{len(atoms) - 1}")
+                tree = placeholder if node is tree else tree
+                node.replace(placeholder)
+            outer[n] = tree
+
+        groups: dict[str | None, list[int]] = {}
+        for i, (_, _, read) in enumerate(atoms):
+            groups.setdefault(self._own_root(read, base) or root, []).append(i)
         if len(groups) < 2:
             return None
-        branches = []
-        for members in groups.values():
-            try:
-                branch = Query(tuple(members), q.dimensions, q.where)
-                branches.append((set(members), self.plan(branch)))
-            except PlanError as e:
-                try:
-                    self.plan(Query(tuple(members)))
-                except PlanError:
-                    return None  # refused alone too: the single-root error says why
-                # A dimension or row filter the group cannot reach: its own refusal
-                # names the datasets, the single-root one only says the facts do not join.
-                raise PlanError(
-                    "metrics of different datasets are answered each on their own, and "
-                    f"{', '.join(map(repr, members))} cannot be with this question's "
-                    f"dimensions and where: {e}",
-                    e.code,
-                    e.suggestions,
-                ) from None
-        for n, tree in metric_trees.items():
+        # Without a root of the whole question, one metric may read facts with no
+        # path between them (#246 §6.2, E3013 "in the same measure").
+        for n in names if root is None else ():
+            read = [r for m, _, r in atoms if m == n]
+            if len({k for k, ids in groups.items() if any(atoms[i][0] == n for i in ids)}) > 1:
+                ds = sorted(set().union(*read))
+                if not set.intersection(*(self._reachable(d) for d in ds)):
+                    raise PlanError(
+                        f"metric {n!r} reads {' and '.join(ds)}, which share no dimension",
+                        Code.E3013_NO_STITCHING_DIMENSION,
+                    )
+        for n, tree in outer.items():
             if tree.find(exp.Window):
                 raise PlanError(
-                    f"metric {n!r} is a window over the merged rows of metrics that are "
+                    f"metric {n!r} is a window over the merged rows of aggregates that are "
                     "answered from different datasets; this version cannot answer it, "
                     "ask for it in its own question",
                     Code.UNSUPPORTED_QUERY,
@@ -982,41 +1025,63 @@ class Planner:
                     Code.UNSUPPORTED_QUERY,
                 )
 
+        branches = []
+        for key, ids in groups.items():
+            members = list(dict.fromkeys(atoms[i][0] for i in ids))
+            try:
+                branches.append((ids, self._branch(q, [(i, *atoms[i]) for i in ids], key)))
+            except PlanError as e:
+                try:
+                    self._branch(Query(), [(i, *atoms[i]) for i in ids], key)
+                except PlanError:
+                    return None  # refused alone too: the single-root error says why
+                # A dimension or row filter the group cannot reach: its own refusal
+                # names the datasets, the single-root one only says the facts do not join.
+                raise PlanError(
+                    "metrics of different datasets are answered each on their own, and "
+                    f"{', '.join(map(repr, members))} cannot be with this question's "
+                    f"dimensions and where: {e}",
+                    e.code,
+                    e.suggestions,
+                ) from None
+
         dims = [self.field_ref(d)[1].name for d in q.dimensions]
-        empties = {n: _empty_value(metric_trees[n]) for n in names}
-        marked = [  # groups with a metric whose value over no rows is not NULL
+        empties = [_empty_value(node) for _, node, _ in atoms]
+        marked = [  # groups with an aggregate whose value over no rows is not NULL
             g
-            for g, (members, _) in enumerate(branches)
-            if any(not isinstance(empties[n], exp.Null) for n in members)
+            for g, (ids, _) in enumerate(branches)
+            if any(not isinstance(empties[i], exp.Null) for i in ids)
         ]
         parts = []
-        for g, (members, sel) in enumerate(branches):
+        for g, (ids, sel) in enumerate(branches):
             planned = {e.alias.upper(): e.this for e in sel.expressions}
             cols = [planned[d.upper()].as_(d) for d in dims]
             cols += [
-                (planned[n.upper()] if n in members else exp.Null()).as_(f"__m{i}")
-                for i, n in enumerate(names)
+                (planned[f"__A{i}"] if i in ids else exp.Null()).as_(f"__a{i}")
+                for i in range(len(atoms))
             ]
             cols += [
                 (exp.Literal.number(1) if h == g else exp.Null()).as_(f"__b{h}") for h in marked
             ]
-            part = sel.copy()
-            part.set("expressions", cols)
-            for arg in ("order", "settings"):
-                part.set(arg, None)
-            parts.append(part)
+            sel.set("expressions", cols)
+            parts.append(sel)
 
-        def merged(i: int, n: str) -> exp.Expression:
-            value = exp.AnyValue(this=exp.column(f"__m{i}"))  # any() skips NULLs
-            g = next(g for g, (members, _) in enumerate(branches) if n in members)
-            if g not in marked or isinstance(empties[n], exp.Null):
+        def merged(i: int) -> exp.Expression:
+            value = exp.AnyValue(this=exp.column(f"__a{i}"))  # any() skips NULLs
+            g = next(g for g, (ids, _) in enumerate(branches) if i in ids)
+            if g not in marked or isinstance(empties[i], exp.Null):
                 return value
             present = exp.GT(
                 this=exp.Count(this=exp.column(f"__b{g}")), expression=exp.Literal.number(0)
             )
-            return exp.If(this=present, true=value, false=empties[n])
+            return exp.If(this=present, true=value, false=empties[i].copy())
 
-        values = {n: merged(i, n) for i, n in enumerate(names)}
+        def fill(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Column) and not node.table and node.name.startswith("__a"):
+                return merged(int(node.name[3:]))
+            return node
+
+        values = {n: tree.transform(fill) for n, tree in outer.items()}
         selects = [exp.column(d).as_(d) for d in dims]
         selects += [values[self.metric(n).name].copy().as_(self.metric(n).name) for n in q.measures]
         sel = exp.select(*selects).from_(exp.union(*parts, distinct=False).subquery("stitched"))
@@ -1043,6 +1108,47 @@ class Planner:
             sel = sel.limit(q.limit)
         sel.set("settings", _settings())
         return sel
+
+    def _own_root(self, read: set[str], base: set[str]) -> str | None:
+        """The root of an aggregate that reads ``read`` asked on its own with
+        datasets ``base``, if it is one of ``read``: the aggregate is then
+        answered over that dataset's rows (#246 §6.2 step A.6.3)."""
+        try:
+            root = self._root(read | base, {"aggregate": read | base})
+        except PlanError:
+            return None
+        return root.name if root.name in read else None
+
+    def _branch(
+        self, q: Query, atoms: list[tuple[int, str, exp.Expression, set[str]]], root: str | None
+    ) -> exp.Select:
+        """One group of a stitched question: its aggregates as __a{i}, by the
+        question's dimensions and where, from ``root`` or the root they find."""
+        touched: dict[str, set[str]] = {}
+        selects: list[exp.Expression] = []
+        group: list[exp.Expression] = []
+        for ref in q.dimensions:
+            ds, f = self.field_ref(ref)
+            touched.setdefault(f"dimension {ref!r}", set()).add(ds.name)
+            e = rewrite_tree(self._field_expr(ds, f))
+            selects.append(e.as_(f.name))
+            group.append(e.copy())
+        where = [
+            rewrite_tree(self.resolve(f, touched.setdefault(f"where {f!r}", set()), metrics=True))
+            for f in q.where
+        ]
+        checked: dict[str, Inputs] = {}  # a metric's aggregates in this group, together
+        for i, metric, node, read in atoms:
+            label = f"metric {metric!r}"
+            touched.setdefault(label, set()).update(read)
+            selects.append(node.copy().as_(f"__a{i}"))
+            checked.setdefault(label, []).extend(_aggregate_inputs(node))
+        used = set().union(*touched.values())
+        ds = self.dataset(root) if root else self._root(used, touched)
+        one_to_one = self._one_to_one(ds.name)
+        for label, inputs in checked.items():
+            _check_rows(label, inputs, ds.name, touched, one_to_one)
+        return self._assemble(ds, used, selects, group, where, [])
 
     def _order(self, q: Query, selects: list[exp.Expression]) -> list[exp.Expression]:
         """ORDER BY over selected aliases; names are metrics, dataset.field, or field names.

@@ -96,14 +96,19 @@ def test_top_level_must_be_a_mapping(tmp_path):
 
 
 def test_cli(tmp_path, tpcds, capsys):
-    # The reference model's store_productivity sums two datasets: no question answers it.
-    assert main(["validate", str(FIXTURE)]) == 1
-    assert "metric 'store_productivity': aggregates columns of store and store_sales" in (
+    assert main(["validate", str(FIXTURE)]) == 0
+    assert "ok (tpcds_retail_model" in capsys.readouterr().out
+    # A metric of a dataset that reaches nothing else, next to a fact's: refused
+    # in every question, since they share no dimension.
+    tpcds["datasets"].append({**tpcds["datasets"][1], "name": "lonely"})
+    gap = "MAX(store_sales.ss_sales_price) - MAX(lonely.d_year)"
+    expression = {"dialects": [{"dialect": "ANSI_SQL", "expression": gap}]}
+    tpcds["metrics"].append({"name": "gap", "expression": expression})
+    assert main(["validate", str(write(tmp_path, tpcds, "gap.yaml"))]) == 1
+    assert "metric 'gap': metric 'gap' reads lonely and store_sales, which share no dimension" in (
         capsys.readouterr().err
     )
-    tpcds["metrics"] = [m for m in tpcds["metrics"] if m["name"] != "store_productivity"]
-    assert main(["validate", str(write(tmp_path, tpcds, "ok.yaml"))]) == 0
-    assert "ok (tpcds_retail_model" in capsys.readouterr().out
+    tpcds["metrics"].pop()
     tpcds["version"] = "0.0.0"
     bad = write(tmp_path, tpcds)
     assert main(["validate", str(bad)]) == 1
@@ -126,14 +131,15 @@ def test_validate_reports_relationships_the_planner_refuses(tmp_path, tpcds, cap
     item["primary_key"], item["unique_keys"] = None, None
     store = next(d for d in tpcds["datasets"] if d["name"] == "store")
     store["primary_key"], store["unique_keys"] = ["s_store_id"], None
-    tpcds["metrics"] = [m for m in tpcds["metrics"] if m["name"] != "store_productivity"]
     p = write(tmp_path, tpcds)
     load_model(p)
     assert main(["validate", str(p)]) == 1
     err = capsys.readouterr().err
     assert "'store_sales_to_item' is many-to-one: 'item' declares no primary_key" in err
     assert "'store_sales_to_store' is not many-to-one: to_columns ['s_store_sk']" in err
-    assert "2 problem(s)" in err
+    # brand_rank_in_store partitions by store.s_store_sk: every question joins store.
+    assert "metric 'brand_rank_in_store': relationship 'store_sales_to_store'" in err
+    assert "3 problem(s)" in err
 
 
 def test_cli_serve_without_mcp_extra(monkeypatch, capsys):

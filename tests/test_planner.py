@@ -854,15 +854,20 @@ def _with_metrics(**expressions: str) -> Planner:
 @pytest.mark.parametrize(
     ("query", "message"),
     [
-        # A joined dataset's rows repeat once per root row: store_productivity sums
-        # each store's employees once per sale.
+        # A joined dataset's rows repeat once per root row: by an item field, which
+        # store cannot reach on its own, store_productivity would sum each store's
+        # employees once per sale.
         (
-            Query(measures=("store_productivity",), dimensions=("store.s_store_name",)),
+            Query(measures=("store_productivity",), dimensions=("item.i_brand",)),
             "metric 'store_productivity' applies SUM(store.s_number_employees) to store "
             "columns alone over store_sales rows",
         ),
         (
-            Query(measures=("total_sales",), having=("store_productivity > 1",)),
+            Query(
+                measures=("total_sales",),
+                dimensions=("item.i_brand",),
+                having=("store_productivity > 1",),
+            ),
             "having 'store_productivity > 1' applies SUM(store.s_number_employees)",
         ),
         # Even a repeat-safe aggregate is about other rows: only customers who bought.
@@ -877,7 +882,7 @@ def _with_metrics(**expressions: str) -> Planner:
         # Checked after rewrite: APPROX_PERCENTILE is an aggregate only then.
         # Nested in another rewrite: the check sees the inner one rewritten too.
         (
-            Query(measures=("sales_per_nonzero_median_staff",)),
+            Query(measures=("sales_per_nonzero_median_staff",), dimensions=("item.i_brand",)),
             "applies quantileTDigest(0.5)(store.s_number_employees)",
         ),
         # COUNT(*) alone counts whatever rows the question is about: stores here,
@@ -901,7 +906,7 @@ def _with_metrics(**expressions: str) -> Planner:
             "metric 'extra_staff' applies SUM(store_extra.s_number_employees)",
         ),
         (
-            Query(measures=("sales_per_median_staff",)),
+            Query(measures=("sales_per_median_staff",), dimensions=("item.i_brand",)),
             "metric 'sales_per_median_staff' applies "
             "quantileTDigest(0.5)(store.s_number_employees)",
         ),
@@ -948,6 +953,22 @@ def test_model_names_win_over_the_expression_check():
         Query(measures=("total_sales", "tn_stores")),
         # A filter on a metric of the other dataset, selected or not.
         Query(measures=("total_sales",), dimensions=("store.s_state",), having=("headcount > 10",)),
+        # Each aggregate of one metric on its own (#246 §4.5 form 2): store's
+        # employees over store rows, sales over sales rows.
+        Query(measures=("store_productivity",), dimensions=("store.s_store_name",)),
+        Query(measures=("store_productivity",)),
+        Query(measures=("total_sales",), having=("store_productivity > 1",)),
+        Query(measures=("sales_per_median_staff",)),
+        Query(measures=("sales_per_nonzero_median_staff",), dimensions=("store.s_state",)),
+        # A repeat-safe aggregate too: MAX of every store, not of those with sales.
+        Query(measures=("sales_per_largest_staff",), dimensions=("store.s_state",)),
+        # A fact and two of its dimension tables: three groups, which share no
+        # dimension with each other but are joined through the fact (not E3013).
+        Query(measures=("staff_minus_price",)),
+        Query(measures=("staff_minus_price",), dimensions=("store.s_state",)),
+        # Customers who did not buy count in a total and by a customer field.
+        Query(measures=("customer_lifetime_value",)),
+        Query(measures=("customer_lifetime_value",), dimensions=("customer.c_last_name",)),
     ],
 )
 def test_stitches_metrics_that_no_one_root_answers(query):
@@ -955,8 +976,17 @@ def test_stitches_metrics_that_no_one_root_answers(query):
         headcount="SUM(store.s_number_employees)",
         items="COUNT(item.i_item_sk)",
         tn_stores="COUNT(*) FILTER (WHERE store.s_state = 'TN')",
+        sales_per_median_staff="SUM(store_sales.ss_ext_sales_price) / "
+        "APPROX_PERCENTILE(store.s_number_employees, 0.5)",
+        sales_per_nonzero_median_staff="SUM(store_sales.ss_ext_sales_price) / "
+        "NULLIFZERO(APPROX_PERCENTILE(store.s_number_employees, 0.5))",
+        sales_per_largest_staff="SUM(store_sales.ss_ext_sales_price) / "
+        "MAX(store.s_number_employees)",
+        staff_minus_price="SUM(store_sales.ss_ext_sales_price) / MAX(store.s_number_employees) "
+        "- MAX(item.i_current_price)",
     )
     assert " UNION ALL " in planner.sql(query)
+    assert "staff_minus_price" not in unanswerable_metrics(planner.model)
 
 
 @pytest.mark.parametrize(
@@ -1115,6 +1145,8 @@ def test_dictionary_on_a_path():
     ],
 )
 def test_allows_aggregates_that_read_root_rows(measures, dimensions):
+    """One SELECT: the aggregates that read no root column cannot reach the
+    dimensions on their own, or are one to one with the root."""
     planner = _with_metrics(
         revenue_at_list_price="SUM(store_sales.ss_quantity * item.i_current_price)",
         sales_per_largest_staff="SUM(store_sales.ss_ext_sales_price) / "
@@ -1127,17 +1159,16 @@ def test_allows_aggregates_that_read_root_rows(measures, dimensions):
         "(ORDER BY store_sales.ss_quantity) FILTER (WHERE store_sales.ss_quantity > 50)",
         staff_per_extra="SUM(store.s_number_employees) / SUM(store_extra.s_number_employees)",
     )
-    planner.sql(Query(measures=measures, dimensions=dimensions))
+    assert " UNION ALL " not in planner.sql(Query(measures=measures, dimensions=dimensions))
 
 
 def test_unanswerable_metrics():
-    assert list(unanswerable_metrics(MODEL)) == ["store_productivity"]
+    assert unanswerable_metrics(MODEL) == {}
     # Dataset names are case-insensitive: one dataset, spelled two ways.
     planner = _with_metrics(
         margin="SUM(Store_Sales.ss_ext_sales_price) - SUM(store_sales.ss_net_profit)"
     )
     assert "margin" not in unanswerable_metrics(planner.model)
-    assert "SUM(store.s_number_employees)" in unanswerable_metrics(MODEL)["store_productivity"]
     planner = _with_metrics(
         typo="SUM(store.s_number_employes)",
         cnt="COUNT(*)",
@@ -1146,14 +1177,27 @@ def test_unanswerable_metrics():
     found = unanswerable_metrics(planner.model)
     assert "unknown field 'store.s_number_employes'" in found["typo"]
     assert "uses COUNT(*), which reads no column" in found["cnt"]
-    assert "one_to_one" not in found
+    assert "one_to_one" not in found and "store_productivity" not in found
+
+    # COUNT(*) in a model of one dataset reads no dataset: a dimension answers it.
+    def one_dataset(m):
+        m["datasets"] = [d for d in m["datasets"] if d["name"] == "store"]
+        m["relationships"] = []
+        e = {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(*)"}]}
+        m["metrics"] = [{"name": "stores", "expression": e}]
+
+    assert unanswerable_metrics(_variant(one_dataset).model) == {}
+    # Facts that share no dimension, in one metric: E3013 in every question.
+    found = unanswerable_metrics(_variant(_apart).model)
+    assert found == {"price_gap": "metric 'price_gap' reads lonely and store_sales, "
+                     "which share no dimension"}  # fmt: skip
 
 
 def test_unanswerable_metrics_are_hidden(tpcds):
     from dactopus_ossie_clickhouse.executor import Executor
 
-    names = [m.name for m in Executor(tpcds, MODEL).model.metrics]
-    assert "store_productivity" not in names and "total_sales" in names
+    names = [m.name for m in Executor(tpcds, _with_metrics(cnt="COUNT(*)").model).model.metrics]
+    assert "cnt" not in names and "total_sales" in names
 
 
 def test_nested_rewrite_in_a_metric():

@@ -24,8 +24,9 @@ from dactopus_ossie_clickhouse.planner import (
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stitch.yaml"
 ROWS = {
+    # Customer 5 has neither orders nor returns.
     "customers": "(1, 'EAST', 'retail'), (2, 'EAST', 'retail'), (3, 'WEST', 'wholesale'), "
-    "(4, 'NORTH', 'retail')",
+    "(4, 'NORTH', 'retail'), (5, 'EAST', 'wholesale')",
     # Order 105 is an orphan: customer 99 does not exist.
     "orders": "(101, 1, 100.00, 'completed'), (102, 1, 50.00, 'completed'), "
     "(103, 2, 200.00, 'pending'), (104, 3, 75.00, 'completed'), (105, 99, 30.00, 'completed')",
@@ -56,7 +57,21 @@ RETURNS = """SELECT c.region, SUM(x.amount) AS total_returns
   FROM returns x LEFT JOIN customers c ON x.customer_id = c.id {where} GROUP BY c.region"""
 
 
+CUSTOMERS = """SELECT region, COUNT(id) AS customers, MAX(id) AS top_id
+  FROM customers c {where} GROUP BY region"""
+
 RETAIL = "WHERE c.segment = 'retail'"
+
+
+def per_customer(where: str = "") -> str:
+    """Each aggregate of a metric on its own (#246 §4.5 form 2): orders over
+    orders, customers over every customer, merged as two measures would be."""
+    return f"""
+SELECT COALESCE(r.region, k.region) AS region,
+       COALESCE(r.order_count, 0) / NULLIF(COALESCE(k.customers, 0), 0) AS orders_per_customer,
+       r.total_revenue / k.top_id AS revenue_per_top_id
+FROM ({REVENUE.format(where=where)}) r
+FULL OUTER JOIN ({CUSTOMERS.format(where=where)}) k ON r.region IS NOT DISTINCT FROM k.region"""
 
 
 def merged(where: str = "") -> str:
@@ -130,6 +145,21 @@ CASES = [
         ),
         f"SELECT region, total_revenue, total_returns FROM ({merged()}) "
         "WHERE region <> 'EAST' AND (total_revenue > 0 OR total_returns > 0)",
+    ),
+    # One metric over two datasets: each aggregate over its own rows. Customer 5
+    # counts in EAST; the orphan order's group has no customer, so no ratio.
+    (
+        Query(("orders_per_customer", "revenue_per_top_id"), ("customers.region",)),
+        f"SELECT region, orders_per_customer, revenue_per_top_id FROM ({per_customer()})",
+    ),
+    (
+        Query(("orders_per_customer",), ("customers.region",), ("customers.segment = 'retail'",)),
+        f"SELECT region, orders_per_customer FROM ({per_customer(RETAIL)})",
+    ),
+    (
+        Query(("orders_per_customer", "revenue_per_top_id")),
+        "SELECT (SELECT COUNT(id) FROM orders) / (SELECT COUNT(id) FROM customers), "
+        "(SELECT SUM(amount) FROM orders) / (SELECT MAX(id) FROM customers)",
     ),
     # having may name a dimension too: it reads the merged column.
     (
@@ -240,11 +270,19 @@ def test_counts_are_zero_and_sums_null_for_a_missing_group(ex):
     assert rows["NORTH"][0] is None and rows[None] == (30, 7)
 
 
-def test_one_metric_over_both_facts_is_still_refused():
+def test_wrong_plans_for_one_metric_differ_on_this_data(stitch_duck):
+    """One SELECT from orders counts customers per order and finds the largest
+    id among customers with orders; the reference counts every customer."""
+    right = sorted(stitch_duck.sql(per_customer()).fetchall(), key=_key)
+    wrong = """SELECT c.region, COUNT(o.id) / NULLIF(COUNT(c.id), 0), SUM(o.amount) / MAX(c.id)
+        FROM orders o LEFT JOIN customers c ON o.customer_id = c.id GROUP BY c.region"""
+    assert sorted(stitch_duck.sql(wrong).fetchall(), key=_key) != right
+
+
+def test_one_metric_over_both_facts_is_stitched():
     model = load_model(FIXTURE)
-    assert "return_rate" in unanswerable_metrics(model)
-    with pytest.raises(PlanError):
-        Planner(model).sql(Query(("return_rate",), ("customers.region",)))
+    assert unanswerable_metrics(model) == {}
+    assert " UNION ALL " in Planner(model).sql(Query(("return_rate",), ("customers.region",)))
 
 
 def test_a_group_that_cannot_reach_a_dimension_names_its_metrics():

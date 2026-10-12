@@ -108,16 +108,21 @@ Python library with a CLI entry point. The parts that constrain code:
   `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
   and `aggregate_functions_null_for_empty = 1` so an aggregate over no
   rows is NULL, not 0 (counts stay 0).
-  Metrics run over the root's rows, so the planner refuses an aggregate
-  that reads only joined datasets unless repeats cannot change it or the
-  join is on a key of the root, an aggregate expression that reads no root
-  column at all, and a metric whose `COUNT(*)` no other aggregate ties to
-  one dataset (`docs/design.md`). Metrics no one root answers together
-  are stitched: each group of metrics planned from its own root, merged
-  with `UNION ALL` and `GROUP BY` on the dimensions (#246 section 6.6); a
-  metric missing from a group is its value over no rows. Facts that share
-  no dimension are stitched only without dimensions (each one's total);
-  with one, the question is refused with `E3013_NO_STITCHING_DIMENSION`.
+  Each aggregate of a metric resolves on its own (#246 section 4.5 form
+  2): over its dataset's rows when that dataset reaches the dimensions
+  and `where` on its own, otherwise over the question's root, where the
+  planner refuses an aggregate that reads only joined datasets unless
+  repeats cannot change it or the join is on a key of the root, an
+  aggregate expression that reads no root column at all, and a metric
+  whose `COUNT(*)` no other aggregate ties to one dataset
+  (`docs/design.md`). Aggregates no one root answers together are
+  stitched: each group planned from its own root, merged with `UNION ALL`
+  and `GROUP BY` on the dimensions (#246 section 6.6), each metric
+  computed from its merged aggregates; an aggregate missing from a group
+  is its value over no rows. Facts that share no dimension are stitched
+  only without dimensions and as separate metrics (each one's total);
+  with a dimension, or in one metric, the question is refused with
+  `E3013_NO_STITCHING_DIMENSION`.
 - Name resolution is case-insensitive (spec rule); emitted SQL uses physical
   names exactly as the model writes them (ClickHouse is case-sensitive).
 - The query is the aggregation query of apache/ossie#246 §5.1.1

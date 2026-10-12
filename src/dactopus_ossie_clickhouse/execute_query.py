@@ -83,8 +83,8 @@ class Binding:
                 "joins other than many-to-one paths from one root dataset per group "
                 "of measures (measures of several facts are stitched)",
                 "window functions in having",
-                "next to a measure of another fact: window measures, and aggregate "
-                "functions written into having",
+                "next to an aggregate answered from another dataset: window measures, "
+                "and aggregate functions written into having",
             ],
             "output_formats": ["csv"],
             "diagnostics": "suggestions with refusals; no filter value alternatives",

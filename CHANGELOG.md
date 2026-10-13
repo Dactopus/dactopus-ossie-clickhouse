@@ -7,6 +7,19 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- `apache-ossie` is pinned to apache/ossie commit `e49a0f0`, where the
+  SDK refuses what the schema refuses. A model now fails to load with an
+  unknown property in any object (`descriptionn` on a field, `vendor_nam`
+  in `custom_extensions`; the SDK used to drop these silently,
+  apache/ossie#530), a property set to null (`primary_key: null`; omit it
+  instead), a `version` missing or other than `0.2.0.dev0`, or a NaN or
+  infinite number. `load_model` reads files with the SDK's
+  `from_ossie_yaml` and `from_ossie_json`. A wrong version is reported on
+  its own, before the checks of names and dialects, since the SDK stops
+  at it.
+
 ## [0.6.0] - 2026-10-13
 
 ### Added

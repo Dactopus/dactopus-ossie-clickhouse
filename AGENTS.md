@@ -59,7 +59,11 @@ Python library with a CLI entry point. The parts that constrain code:
 - **MCP SDK** only behind the `[mcp]` extra. The core library must import
   without it.
 - **apache-ossie** package (from the Ossie repository, git dependency until
-  published) for loading and validating models. Do not write a model loader.
+  published) for loading and validating models. Do not write a model loader:
+  a file is read with `OssieDocument.from_ossie_yaml` or `from_ossie_json`,
+  which also refuse a null property and a missing `version`;
+  `model_validate` is for a document built in Python, such as the trimmed
+  model in `access.py`.
 - Supported Ossie schema version is pinned (`0.2.0.dev0`) and checked
   explicitly.
 

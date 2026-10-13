@@ -1,9 +1,10 @@
 """Load an Ossie model from a file and check what the upstream package does not.
 
-The ``apache-ossie`` package validates structure only. Everything the later
-layers rely on (a pinned spec version, names that resolve, expressions in a
-dialect we can translate) is checked here, and all problems are reported at
-once rather than one per run.
+The ``apache-ossie`` package validates the document against the schema: its
+loaders refuse an unknown property, a property set to null, a missing or
+unsupported ``version``. Everything the later layers rely on beyond that
+(names that resolve, expressions in a dialect we can translate) is checked
+here, and all problems are reported at once rather than one per run.
 """
 
 from __future__ import annotations
@@ -32,15 +33,21 @@ def load_model(path: str | Path) -> OssieDocument:
     path = Path(path)
     try:
         text = path.read_text()
-        data = json.loads(text) if path.suffix == ".json" else yaml.safe_load(text)
-    except (OSError, ValueError, yaml.YAMLError) as e:
+    except OSError as e:
         raise ModelError([f"cannot read {path}: {e}"]) from e
-    if not isinstance(data, dict):
-        raise ModelError([f"{path}: top level must be a mapping"])
+    # The SDK's document loaders, not model_validate: they also refuse what the
+    # schema refuses but the field types cannot express (a null, a missing version).
+    parse = (
+        OssieDocument.from_ossie_json if path.suffix == ".json" else OssieDocument.from_ossie_yaml
+    )
     try:
-        doc = OssieDocument.model_validate(data)
+        doc = parse(text)
     except ValidationError as e:
         raise ModelError([_format(err) for err in e.errors()]) from e
+    except (json.JSONDecodeError, yaml.YAMLError) as e:
+        raise ModelError([f"cannot read {path}: {e}"]) from e
+    except ValueError as e:  # a document rule, with the paths that break it
+        raise ModelError([str(e)]) from e
     problems = check_model(doc)
     if problems:
         raise ModelError(problems)
@@ -50,6 +57,8 @@ def load_model(path: str | Path) -> OssieDocument:
 def check_model(doc: OssieDocument) -> list[str]:
     """Semantic checks beyond the schema. Returns human-readable problems."""
     problems: list[str] = []
+    # The SDK admits only its schema's version, so this holds unless it widens
+    # the field again; test_model.py checks the two constants agree.
     if doc.version != SUPPORTED_VERSION:
         problems.append(
             f"unsupported version {doc.version!r}; this build supports {SUPPORTED_VERSION!r}"
@@ -131,5 +140,8 @@ def _dialect_check(what: str, dialects) -> list[str]:
 
 
 def _format(err: dict) -> str:
+    if err["loc"] == ("version",) and err["type"] == "literal_error":
+        # pydantic says only what it expected; say what this build supports.
+        return f"unsupported version {err['input']!r}; this build supports {SUPPORTED_VERSION!r}"
     loc = ".".join(str(p) for p in err["loc"]) or "document"
     return f"{loc}: {err['msg']}"

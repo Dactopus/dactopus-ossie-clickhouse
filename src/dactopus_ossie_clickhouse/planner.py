@@ -774,6 +774,19 @@ class Planner:
                 f"{', '.join(sorted(used - first))}",
                 Code.E_NO_PATH,
             )
+        # Dimensions alone, of datasets that meet only through another one, such as
+        # item and store through store_sales: #246 §6.9 builds a path of N:1 and 1:1
+        # edges (rule 1), and a path that turns at a fact is not one (rule 3), or a
+        # dataset the question does not name would decide its rows. A measure may
+        # reach a dataset over 1:N (§4.5 form 1), so with one it stays this
+        # engine's gap.
+        if not any(k.startswith(("metric ", "having ")) for k in touched):
+            return PlanError(
+                f"no path of many-to-one relationships connects {', '.join(sorted(used))}: "
+                "they meet only through a dataset the question does not name; ask for a "
+                "measure of that dataset by these dimensions",
+                Code.E_NO_PATH,
+            )
         return PlanError(
             f"no dataset among {sorted(used)} joins all the others through many-to-one "
             "relationships, so each would have to be aggregated on its own and the results "

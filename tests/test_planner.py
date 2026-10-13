@@ -376,11 +376,12 @@ def test_deterministic():
             Code.QUERY_INVALID,
             "not allowed",
         ),
-        # Both joined from store_sales, which the query does not read: no root.
+        # Both joined from store_sales, which the query does not read: no path of
+        # N:1 edges between them (#246 §6.9).
         (
             Query(dimensions=("item.i_brand", "store.s_state")),
-            Code.UNSUPPORTED_QUERY,
-            "no dataset among ['item', 'store'] joins all the others",
+            Code.E_NO_PATH,
+            "no path of many-to-one relationships connects item, store",
         ),
         (
             Query(measures=("total_sales",), where=("date_dim.d_year = ",)),
@@ -1030,6 +1031,20 @@ def test_stitching_refuses(query, message):
     # store and item reach no dataset in common: unrelated facts.
     unrelated = set(query.measures) == {"headcount", "items"}
     assert (e.value.code == Code.E3013_NO_STITCHING_DIMENSION) is unrelated
+
+
+def test_datasets_meeting_through_a_fact():
+    """item and store meet only through store_sales. Without a measure no path of
+    N:1 edges joins them (#246 §6.9): E_NO_PATH, a where included. A measure may
+    reach a dataset over 1:N (§4.5 form 1), so with one it stays UNSUPPORTED_QUERY."""
+    planner = _with_metrics(headcount="SUM(store.s_number_employees)")
+    for query, code in (
+        (Query(dimensions=("item.i_brand",), where=("store.s_state = 'TN'",)), Code.E_NO_PATH),
+        (Query(measures=("headcount",), dimensions=("item.i_brand",)), Code.UNSUPPORTED_QUERY),
+    ):
+        with pytest.raises(PlanError) as e:
+            planner.sql(query)
+        assert e.value.code == code
 
 
 def _area(m):

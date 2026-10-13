@@ -421,11 +421,16 @@ dimension, are `E3013_NO_STITCHING_DIMENSION`, as Appendix A words it
 of one with every row of the other on any engine, so the agent should ask
 it differently. Two measures of such facts without dimensions are
 answered with each one's total (previous section). Datasets of a measure and its dimensions or conditions with
-no relationship path between them are `E_NO_PATH`. A path the planner
-cannot follow (relationships pointing away from every dataset it could
-start from) is `UNSUPPORTED_QUERY`, not `E_NO_PATH` or E3013, which would
-tell the agent the question is wrong when only this engine cannot answer
-it.
+no relationship path between them are `E_NO_PATH`. So are dimensions
+alone, or with `where`, of datasets that meet only through another one,
+such as `item` and `store` through `store_sales`: §6.9 builds a path of
+N:1 and 1:1 edges, a path that turns at a fact is not one, and otherwise
+a dataset the question does not name would decide its rows (two facts
+that both reach `item` and `store` would give two answers). With a
+measure, such a path the planner cannot follow (relationships pointing
+away from every dataset it could start from) is `UNSUPPORTED_QUERY`, not
+`E_NO_PATH` or E3013: §4.5 lets an aggregate reach a dataset over 1:N,
+so the question may have an answer this engine does not give.
 `E_PRIMARY_KEY_REQUIRED` stays for a join to a dataset with no declared
 key: #246 §4.2 lets an engine require primary keys, so it is not a
 planner gap passed off as an invalid question.

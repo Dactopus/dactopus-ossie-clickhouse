@@ -31,6 +31,11 @@ a minor release may change the Python API.
   in the state. Such a question is now stitched, so like other stitched
   questions it refuses an aggregate function written into `having` and a
   window metric.
+- Dimensions alone of two datasets that meet only through a third, such
+  as `item.i_brand` and `store.s_state` through `store_sales`, are
+  refused with `E_NO_PATH`, where they were `UNSUPPORTED_QUERY`: no path
+  of many-to-one relationships joins them (apache/ossie#246 §6.9). With a
+  measure such a question stays `UNSUPPORTED_QUERY`.
 - `validate` reports, and agents do not see, a metric that is refused
   when asked alone: that question is the one most likely to be
   answered. Newly reported: one metric over two facts that share no

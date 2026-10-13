@@ -16,7 +16,7 @@ import yaml
 from ossie import OssieDocument
 from sqlglot import exp
 
-from dactopus_ossie_clickhouse.planner import PlanError
+from dactopus_ossie_clickhouse.planner import Code, PlanError
 from dactopus_ossie_clickhouse.translate import parse, pick_expression
 
 
@@ -89,7 +89,8 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
     if not data["datasets"]:
         raise PlanError(
             f"none of the model's datasets is readable {reader}; check the ClickHouse URL, "
-            "database and the connected user's grants"
+            "database and the connected user's grants",
+            Code.SOURCE_UNAVAILABLE,
         )
     for d in data["datasets"]:
         d["fields"] = [

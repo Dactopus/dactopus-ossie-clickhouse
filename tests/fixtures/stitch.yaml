@@ -59,5 +59,9 @@ metrics:
   - name: total_returns
     expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(returns.amount)}]}
   - name: return_rate
-    description: Reads both facts in one metric, so no question can answer it.
     expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(returns.amount) / SUM(orders.amount)}]}
+  - name: orders_per_customer
+    description: Orders over every customer of a group, those without orders included.
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(orders.id) / NULLIF(COUNT(customers.id), 0)"}]}
+  - name: revenue_per_top_id
+    expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(orders.amount) / MAX(customers.id)}]}

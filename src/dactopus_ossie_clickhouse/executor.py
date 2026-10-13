@@ -12,7 +12,7 @@ import json
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import clickhouse_connect
 from ossie import OssieDataset, OssieDocument
@@ -64,6 +64,8 @@ class Result:
     rows: list[tuple]
     sql: str
     types: list[str]  # ClickHouse type of each column
+    # False when max_rows cut rows off a query that set no limit of its own.
+    complete: bool = True
 
     def shown_rows(self) -> list[list]:
         """Rows as the CLI and the MCP server show them: a Time or DateTime as
@@ -282,11 +284,19 @@ class Executor:
 
     # --- execution ----------------------------------------------------------
 
-    def execute(self, q: Query) -> Result:
-        sql = self.planner.sql(q)
+    def execute(self, q: Query, max_rows: int | None = None) -> Result:
+        """Run ``q``. With ``max_rows`` and no limit in ``q``, return at most that many
+        rows and say whether more were there: one more row is asked for to tell."""
+        capped = max_rows is not None and q.limit is None
+        sql = self.planner.sql(replace(q, limit=max_rows + 1) if capped else q)
         res = self.client.query(sql)
         rows = [tuple(_non_finite_to_none(v) for v in row) for row in res.result_rows]
-        return Result(list(res.column_names), rows, sql, [t.name for t in res.column_types])
+        complete = not capped or len(rows) <= max_rows
+        names, types = list(res.column_names), [t.name for t in res.column_types]
+        if not names:  # no rows, and clickhouse-connect then may not say which columns
+            described = self.client.query(f"DESCRIBE TABLE ({sql})").result_rows
+            names, types = [c[0] for c in described], [c[1] for c in described]
+        return Result(names, rows if complete else rows[:max_rows], sql, types, complete)
 
 
 def _unquote(s: str) -> str:

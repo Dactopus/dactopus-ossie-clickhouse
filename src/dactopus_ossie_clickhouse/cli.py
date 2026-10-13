@@ -14,7 +14,7 @@ from clickhouse_connect.driver.exceptions import ClickHouseError
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
 from dactopus_ossie_clickhouse.model import ModelError, join_problems, load_model
-from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
+from dactopus_ossie_clickhouse.planner import Order, PlanError, Planner, Query, unanswerable_metrics
 from dactopus_ossie_clickhouse.translate import untranslatable
 
 
@@ -28,16 +28,24 @@ def _parser() -> argparse.ArgumentParser:
                         ("query", "run a semantic query and print the rows")):  # fmt: skip
         s = sub.add_parser(name, help=help_)
         s.add_argument("model", help="path to a YAML or JSON Ossie model")
-        s.add_argument("-m", "--metric", action="append", default=[], help="metric name")
+        s.add_argument("-m", "--measure", action="append", default=[], help="metric name")
         s.add_argument("-d", "--dimension", action="append", default=[], help="dataset.field")
         s.add_argument(
-            "-f",
-            "--filter",
+            "-w", "--where", action="append", default=[], help="row condition over dataset.field"
+        )
+        s.add_argument(
+            "--having",
             action="append",
             default=[],
-            help="condition over dataset.field or a metric name",
+            help="condition over metric names and the query's dimensions",
         )
-        s.add_argument("-o", "--order", action="append", default=[], help="name or 'name desc'")
+        s.add_argument(
+            "-o",
+            "--order",
+            action="append",
+            default=[],
+            help="name, 'name desc' or '... nulls last'",
+        )
         s.add_argument("-l", "--limit", type=int)
         s.add_argument("--url", help="ClickHouse HTTP URL (default $OSSIE_CLICKHOUSE_URL)")
         s.add_argument("--policy", help="YAML file hiding objects per ClickHouse user or role")
@@ -66,7 +74,10 @@ def main(argv: list[str] | None = None) -> int:
     # PlanError for the question; ClickHouseError for a server that is down, refuses the
     # credentials or the query; the rest for a policy file that is missing or malformed,
     # and for `serve` without the [mcp] extra. None of them deserves a traceback.
-    except (PlanError, ClickHouseError, OSError, ValueError, yaml.YAMLError, ImportError) as e:
+    except PlanError as e:
+        print(f"error: {e.code}: {e}", file=sys.stderr)
+        return 1
+    except (ClickHouseError, OSError, ValueError, yaml.YAMLError, ImportError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
@@ -89,10 +100,11 @@ def _run(args: argparse.Namespace) -> int:
     if args.command in ("sql", "query"):
         model = load_model(args.model)
         q = Query(
-            tuple(args.metric),
+            tuple(args.measure),
             tuple(args.dimension),
-            tuple(args.filter),
-            tuple(args.order),
+            tuple(args.where),
+            tuple(args.having),
+            tuple(Order.parse(o) for o in args.order),
             args.limit,
         )
         if args.command == "sql" and not args.url:

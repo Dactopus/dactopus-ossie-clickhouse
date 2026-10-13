@@ -15,6 +15,14 @@ a minor release may change the Python API.
   NULLs still sort last in both directions. `WITHIN GROUP (ORDER BY ...)`
   still rejects it.
 
+### Changed
+
+- `apache-ossie` is pinned to apache/ossie commit `7496811`, the one that
+  adds the `NULLS` clause to the spec. Its SDK refuses an empty
+  `primary_key` and an empty unique key (apache/ossie#574): a model that
+  writes `primary_key: []` or `unique_keys: [[]]` now fails to load. None
+  of the models in this repository or in dactopus-data-models has one.
+
 ## [0.7.0] - 2026-10-13
 
 ### Changed

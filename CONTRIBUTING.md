@@ -118,8 +118,9 @@ Apache License 2.0, like the rest of the project.
 For maintainers. The translator is built on
 [SQLGlot](https://github.com/tobymao/sqlglot), and some rewrites in
 `translate.py` work around gaps that SQLGlot later fixes. A patch release
-only fixes bugs and never changes the `sqlglot` version range in
-`pyproject.toml`; a minor release raises its lower bound to the current
+never changes the `sqlglot` version range in `pyproject.toml`; while the
+major version is 0, it may carry features as well as fixes. A minor
+release raises the lower bound to the current
 SQLGlot release and drops the rewrites that release made redundant
 ([design note](docs/design.md#sqlglot-bounds-move-only-in-minor-releases)).
 

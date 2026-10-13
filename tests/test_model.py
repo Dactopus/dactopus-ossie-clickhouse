@@ -125,8 +125,22 @@ def test_top_level_must_be_a_mapping(tmp_path):
     p.write_text("- datasets\n")
     with pytest.raises(ModelError) as e:
         load_model(p)
-    assert e.value.problems == [
-        "document: Input should be a valid dictionary or instance of OssieDocument"
+    assert e.value.problems == ["document: top level must be a mapping"]
+
+
+def test_not_utf8(tmp_path):
+    p = tmp_path / "m.yaml"
+    p.write_bytes(b"\xff\xfe name: x\n")
+    with pytest.raises(ModelError) as e:
+        load_model(p)
+    assert "cannot read" in e.value.problems[0]
+
+
+def test_non_finite_number(tmp_path, tpcds):
+    tpcds["datasets"][0]["ai_context"] = {"weight": float("nan")}
+    assert problems_of(tmp_path, tpcds) == [
+        "property holds a number JSON cannot represent, so it cannot round-trip: "
+        "datasets[0].ai_context.weight"
     ]
 
 

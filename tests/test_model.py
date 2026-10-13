@@ -79,6 +79,15 @@ def test_null_property(tmp_path, tpcds):
     ]
 
 
+def test_empty_key(tmp_path, tpcds):
+    # An empty key names no column; the SDK refuses it since apache/ossie#574.
+    tpcds["datasets"][0]["primary_key"] = []
+    tpcds["datasets"][1]["unique_keys"] = [[]]
+    ps = problems_of(tmp_path, tpcds)
+    assert any(p.startswith("datasets.0.primary_key: List should have at least 1") for p in ps)
+    assert any(p.startswith("datasets.1.unique_keys.0: List should have at least 1") for p in ps)
+
+
 def test_missing_required_field(tmp_path, tpcds):
     del tpcds["datasets"][0]["source"]
     assert any("datasets.0.source" in p for p in problems_of(tmp_path, tpcds))

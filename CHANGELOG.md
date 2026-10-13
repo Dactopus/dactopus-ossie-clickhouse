@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-13
+
 ### Changed
 
 - `apache-ossie` is pinned to apache/ossie commit `e49a0f0`, where the

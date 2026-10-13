@@ -7,6 +7,14 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- A window's `ORDER BY` accepts `NULLS FIRST` and `NULLS LAST`, now in the
+  spec's syntax (apache/ossie#577); a model that writes them used to fail
+  to load. They place NULLs regardless of direction. Without the clause
+  NULLs still sort last in both directions. `WITHIN GROUP (ORDER BY ...)`
+  still rejects it.
+
 ## [0.7.0] - 2026-10-13
 
 ### Changed

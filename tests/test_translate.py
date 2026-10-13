@@ -80,6 +80,15 @@ def test_translate_uses_picked_dialect():
         ("NTH_VALUE(v, 2) OVER (ORDER BY k)", "NTH_VALUE(toNullable(v), 2) OVER (ORDER BY k)"),
         ("FIRST_VALUE(v) OVER (ORDER BY k)", "FIRST_VALUE(v) RESPECT NULLS OVER (ORDER BY k)"),
         ("LAST_VALUE(v) IGNORE NULLS OVER ()", "LAST_VALUE(v) IGNORE NULLS OVER ()"),
+        # NULLS FIRST stays; NULLS LAST is ClickHouse's default both ways and is dropped
+        ("SUM(v) OVER (ORDER BY k NULLS FIRST)", "SUM(v) OVER (ORDER BY k NULLS FIRST)"),
+        ("SUM(v) OVER (ORDER BY k DESC NULLS FIRST)", "SUM(v) OVER (ORDER BY k DESC NULLS FIRST)"),
+        ("SUM(v) OVER (ORDER BY k NULLS LAST)", "SUM(v) OVER (ORDER BY k)"),
+        ("SUM(v) OVER (ORDER BY k DESC NULLS LAST)", "SUM(v) OVER (ORDER BY k DESC)"),
+        (
+            "LAG(v, 1) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST, j)",
+            "lag(toNullable(v), 1) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST, j)",
+        ),
         # nested rewrites survive a rewrite of the enclosing node
         (
             "FIRST_VALUE(ZEROIFNULL(v)) OVER (ORDER BY k)",
@@ -193,10 +202,12 @@ def test_format_must_be_literal():
         ("SUM(v) OVER (ORDER BY k RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)", r"frame"),
         ("SUM(v) OVER (ORDER BY k RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)", r"frame"),
         ("SUM(v) OVER (ORDER BY k GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)", r"frame"),
-        # the spec's ORDER BY has no NULLS FIRST | LAST
-        ("SUM(v) OVER (ORDER BY k NULLS FIRST)", r"NULLS FIRST \| LAST"),
-        ("SUM(v) OVER (ORDER BY k DESC NULLS LAST)", r"NULLS FIRST \| LAST"),
-        ("PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY x NULLS LAST)", r"NULLS FIRST \| LAST"),
+        # NULLS FIRST | LAST belongs to a window's ORDER BY only
+        ("PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY x NULLS LAST)", r"NULLS LAST is allowed"),
+        (
+            "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x NULLS FIRST) OVER (ORDER BY k)",
+            r"NULLS FIRST is allowed only in a window's ORDER BY",
+        ),
         # does not tokenize
         ("'abc", r"cannot parse"),
     ],

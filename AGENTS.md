@@ -152,10 +152,12 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 - ClickHouse's short aggregate names are approximate: `quantile`,
   `median`, `uniq`. A spec function that is exact translates to an exact
   one; only `APPROX_*` may use them.
-- NULLs sort last in both directions, ClickHouse's default (the spec is
-  silent): `NULL_ORDERING` on the parser dialect, `nulls_first=False` in
-  the planner. Keep it when parsing switches to the Ossie dialect.
-  `NULLS FIRST | LAST` is rejected: the spec's syntax has none.
+- NULLs sort last in both directions, ClickHouse's default (the spec
+  leaves it open, apache/ossie#498): `NULL_ORDERING` on the parser
+  dialect, `nulls_first=False` in the planner. Keep it when parsing
+  switches to the Ossie dialect. An explicit `NULLS FIRST | LAST` passes
+  through in a window's `ORDER BY` and is rejected elsewhere: the spec's
+  syntax has it only there.
 - SQLGlot adds no parentheses for precedence, and its Python operators
   (`1 - p`) skip them when `p` is the same operator. `rewrite_tree`
   parenthesizes every operator under another operator, so a rewrite builds

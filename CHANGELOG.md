@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-14
+
 ### Added
 
 - A window's `ORDER BY` accepts `NULLS FIRST` and `NULLS LAST`, now in the
@@ -17,11 +19,12 @@ a minor release may change the Python API.
 
 ### Changed
 
-- `apache-ossie` is pinned to apache/ossie commit `7496811`, the one that
-  adds the `NULLS` clause to the spec. Its SDK refuses an empty
-  `primary_key` and an empty unique key (apache/ossie#574): a model that
-  writes `primary_key: []` or `unique_keys: [[]]` now fails to load. None
-  of the models in this repository or in dactopus-data-models has one.
+- Breaking: `apache-ossie` is pinned to apache/ossie commit `7496811`,
+  the one that adds the `NULLS` clause to the spec. Its SDK refuses an
+  empty `primary_key` and an empty unique key (apache/ossie#574): a model
+  that writes `primary_key: []` or `unique_keys: [[]]` now fails to load.
+  None of the models in this repository or in dactopus-data-models has
+  one.
 
 ## [0.7.0] - 2026-10-13
 

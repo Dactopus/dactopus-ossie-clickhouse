@@ -122,11 +122,12 @@ class _OssieParser(Parser):
 
     def _parse_ordered(self, parse_method=None):
         ordered = super()._parse_ordered(parse_method)
-        # The spec's ORDER BY has no NULLS FIRST | LAST (docs/design.md). The AST cannot
-        # tell an explicit NULLS LAST from the default, so look at the tokens just read.
+        # The spec allows NULLS FIRST | LAST in a window's ORDER BY only; parse() checks
+        # where it stands. The AST cannot tell an explicit NULLS LAST from the default,
+        # so look at the tokens just read.
         last = [t.text.upper() for t in self._tokens[max(self._index - 2, 0) : self._index]]
         if ordered and last in (["NULLS", "FIRST"], ["NULLS", "LAST"]):
-            self.raise_error("NULLS FIRST | LAST is not part of the Ossie ORDER BY syntax")
+            ordered.meta["nulls"] = last[1]
         return ordered
 
 
@@ -136,7 +137,8 @@ class OssieSQL(Dialect):
     Mirrors apache/ossie PR #222; switch to ``read="ossie"`` once it merges."""
 
     Parser = _OssieParser
-    # Spec is silent; NULLs sort last both ways, as in ClickHouse and DuckDB (docs/design.md).
+    # Without NULLS FIRST | LAST the spec leaves NULL placement open (apache/ossie#498);
+    # NULLs sort last both ways, as in ClickHouse and DuckDB (docs/design.md).
     NULL_ORDERING = "nulls_are_last"
 
 
@@ -207,6 +209,12 @@ def _shape_problem(node: exp.Expression) -> str | None:
         return f"{node.name} is not a date part; expected one of " + ", ".join(sorted(_DATE_PARTS))
     if isinstance(node, exp.WindowSpec):
         return _frame_problem(node)
+    if (
+        isinstance(node, exp.Ordered)
+        and "nulls" in node.meta
+        and not (isinstance(node.parent, exp.Order) and isinstance(node.parent.parent, exp.Window))
+    ):
+        return f"NULLS {node.meta['nulls']} is allowed only in a window's ORDER BY"
     # ClickHouse accepts IGNORE NULLS here and silently ignores it.
     if isinstance(node, exp.IgnoreNulls) and isinstance(
         node.this, exp.Lag | exp.Lead | exp.NthValue

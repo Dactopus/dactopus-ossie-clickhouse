@@ -167,6 +167,14 @@ def test_window_metric_passes_through():
     assert "SUM(SUM(store_sales.ss_ext_sales_price)) OVER (ORDER BY date_dim.d_date" in sql
 
 
+def test_window_metric_keeps_nulls_clause():
+    planner = _with_metrics(
+        headcount_rank="RANK() OVER (ORDER BY SUM(store.s_number_employees) ASC NULLS FIRST)"
+    )
+    sql = planner.sql(Query(metrics=("headcount_rank",), dimensions=("store.s_state",)))
+    assert "RANK() OVER (ORDER BY SUM(store.s_number_employees) ASC NULLS FIRST)" in sql
+
+
 def test_order_by():
     # Default: first metric descending, only when there are rows to rank.
     q = Query(metrics=("total_profit", "total_sales"), dimensions=("item.i_brand",))

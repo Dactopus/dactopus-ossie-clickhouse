@@ -131,8 +131,9 @@ window metric needs, so the question has to supply the right dimensions.
 A window metric cannot be used in a filter (ClickHouse does not allow a
 window function in `HAVING`); the planner rejects it with a message.
 Frames are the spec's: `ROWS` frames that hold the current row and
-`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`. Others, and
-`NULLS FIRST | LAST`, are rejected; NULLs sort last in both directions.
+`RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`; others are
+rejected. A window's `ORDER BY` takes `NULLS FIRST` or `NULLS LAST`;
+without it, NULLs sort last in both directions.
 
 ## Time and derived dimensions
 

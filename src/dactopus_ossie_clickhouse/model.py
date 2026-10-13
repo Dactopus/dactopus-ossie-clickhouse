@@ -33,7 +33,7 @@ def load_model(path: str | Path) -> OssieDocument:
     path = Path(path)
     try:
         text = path.read_text()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise ModelError([f"cannot read {path}: {e}"]) from e
     # The SDK's document loaders, not model_validate: they also refuse what the
     # schema refuses but the field types cannot express (a null, a missing version).
@@ -143,5 +143,8 @@ def _format(err: dict) -> str:
     if err["loc"] == ("version",) and err["type"] == "literal_error":
         # pydantic says only what it expected; say what this build supports.
         return f"unsupported version {err['input']!r}; this build supports {SUPPORTED_VERSION!r}"
+    if err["loc"] == () and err["type"] == "model_type":
+        # An empty file or a list; pydantic's message names the SDK class.
+        return "document: top level must be a mapping"
     loc = ".".join(str(p) for p in err["loc"]) or "document"
     return f"{loc}: {err['msg']}"

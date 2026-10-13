@@ -7,7 +7,7 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
-### Changed
+### Added
 
 - A window's `ORDER BY` accepts `NULLS FIRST` and `NULLS LAST`, now in the
   spec's syntax (apache/ossie#577); a model that writes them used to fail

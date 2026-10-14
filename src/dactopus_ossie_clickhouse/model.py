@@ -18,6 +18,10 @@ from pydantic import ValidationError
 
 SUPPORTED_VERSION = "0.2.0.dev0"
 SUPPORTED_DIALECTS = frozenset({OssieDialect.OSSIE_SQL_2026, OssieDialect.ANSI_SQL})
+# The custom_extensions namespace this project owns (docs/model-authoring.md):
+# a JSON object on a dataset, with these keys and values.
+VENDOR = "CLICKHOUSE"
+_EXTENSION_KEYS = {"dedup": ("final", "none")}
 
 
 class ModelError(ValueError):
@@ -72,6 +76,7 @@ def check_model(doc: OssieDocument) -> list[str]:
     # Keys and relationship columns are physical column names per the spec, not
     # field names, so their existence can only be checked against the database.
     for d in doc.datasets:
+        problems += _extension(d)[1]
         problems += _duplicates(f"field in dataset {d.name!r}", [f.name for f in d.fields or []])
         for f in d.fields or []:
             problems += _dialect_check(f"field {d.name}.{f.name}", f.expression.dialects)
@@ -89,7 +94,30 @@ def check_model(doc: OssieDocument) -> list[str]:
                 problems.append(
                     f"relationship {r.name!r}: {side} dataset {ds_name!r} does not exist"
                 )
+
+    # Nothing reads an entry anywhere else; its author expects an effect that never comes.
+    elsewhere = [
+        ("model", doc),
+        *((f"field {d.name}.{f.name}", f) for d in doc.datasets for f in d.fields or []),
+        *((f"metric {m.name!r}", m) for m in doc.metrics or []),
+        *((f"relationship {r.name!r}", r) for r in doc.relationships or []),
+    ]
+    for what, node in elsewhere:
+        if _entries(node):
+            problems.append(
+                f"{what}: a {VENDOR} entry in custom_extensions is read on datasets only"
+            )
     return problems
+
+
+def overrides(ds: OssieDataset) -> dict:
+    """The dataset's CLICKHOUSE entry, parsed; {} without one. Keys: dedup ("final" |
+    "none"); without it, FINAL where the source keeps row versions. Raises ``ModelError``
+    for an entry check_model() refuses: an ``OssieDocument`` built in Python skips it."""
+    data, problems = _extension(ds)
+    if problems:
+        raise ModelError(problems)
+    return data
 
 
 def declared_keys(ds: OssieDataset) -> list[list[str]]:
@@ -130,6 +158,35 @@ def join_problems(doc: OssieDocument) -> list[str]:
 def _duplicates(kind: str, names: list[str]) -> list[str]:
     seen: set[str] = set()
     return [f"duplicate {kind} name {n!r}" for n in names if n in seen or seen.add(n)]
+
+
+def _entries(node) -> list:
+    return [e for e in node.custom_extensions or [] if e.vendor_name.upper() == VENDOR]
+
+
+def _extension(ds: OssieDataset) -> tuple[dict, list[str]]:
+    """The dataset's CLICKHOUSE entry parsed, and the problems with it."""
+    where = f"dataset {ds.name!r}: {VENDOR} entry"
+    entries = _entries(ds)
+    if not entries:
+        return {}, []
+    if len(entries) > 1:
+        return {}, [f"{where} appears {len(entries)} times in custom_extensions; keep one"]
+    try:
+        data = json.loads(entries[0].data)
+    except json.JSONDecodeError as e:
+        return {}, [f"{where}: data is not JSON ({e.msg})"]
+    if not isinstance(data, dict):
+        return {}, [f"{where}: data must be a JSON object, got {json.dumps(data)}"]
+    known = ", ".join(_EXTENSION_KEYS)
+    problems = [
+        f"{where}: unknown key {k!r}; known: {known}" for k in data if k not in _EXTENSION_KEYS
+    ]
+    for key, values in _EXTENSION_KEYS.items():
+        if key in data and data[key] not in values:
+            choices = " or ".join(json.dumps(v) for v in values)
+            problems.append(f"{where}: {key!r} must be {choices}, got {json.dumps(data[key])}")
+    return ({}, problems) if problems else (data, [])
 
 
 def _dialect_check(what: str, dialects) -> list[str]:

@@ -129,15 +129,17 @@ questions it refuses.
 
 | Command | What it does |
 | --- | --- |
-| `validate <model> [--url]` | Check the file; with `--url`, also that every source, column and relationship column exists in ClickHouse. |
-| `sql <model> ...` | Print the SQL for a question without running it. |
-| `query <model> ... [--json]` | Run it; TSV or JSON rows. |
-| `serve <model>` | MCP server over stdio (needs the `[mcp]` extra). |
+| `validate <model>... [--url]` | Check the model; with `--url`, also that every source, column and relationship column exists in ClickHouse. |
+| `sql <model>... ...` | Print the SQL for a question without running it. |
+| `query <model>... ... [--json]` | Run it; TSV or JSON rows. |
+| `serve <model>...` | MCP server over stdio (needs the `[mcp]` extra). |
 
 Question options for `sql` and `query`: `-m metric` (repeatable),
 `-d dataset.field` (repeatable), `-f condition` (repeatable; a metric
 name or an aggregate means `HAVING`), `-o "name [desc]"`, `-l limit`.
 `--url` and `--policy` apply to anything that talks to ClickHouse.
+`<model>...` is one Ossie file or several read as one model, such as one
+file per subject area ([docs/model-authoring.md](docs/model-authoring.md#several-files)).
 
 ## Documentation
 

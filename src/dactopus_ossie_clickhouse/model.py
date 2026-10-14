@@ -1,4 +1,4 @@
-"""Load an Ossie model from a file and check what the upstream package does not.
+"""Load an Ossie model from one or more files and check what the upstream package does not.
 
 The ``apache-ossie`` package validates the document against the schema: its
 loaders refuse an unknown property, a property set to null, a missing or
@@ -13,7 +13,13 @@ import json
 from pathlib import Path
 
 import yaml
-from ossie import OssieDataset, OssieDialect, OssieDocument, OssieRelationship
+from ossie import (
+    OssieAIContextObject,
+    OssieDataset,
+    OssieDialect,
+    OssieDocument,
+    OssieRelationship,
+)
 from pydantic import ValidationError
 
 SUPPORTED_VERSION = "0.2.0.dev0"
@@ -32,9 +38,38 @@ class ModelError(ValueError):
         super().__init__("\n".join(problems))
 
 
-def load_model(path: str | Path) -> OssieDocument:
-    """Read a YAML or JSON Ossie model and validate it. Raises ``ModelError``."""
-    path = Path(path)
+def load_model(*paths: str | Path) -> OssieDocument:
+    """Read one or more YAML or JSON Ossie files as one model and validate it.
+
+    Ossie has no way to split a model across files, so several are combined
+    here as a union: each file is checked against the schema on its own, and
+    names and references on the whole, so a relationship may join datasets of
+    two files. A name defined in two files is an error. The root's name and
+    description come from the first file; every file's root instructions are
+    kept, in file order. Raises ``ModelError``.
+    """
+    if not paths:
+        raise TypeError("load_model() needs at least one path")
+    paths = tuple(map(Path, paths))
+    docs: list[OssieDocument] = []
+    problems: list[str] = []
+    for path in paths:
+        try:
+            docs.append(_read(path, f"{path}: " if len(paths) > 1 else ""))
+        except ModelError as e:
+            problems += e.problems
+    problems = problems or _clashes(paths, docs)
+    if problems:
+        raise ModelError(problems)
+    doc = _combine(docs)
+    problems = check_model(doc)
+    if problems:
+        raise ModelError(problems)
+    return doc
+
+
+def _read(path: Path, label: str) -> OssieDocument:
+    """One file checked against the schema; ``label`` starts each problem but a read error."""
     try:
         text = path.read_text()
     except (OSError, UnicodeDecodeError) as e:
@@ -45,17 +80,62 @@ def load_model(path: str | Path) -> OssieDocument:
         OssieDocument.from_ossie_json if path.suffix == ".json" else OssieDocument.from_ossie_yaml
     )
     try:
-        doc = parse(text)
+        return parse(text)
     except ValidationError as e:
-        raise ModelError([_format(err) for err in e.errors()]) from e
+        raise ModelError([label + _format(err) for err in e.errors()]) from e
     except (json.JSONDecodeError, yaml.YAMLError) as e:
         raise ModelError([f"cannot read {path}: {e}"]) from e
     except ValueError as e:  # a document rule, with the paths that break it
-        raise ModelError([str(e)]) from e
-    problems = check_model(doc)
-    if problems:
-        raise ModelError(problems)
-    return doc
+        raise ModelError([label + str(e)]) from e
+
+
+def _clashes(paths: tuple[Path, ...], docs: list[OssieDocument]) -> list[str]:
+    """Names defined in two files. Merging same-named objects is not supported."""
+    problems: list[str] = []
+    for kind, attr in (
+        ("dataset", "datasets"),
+        ("metric", "metrics"),
+        ("relationship", "relationships"),
+    ):
+        first: dict[str, Path] = {}
+        for path, doc in zip(paths, docs, strict=True):
+            for name in dict.fromkeys(o.name for o in getattr(doc, attr) or []):
+                if name in first:
+                    problems.append(f"{kind} {name!r} is defined in both {first[name]} and {path}")
+                else:
+                    first[name] = path
+    return problems
+
+
+def _combine(docs: list[OssieDocument]) -> OssieDocument:
+    if len(docs) == 1:
+        return docs[0]
+
+    def union(attr: str) -> list | None:
+        return [o for d in docs for o in getattr(d, attr) or []] or None
+
+    ai = docs[0].ai_context
+    texts = [t for d in docs if (t := _instructions(d.ai_context))]
+    if len(texts) > 1 or (texts and not _instructions(ai)):
+        joined = "\n\n".join(texts)
+        ai = (
+            ai.model_copy(update={"instructions": joined})
+            if isinstance(ai, OssieAIContextObject)
+            else joined
+        )
+    return docs[0].model_copy(
+        update={
+            "datasets": union("datasets"),
+            "relationships": union("relationships"),
+            "metrics": union("metrics"),
+            "custom_extensions": union("custom_extensions"),
+            "ai_context": ai,
+        }
+    )
+
+
+def _instructions(ai) -> str | None:
+    return ai.instructions if isinstance(ai, OssieAIContextObject) else ai
 
 
 def check_model(doc: OssieDocument) -> list[str]:

@@ -258,6 +258,25 @@ uses names exactly as the model writes them, because ClickHouse is
 case-sensitive: write `source`, keys and columns the way the database
 spells them.
 
+## Several files
+
+A model may span several files, such as one per subject area: every
+command takes one or more.
+
+```bash
+dactopus-ossie-clickhouse serve web_analytics.yaml commerce.yaml
+```
+
+Ossie has no way to split a model, so each file is a complete document
+(its own `version`, `name` and at least one dataset), and the files are
+read as their union. Each is checked against the schema on its own;
+names and references are checked on the whole, so a relationship between
+two areas goes in either file. A dataset, metric or relationship name
+defined in two files is an error naming both: two metrics called
+`revenue` that compute different things must be renamed, not merged. The
+model's `name` and `description` come from the first file, and every
+file's `ai_context.instructions` reach agents, in file order.
+
 ## Descriptions and AI hints
 
 `description`, `ai_context.synonyms` and `ai_context.instructions` are

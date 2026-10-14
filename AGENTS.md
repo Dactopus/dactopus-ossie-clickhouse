@@ -63,7 +63,9 @@ Python library with a CLI entry point. The parts that constrain code:
   a file is read with `OssieDocument.from_ossie_yaml` or `from_ossie_json`,
   which also refuse a null property and a missing `version`;
   `model_validate` is for a document built in Python, such as the trimmed
-  model in `access.py`.
+  model in `access.py`. Several files are read that way one by one and
+  combined in `load_model` as a union; a name in two files is an error,
+  never a merge.
 - Supported Ossie schema version is pinned (`0.2.0.dev0`) and checked
   explicitly.
 

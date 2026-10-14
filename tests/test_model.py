@@ -8,6 +8,7 @@ from ossie import OssieDocument
 from dactopus_ossie_clickhouse import SUPPORTED_VERSION, ModelError, load_model
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.model import overrides
+from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tpcds.yaml"
 
@@ -184,6 +185,111 @@ def test_overrides_checks_a_document_built_in_python(tpcds):
     doc = OssieDocument.model_validate(tpcds)
     with pytest.raises(ModelError, match="'dedup' must be"):
         overrides(doc.datasets[0])
+
+
+def split(tpcds: dict) -> tuple[dict, dict]:
+    """The reference model as two subject areas: sales and dates in one file; customers,
+    items, stores and the relationships from sales to them in the other."""
+    sales = copy.deepcopy(tpcds)
+    sales["datasets"] = tpcds["datasets"][:2]
+    sales["metrics"] = tpcds["metrics"][:4]
+    sales["relationships"] = tpcds["relationships"][:1]
+    rest = {
+        "version": tpcds["version"],
+        "name": "tpcds_reference",
+        "ai_context": {"instructions": "Stores are physical shops."},
+        "datasets": tpcds["datasets"][2:],
+        "relationships": tpcds["relationships"][1:],
+        "metrics": tpcds["metrics"][4:],
+    }
+    return sales, rest
+
+
+def test_several_files_answer_as_one(tmp_path, tpcds):
+    sales, rest = split(tpcds)
+    doc = load_model(write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml"))
+    single = load_model(FIXTURE)
+    assert [d.name for d in doc.datasets] == [d.name for d in single.datasets]
+    assert [m.name for m in doc.metrics] == [m.name for m in single.metrics]
+
+    def answer(model, metric):
+        q = Query(metrics=(metric,), dimensions=("store.s_state", "date_dim.d_year"))
+        try:
+            return Planner(model).sql(q)
+        except PlanError as e:
+            return str(e)
+
+    for m in single.metrics:
+        assert answer(doc, m.name) == answer(single, m.name)
+
+
+def test_references_resolve_across_files(tmp_path, tpcds):
+    # b.yaml's relationships start at store_sales, defined in a.yaml.
+    sales, rest = split(tpcds)
+    load_model(write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml"))
+    ps = problems_of(tmp_path, rest)
+    assert "relationship 'store_sales_to_customer': from dataset 'store_sales' does not exist" in ps
+
+
+def test_root_from_the_first_file_and_instructions_from_all(tmp_path, tpcds):
+    sales, rest = split(tpcds)
+    doc = load_model(write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml"))
+    assert doc.name == tpcds["name"] and doc.description == tpcds["description"]
+    first = tpcds["ai_context"]["instructions"]
+    assert doc.ai_context.instructions == first + "\n\nStores are physical shops."
+    assert doc.ai_context.synonyms == load_model(FIXTURE).ai_context.synonyms
+
+    # A file without instructions adds none; the first file's may be a plain string.
+    rest["ai_context"] = "Stores are physical shops."
+    del sales["ai_context"]
+    doc = load_model(write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml"))
+    assert doc.ai_context == "Stores are physical shops."
+
+
+def test_name_defined_in_two_files(tmp_path, tpcds):
+    sales, rest = split(tpcds)
+    rest["metrics"].append(copy.deepcopy(sales["metrics"][0]))
+    rest["datasets"].append(copy.deepcopy(sales["datasets"][1]))
+    a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
+    with pytest.raises(ModelError) as e:
+        load_model(a, b)
+    assert e.value.problems == [
+        f"dataset 'date_dim' is defined in both {a} and {b}",
+        f"metric 'total_sales' is defined in both {a} and {b}",
+    ]
+
+
+def test_each_file_checked_against_the_schema(tmp_path, tpcds):
+    sales, rest = split(tpcds)
+    rest["version"] = "9.9.9"
+    sales["datasets"][0]["primary_key"] = None
+    a, b, missing = (tmp_path / n for n in ("a.yaml", "b.yaml", "c.yaml"))
+    write(tmp_path, sales, a.name), write(tmp_path, rest, b.name)
+    with pytest.raises(ModelError) as e:
+        load_model(a, b, missing)
+    ps = e.value.problems
+    assert ps[0].startswith(f"{a}: property set to null")
+    assert ps[1] == f"{b}: unsupported version '9.9.9'; this build supports '0.2.0.dev0'"
+    assert ps[2].startswith(f"cannot read {missing}: ")  # names the file once
+
+
+def test_load_model_needs_a_path():
+    with pytest.raises(TypeError):
+        load_model()
+
+
+def test_cli_several_files(tmp_path, tpcds, capsys):
+    sales, rest = split(tpcds)
+    a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
+    # The reference model has a metric validate refuses; two files report the same.
+    assert main(["validate", str(FIXTURE)]) == 1
+    single = capsys.readouterr().err.splitlines()
+    assert main(["validate", str(a), str(b)]) == 1
+    pair = capsys.readouterr().err.splitlines()
+    assert pair[:-1] == single[:-1]
+    assert pair[-1] == f"{a}, {b}: 1 problem(s)"
+    assert main(["sql", str(a), str(b), "-m", "total_sales", "-d", "store.s_state"]) == 0
+    assert "LEFT JOIN tpcds.store AS store" in capsys.readouterr().out  # joins across files
 
 
 def test_unreadable(tmp_path):

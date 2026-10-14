@@ -7,6 +7,16 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- Every command takes several model files, read as one model: one file
+  per subject area can be served by one MCP server (#32). Each file is
+  checked against the schema on its own, names and references on the
+  whole, so a relationship may join datasets of two files. A name defined
+  in two files is an error naming both. The root name and description
+  come from the first file; every file's instructions are kept.
+  `load_model` takes the paths as arguments.
+
 ### Changed
 
 - Requires SQLGlot 30.23 or later. Its ClickHouse generator translates

@@ -8,7 +8,6 @@ Learns what it needs from the server (`system.tables`, `system.columns`,
 from __future__ import annotations
 
 import datetime as dt
-import json
 import math
 import os
 import re
@@ -19,7 +18,7 @@ from ossie import OssieDataset, OssieDocument
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse.access import Hidden, Policy, restrict
-from dactopus_ossie_clickhouse.model import declared_keys
+from dactopus_ossie_clickhouse.model import declared_keys, overrides
 from dactopus_ossie_clickhouse.planner import (
     Catalog,
     PlanError,
@@ -32,7 +31,6 @@ from dactopus_ossie_clickhouse.planner import (
 from dactopus_ossie_clickhouse.translate import parse, pick_expression, untranslatable
 
 DEFAULT_URL = "http://127.0.0.1:8123"
-VENDOR = "CLICKHOUSE"
 TABLES = "SELECT database, name, engine, engine_full FROM system.tables"
 # engine_full as ClickHouse writes it back: arguments as quoted strings.
 _STRING = r"'((?:[^'\\]|\\.)*)'"
@@ -47,15 +45,6 @@ def connect(url: str | None = None):
         dsn=url or os.environ.get("OSSIE_CLICKHOUSE_URL", DEFAULT_URL),
         autogenerate_session_id=False,
     )
-
-
-def overrides(ds: OssieDataset) -> dict:
-    """Our `custom_extensions` entry for a dataset, parsed. Keys: dedup ("final" | "none");
-    without it, FINAL where the source keeps row versions."""
-    for ext in ds.custom_extensions or []:
-        if ext.vendor_name.upper() == VENDOR:
-            return json.loads(ext.data)
-    return {}
 
 
 @dataclass

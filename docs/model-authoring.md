@@ -214,8 +214,14 @@ versions), turn it off per dataset:
 ```
 
 `custom_extensions`, the spec's escape hatch for vendor settings, with
-`vendor_name: CLICKHOUSE` is the namespace this project owns; `data` is
-JSON. `dedup` (`"final"` or `"none"`) is the only key today.
+`vendor_name: CLICKHOUSE` (in any case) is the namespace this project
+owns. The entry is read on a dataset only, once per dataset, and its
+`data` is a JSON object. `dedup` (`"final"` or `"none"`) is the only key
+today. Loading the model refuses anything else: an unknown key, another
+value (`"None"`, `null`), text that is not a JSON object, a second entry
+on the dataset, an entry on the model, a field, a metric or a
+relationship. A typo would otherwise change how the dataset is read
+without an error.
 
 `FINAL` drops deleted rows only when the engine declares its delete
 column, as in `ReplacingMergeTree(version, is_deleted)`. CDC tools that

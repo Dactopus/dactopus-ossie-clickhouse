@@ -14,6 +14,18 @@ a minor release may change the Python API.
   this project carried for it is gone. The SQL and values are unchanged;
   `REGEXP_COUNT` still takes the spec's two arguments.
 
+### Fixed
+
+- The `CLICKHOUSE` entry in `custom_extensions` is checked when the model
+  loads, so `validate` without `--url` reports it too (#30). A typo in its
+  key or value (`{"dedupe": "none"}`, `{"dedup": "None"}`,
+  `{"dedup": null}`) used to change silently whether a dataset was read
+  with `FINAL`; text that is not a JSON object failed later with a Python
+  error that named no dataset. Now each is a model problem naming the
+  dataset and the allowed values. So are a second entry on one dataset,
+  which used to be ignored, and an entry on the model, a field, a metric
+  or a relationship, which nothing reads.
+
 ## [0.7.1] - 2026-10-14
 
 ### Added

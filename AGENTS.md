@@ -92,9 +92,10 @@ Python library with a CLI entry point. The parts that constrain code:
   `FINAL` on one that reads a plain `MergeTree` is an error. When the table
   read is hidden from the user, `validate` reports it and no `FINAL` is
   added. Single-key dictionaries with `dictGetOrNull` instead of a join.
-  Overrides go in the model's `custom_extensions` under
+  Overrides go in a dataset's `custom_extensions` under
   `vendor_name: CLICKHOUSE` as JSON, currently `{"dedup": "none"}` or
-  `{"dedup": "final"}`.
+  `{"dedup": "final"}`. `check_model` refuses any other key or value and
+  the entry anywhere but a dataset; `model.overrides` is the one parser.
 - The planner never talks to the database; it takes an optional `Catalog`
   the executor built. Keep that boundary.
 - Query planning is deterministic: datasets from `source`, joins from

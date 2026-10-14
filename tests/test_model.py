@@ -7,6 +7,7 @@ from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse import SUPPORTED_VERSION, ModelError, load_model
 from dactopus_ossie_clickhouse.cli import main
+from dactopus_ossie_clickhouse.model import overrides
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tpcds.yaml"
 
@@ -119,6 +120,69 @@ def test_all_problems_reported_at_once(tmp_path, tpcds):
     tpcds["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
     tpcds["relationships"][0]["to"] = "nowhere"
     assert len(problems_of(tmp_path, tpcds)) == 2
+
+
+def _clickhouse(data: str, vendor: str = "CLICKHOUSE") -> dict:
+    return {"vendor_name": vendor, "data": data}
+
+
+@pytest.mark.parametrize("data", ['{"dedup": "none"}', '{"dedup": "final"}', "{}"])
+def test_clickhouse_extension(tmp_path, tpcds, data):
+    tpcds["datasets"][0]["custom_extensions"] = [_clickhouse(data)]
+    doc = load_model(write(tmp_path, tpcds))
+    assert overrides(doc.datasets[0]) == yaml.safe_load(data)
+
+
+@pytest.mark.parametrize(
+    ("data", "problem"),
+    [
+        # each of these once kept or dropped FINAL silently, or failed with a bare traceback
+        ('{"dedupe": "none"}', "unknown key 'dedupe'; known: dedup"),
+        ('{"dedup": "None"}', '\'dedup\' must be "final" or "none", got "None"'),
+        ('{"dedup": "Final"}', '\'dedup\' must be "final" or "none", got "Final"'),
+        ('{"dedup": null}', '\'dedup\' must be "final" or "none", got null'),
+        ("{dedup: none}", "data is not JSON (Expecting property name enclosed in double quotes)"),
+        ('"none"', 'data must be a JSON object, got "none"'),
+        ("[]", "data must be a JSON object, got []"),
+        ("null", "data must be a JSON object, got null"),
+    ],
+)
+def test_clickhouse_extension_refused(tmp_path, tpcds, data, problem):
+    ds = tpcds["datasets"][0]
+    ds["custom_extensions"] = [_clickhouse(data, vendor="ClickHouse")]  # any case
+    assert problems_of(tmp_path, tpcds) == [f"dataset {ds['name']!r}: CLICKHOUSE entry: {problem}"]
+
+
+def test_clickhouse_extension_twice(tmp_path, tpcds):
+    ds = tpcds["datasets"][0]
+    ds["custom_extensions"] = [_clickhouse('{"dedup": "none"}'), _clickhouse('{"dedup": "final"}')]
+    assert problems_of(tmp_path, tpcds) == [
+        f"dataset {ds['name']!r}: CLICKHOUSE entry appears 2 times in custom_extensions; keep one"
+    ]
+
+
+def test_clickhouse_extension_read_on_datasets_only(tmp_path, tpcds):
+    entry = _clickhouse('{"dedup": "none"}')
+    ds, metric, rel = tpcds["datasets"][0], tpcds["metrics"][0], tpcds["relationships"][0]
+    tpcds["custom_extensions"].append(entry)  # beside other vendors' entries, which stay
+    ds["fields"][0]["custom_extensions"] = [entry]
+    metric["custom_extensions"] = [entry]
+    rel["custom_extensions"] = [entry]
+    tail = "a CLICKHOUSE entry in custom_extensions is read on datasets only"
+    assert problems_of(tmp_path, tpcds) == [
+        f"model: {tail}",
+        f"field {ds['name']}.{ds['fields'][0]['name']}: {tail}",
+        f"metric {metric['name']!r}: {tail}",
+        f"relationship {rel['name']!r}: {tail}",
+    ]
+
+
+def test_overrides_checks_a_document_built_in_python(tpcds):
+    # Executor accepts an OssieDocument that never went through load_model.
+    tpcds["datasets"][0]["custom_extensions"] = [_clickhouse('{"dedup": "None"}')]
+    doc = OssieDocument.model_validate(tpcds)
+    with pytest.raises(ModelError, match="'dedup' must be"):
+        overrides(doc.datasets[0])
 
 
 def test_unreadable(tmp_path):

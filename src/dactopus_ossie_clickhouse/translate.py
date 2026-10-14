@@ -38,8 +38,8 @@ def pick_expression(expression: OssieExpression) -> str:
 # Spec signatures of the functions rewritten below or by SQLGlot's ClickHouse
 # generator, checked on the arguments as written. The default dialect also
 # parses other engines' longer forms, such as Snowflake's REGEXP_COUNT(str,
-# pattern, position, flags); a rewrite would drop the extra arguments and
-# return a different value, so parse() rejects them.
+# pattern, position, flags). They are not the spec's, and a rewrite may drop
+# the extra arguments and return a different value, so parse() rejects them.
 _SIGNATURES = {
     "APPROX_PERCENTILE": ("APPROX_PERCENTILE(expr, p)", 2, 2),
     "TO_DATE": ("TO_DATE(string[, format])", 1, 2),
@@ -397,8 +397,6 @@ def rewrite(node: exp.Expression) -> exp.Expression:
     if isinstance(node, exp.SplitPart):
         parts = _f("splitByString", node.args["delimiter"], node.this)
         return _f("arrayElement", parts, node.args["part_index"])
-    if isinstance(node, exp.RegexpCount):
-        return _f("countMatches", node.this, node.expression)
     # Spec windows follow ANSI SQL: NULL when the row does not exist, and NULLs are
     # respected. ClickHouse returns the type's default (0) for a non-Nullable argument
     # and skips NULLs in first_value / last_value. A Nullable argument also lets a

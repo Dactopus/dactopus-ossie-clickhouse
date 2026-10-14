@@ -146,7 +146,7 @@ def test_format_must_be_literal():
 @pytest.mark.parametrize(
     ("ossie", "message"),
     [
-        # longer forms from other engines: a rewrite would drop the extra arguments
+        # longer forms from other engines are not the spec's
         ("REGEXP_COUNT(s, 'a', 3, 'i')", r"expected REGEXP_COUNT\(str, pattern\), got 4"),
         ("CONTAINS(s, 'a', 'x')", r"expected CONTAINS\(str, substr\), got 3"),
         ("DAYOFYEAR(d, 1)", r"expected DAYOFYEAR\(date_expr\), got 2"),

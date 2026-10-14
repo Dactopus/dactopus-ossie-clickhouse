@@ -7,6 +7,13 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- Requires SQLGlot 30.23 or later. Its ClickHouse generator translates
+  `REGEXP_COUNT` to `countMatches` (tobymao/sqlglot#8616), so the rewrite
+  this project carried for it is gone. The SQL and values are unchanged;
+  `REGEXP_COUNT` still takes the spec's two arguments.
+
 ## [0.7.1] - 2026-10-14
 
 ### Added

@@ -269,9 +269,10 @@ dactopus-ossie-clickhouse serve web_analytics.yaml commerce.yaml
 
 Ossie has no way to split a model, so each file is a complete document
 (its own `version`, `name` and at least one dataset), and the files are
-read as their union. Each is checked against the schema on its own;
-names and references are checked on the whole, so a relationship between
-two areas goes in either file. A dataset, metric or relationship name
+read as their union. Each is checked on its own for the schema, its
+version and repeated names, and a problem there names the file;
+references are checked on the whole, so a relationship between two areas
+goes in either file. A dataset, metric or relationship name
 defined in two files is an error naming both (`Revenue` and `revenue`
 are one name, as everywhere in Ossie): two metrics called `revenue` that
 compute different things must be renamed, not merged. The model's `name`

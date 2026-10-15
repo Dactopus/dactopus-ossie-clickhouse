@@ -145,6 +145,7 @@ def test_clickhouse_extension(tmp_path, tpcds, data):
         ('"none"', 'data must be a JSON object, got "none"'),
         ("[]", "data must be a JSON object, got []"),
         ("null", "data must be a JSON object, got null"),
+        ('{"dedup": "final", "dedup": "none"}', "key 'dedup' is repeated; keep one"),
     ],
 )
 def test_clickhouse_extension_refused(tmp_path, tpcds, data, problem):

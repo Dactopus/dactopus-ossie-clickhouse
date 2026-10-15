@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-15
+
 ### Added
 
 - Every command takes several model files, read as one model: one file
@@ -15,16 +17,9 @@ a minor release may change the Python API.
   misplaced CLICKHOUSE entry, with the problem named after the file;
   references are checked on the whole, so a relationship may join
   datasets of two files. A name defined in two files is an error naming
-  both. The root name and description
-  come from the first file; every file's root `ai_context` is kept:
-  instructions joined, synonyms and examples united. `load_model` takes
-  the paths as arguments.
-
-### Fixed
-
-- A dataset, metric or relationship name repeated in another case
-  (`Revenue` and `revenue`) is reported as a duplicate. Names resolve
-  case-insensitively, so one of the two was silently unreachable.
+  both. The root name and description come from the first file; every
+  file's root `ai_context` is kept: instructions joined, synonyms and
+  examples united. `load_model` takes the paths as arguments.
 
 ### Changed
 
@@ -45,6 +40,9 @@ a minor release may change the Python API.
   object, where the last one used to win, a second entry on one dataset,
   which used to be ignored, and an entry on the model, a field, a metric
   or a relationship, which nothing reads.
+- A dataset, metric or relationship name repeated in another case
+  (`Revenue` and `revenue`) is reported as a duplicate. Names resolve
+  case-insensitively, so one of the two was silently unreachable.
 
 ## [0.7.1] - 2026-10-14
 

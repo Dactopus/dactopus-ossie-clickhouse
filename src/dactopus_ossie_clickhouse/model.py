@@ -173,9 +173,11 @@ def _extension(ds: OssieDataset) -> tuple[dict, list[str]]:
     if len(entries) > 1:
         return {}, [f"{where} appears {len(entries)} times in custom_extensions; keep one"]
     try:
-        data = json.loads(entries[0].data)
+        data = json.loads(entries[0].data, object_pairs_hook=_pairs)
     except json.JSONDecodeError as e:
         return {}, [f"{where}: data is not JSON ({e.msg})"]
+    except ValueError as e:  # a repeated key, from _pairs
+        return {}, [f"{where}: {e}"]
     if not isinstance(data, dict):
         return {}, [f"{where}: data must be a JSON object, got {json.dumps(data)}"]
     known = ", ".join(_EXTENSION_KEYS)
@@ -187,6 +189,16 @@ def _extension(ds: OssieDataset) -> tuple[dict, list[str]]:
             choices = " or ".join(json.dumps(v) for v in values)
             problems.append(f"{where}: {key!r} must be {choices}, got {json.dumps(data[key])}")
     return ({}, problems) if problems else (data, [])
+
+
+def _pairs(pairs: list[tuple[str, object]]) -> dict:
+    """dict(pairs), refusing a repeated key: json.loads would keep the last one silently."""
+    seen: set[str] = set()
+    for k, _ in pairs:
+        if k in seen:
+            raise ValueError(f"key {k!r} is repeated; keep one")
+        seen.add(k)
+    return dict(pairs)
 
 
 def _dialect_check(what: str, dialects) -> list[str]:

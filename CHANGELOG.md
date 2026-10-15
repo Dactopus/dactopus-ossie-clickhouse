@@ -22,7 +22,8 @@ a minor release may change the Python API.
   `{"dedup": null}`) used to change silently whether a dataset was read
   with `FINAL`; text that is not a JSON object failed later with a Python
   error that named no dataset. Now each is a model problem naming the
-  dataset and the allowed values. So are a second entry on one dataset,
+  dataset and the allowed values. So are a key written twice in the
+  object, where the last one used to win, a second entry on one dataset,
   which used to be ignored, and an entry on the model, a field, a metric
   or a relationship, which nothing reads.
 

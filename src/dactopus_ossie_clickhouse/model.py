@@ -52,18 +52,23 @@ def load_model(*paths: str | Path) -> OssieDocument:
     if not paths:
         raise TypeError("load_model() needs at least one path")
     paths = tuple(dict.fromkeys(map(Path, paths)))  # a path given twice is read once
-    docs: list[OssieDocument] = []
+    read: list[tuple[Path, OssieDocument]] = []
     problems: list[str] = []
     for path in paths:
+        label = f"{path}: " if len(paths) > 1 else ""
         try:
-            docs.append(_read(path, f"{path}: " if len(paths) > 1 else ""))
+            doc = _read(path, label)
         except ModelError as e:
             problems += e.problems
-    problems = problems or _clashes(paths, docs)
-    if problems:
-        raise ModelError(problems)
-    doc = _combine(docs)
-    problems = check_model(doc)
+            continue
+        read.append((path, doc))
+        problems += [label + p for p in _check_file(doc)]
+    clashes = _clashes(read)
+    if clashes or len(read) < len(paths):
+        # The whole is not defined: a file is missing, or a name means two things.
+        raise ModelError(problems + clashes)
+    doc = _combine([d for _, d in read])
+    problems += _check_whole(doc)
     if problems:
         raise ModelError(problems)
     return doc
@@ -90,17 +95,13 @@ def _read(path: Path, label: str) -> OssieDocument:
         raise ModelError([label + str(e)]) from e
 
 
-def _clashes(paths: tuple[Path, ...], docs: list[OssieDocument]) -> list[str]:
+def _clashes(read: list[tuple[Path, OssieDocument]]) -> list[str]:
     """Names defined in two files. Merging same-named objects is not supported."""
     problems: list[str] = []
-    for kind, attr in (
-        ("dataset", "datasets"),
-        ("metric", "metrics"),
-        ("relationship", "relationships"),
-    ):
+    for kind, attr in _NAMED:
         first: dict[str, tuple[str, Path]] = {}
-        for path, doc in zip(paths, docs, strict=True):
-            # Names resolve case-insensitively; a repeat within one file is check_model's.
+        for path, doc in read:
+            # Names resolve case-insensitively; a repeat within one file is _check_file's.
             names: dict[str, str] = {}
             for o in getattr(doc, attr) or []:
                 names.setdefault(o.name.upper(), o.name)
@@ -153,8 +154,16 @@ def _instructions(ai) -> str | None:
     return ai.instructions if isinstance(ai, OssieAIContextObject) else ai
 
 
+_NAMED = (("dataset", "datasets"), ("metric", "metrics"), ("relationship", "relationships"))
+
+
 def check_model(doc: OssieDocument) -> list[str]:
     """Semantic checks beyond the schema. Returns human-readable problems."""
+    return _check_file(doc) + _check_whole(doc)
+
+
+def _check_file(doc: OssieDocument) -> list[str]:
+    """What holds for one file on its own, so load_model can name the file."""
     problems: list[str] = []
     # The SDK admits only its schema's version, so this holds unless it widens
     # the field again; test_model.py checks the two constants agree.
@@ -162,11 +171,17 @@ def check_model(doc: OssieDocument) -> list[str]:
         problems.append(
             f"unsupported version {doc.version!r}; this build supports {SUPPORTED_VERSION!r}"
         )
+    for kind, attr in _NAMED:
+        problems += _duplicates(kind, [o.name for o in getattr(doc, attr) or []])
+    if _entries(doc):  # nothing reads it there; see _check_whole
+        problems.append(f"model: a {VENDOR} entry in custom_extensions is read on datasets only")
+    return problems
 
+
+def _check_whole(doc: OssieDocument) -> list[str]:
+    """What needs every file: references resolve across them."""
+    problems: list[str] = []
     datasets = {d.name: d for d in doc.datasets}
-    problems += _duplicates("dataset", [d.name for d in doc.datasets])
-    problems += _duplicates("metric", [m.name for m in doc.metrics or []])
-    problems += _duplicates("relationship", [r.name for r in doc.relationships or []])
 
     # Keys and relationship columns are physical column names per the spec, not
     # field names, so their existence can only be checked against the database.
@@ -192,7 +207,6 @@ def check_model(doc: OssieDocument) -> list[str]:
 
     # Nothing reads an entry anywhere else; its author expects an effect that never comes.
     elsewhere = [
-        ("model", doc),
         *((f"field {d.name}.{f.name}", f) for d in doc.datasets for f in d.fields or []),
         *((f"metric {m.name!r}", m) for m in doc.metrics or []),
         *((f"relationship {r.name!r}", r) for r in doc.relationships or []),

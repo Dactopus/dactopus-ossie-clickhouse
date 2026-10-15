@@ -11,9 +11,11 @@ a minor release may change the Python API.
 
 - Every command takes several model files, read as one model: one file
   per subject area can be served by one MCP server (#32). Each file is
-  checked against the schema on its own, names and references on the
-  whole, so a relationship may join datasets of two files. A name defined
-  in two files is an error naming both. The root name and description
+  checked on its own for the schema, its version, repeated names and a
+  misplaced CLICKHOUSE entry, with the problem named after the file;
+  references are checked on the whole, so a relationship may join
+  datasets of two files. A name defined in two files is an error naming
+  both. The root name and description
   come from the first file; every file's root `ai_context` is kept:
   instructions joined, synonyms and examples united. `load_model` takes
   the paths as arguments.

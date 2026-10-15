@@ -279,6 +279,35 @@ def test_same_file_twice_is_read_once(tmp_path, tpcds):
     assert len(load_model(a, a).datasets) == 5
 
 
+def test_file_problems_reported_with_the_clashes(tmp_path, tpcds):
+    # What one file breaks on its own is named with the file and reported in the same run
+    # as a clash between files; the checks on the whole wait, since the whole is undefined.
+    sales, rest = split(tpcds)
+    rest["metrics"].append(copy.deepcopy(rest["metrics"][0]))
+    rest["metrics"].append(copy.deepcopy(sales["metrics"][0]))
+    rest["custom_extensions"] = [_clickhouse('{"dedup": "none"}')]
+    a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
+    with pytest.raises(ModelError) as e:
+        load_model(a, b)
+    assert e.value.problems == [
+        f"{b}: duplicate metric name {rest['metrics'][0]['name']!r}",
+        f"{b}: model: a CLICKHOUSE entry in custom_extensions is read on datasets only",
+        f"metric 'total_sales' is defined in both {a} and {b}",
+    ]
+    # Without a clash, the whole is checked in the same run as the files.
+    rest["metrics"].pop()
+    rel = rest["relationships"][0]
+    rel["to"] = "nowhere"
+    write(tmp_path, rest, "b.yaml")
+    with pytest.raises(ModelError) as e:
+        load_model(a, b)
+    assert e.value.problems == [
+        f"{b}: duplicate metric name {rest['metrics'][0]['name']!r}",
+        f"{b}: model: a CLICKHOUSE entry in custom_extensions is read on datasets only",
+        f"relationship {rel['name']!r}: to dataset 'nowhere' does not exist",
+    ]
+
+
 def test_name_defined_in_two_files(tmp_path, tpcds):
     sales, rest = split(tpcds)
     rest["metrics"].append(copy.deepcopy(sales["metrics"][0]))

@@ -8,7 +8,8 @@ import pytest
 
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.cli import main
-from dactopus_ossie_clickhouse.executor import Executor, overrides
+from dactopus_ossie_clickhouse.executor import Executor
+from dactopus_ossie_clickhouse.model import overrides
 from dactopus_ossie_clickhouse.planner import PlanError, Query
 from tests.conftest import FakeClickHouse
 

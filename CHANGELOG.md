@@ -14,8 +14,15 @@ a minor release may change the Python API.
   checked against the schema on its own, names and references on the
   whole, so a relationship may join datasets of two files. A name defined
   in two files is an error naming both. The root name and description
-  come from the first file; every file's instructions are kept.
-  `load_model` takes the paths as arguments.
+  come from the first file; every file's root `ai_context` is kept:
+  instructions joined, synonyms and examples united. `load_model` takes
+  the paths as arguments.
+
+### Fixed
+
+- A dataset, metric or relationship name repeated in another case
+  (`Revenue` and `revenue`) is reported as a duplicate. Names resolve
+  case-insensitively, so one of the two was silently unreachable.
 
 ### Changed
 

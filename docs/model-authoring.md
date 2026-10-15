@@ -272,10 +272,12 @@ Ossie has no way to split a model, so each file is a complete document
 read as their union. Each is checked against the schema on its own;
 names and references are checked on the whole, so a relationship between
 two areas goes in either file. A dataset, metric or relationship name
-defined in two files is an error naming both: two metrics called
-`revenue` that compute different things must be renamed, not merged. The
-model's `name` and `description` come from the first file, and every
-file's `ai_context.instructions` reach agents, in file order.
+defined in two files is an error naming both (`Revenue` and `revenue`
+are one name, as everywhere in Ossie): two metrics called `revenue` that
+compute different things must be renamed, not merged. The model's `name`
+and `description` come from the first file; every file's root `ai_context`
+reaches agents: instructions joined in file order, synonyms and examples
+united. A file given twice is read once.
 
 ## Descriptions and AI hints
 

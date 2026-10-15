@@ -117,6 +117,11 @@ def test_duplicates(tmp_path, tpcds):
     assert any("duplicate metric name 'total_profit'" in p for p in ps)
 
 
+def test_duplicate_in_another_case(tmp_path, tpcds):
+    tpcds["metrics"].append(copy.deepcopy(tpcds["metrics"][0]) | {"name": "TOTAL_SALES"})
+    assert "duplicate metric name 'TOTAL_SALES'" in problems_of(tmp_path, tpcds)
+
+
 def test_all_problems_reported_at_once(tmp_path, tpcds):
     tpcds["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
     tpcds["relationships"][0]["to"] = "nowhere"
@@ -244,6 +249,34 @@ def test_root_from_the_first_file_and_instructions_from_all(tmp_path, tpcds):
     del sales["ai_context"]
     doc = load_model(write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml"))
     assert doc.ai_context == "Stores are physical shops."
+
+
+def test_root_synonyms_and_examples_from_all_files(tmp_path, tpcds):
+    # list_model and search_model serve the root's synonyms, so no file's may be lost.
+    sales, rest = split(tpcds)
+    sales["ai_context"] = {"synonyms": ["retail", "sales"], "examples": ["sales by year"]}
+    rest["ai_context"] = {"instructions": "Stores are physical shops.", "synonyms": ["shops"]}
+    doc = load_model(write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml"))
+    assert doc.ai_context.instructions == "Stores are physical shops."
+    assert doc.ai_context.synonyms == ("retail", "sales", "shops")
+    assert doc.ai_context.examples == ("sales by year",)
+
+
+def test_name_defined_in_two_files_in_another_case(tmp_path, tpcds):
+    # Names resolve case-insensitively, so 'Total_Sales' is the metric 'total_sales'.
+    sales, rest = split(tpcds)
+    rest["metrics"].append(copy.deepcopy(sales["metrics"][0]) | {"name": "Total_Sales"})
+    a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
+    with pytest.raises(ModelError) as e:
+        load_model(a, b)
+    assert e.value.problems == [
+        f"metric 'Total_Sales' is defined in both {a} (as 'total_sales') and {b}"
+    ]
+
+
+def test_same_file_twice_is_read_once(tmp_path, tpcds):
+    a = write(tmp_path, tpcds, "a.yaml")
+    assert len(load_model(a, a).datasets) == 5
 
 
 def test_name_defined_in_two_files(tmp_path, tpcds):

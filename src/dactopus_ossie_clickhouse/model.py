@@ -45,12 +45,13 @@ def load_model(*paths: str | Path) -> OssieDocument:
     here as a union: each file is checked against the schema on its own, and
     names and references on the whole, so a relationship may join datasets of
     two files. A name defined in two files is an error. The root's name and
-    description come from the first file; every file's root instructions are
-    kept, in file order. Raises ``ModelError``.
+    description come from the first file; every file's root ``ai_context`` is
+    kept: instructions joined in file order, synonyms and examples united.
+    Raises ``ModelError``.
     """
     if not paths:
         raise TypeError("load_model() needs at least one path")
-    paths = tuple(map(Path, paths))
+    paths = tuple(dict.fromkeys(map(Path, paths)))  # a path given twice is read once
     docs: list[OssieDocument] = []
     problems: list[str] = []
     for path in paths:
@@ -97,13 +98,19 @@ def _clashes(paths: tuple[Path, ...], docs: list[OssieDocument]) -> list[str]:
         ("metric", "metrics"),
         ("relationship", "relationships"),
     ):
-        first: dict[str, Path] = {}
+        first: dict[str, tuple[str, Path]] = {}
         for path, doc in zip(paths, docs, strict=True):
-            for name in dict.fromkeys(o.name for o in getattr(doc, attr) or []):
-                if name in first:
-                    problems.append(f"{kind} {name!r} is defined in both {first[name]} and {path}")
-                else:
-                    first[name] = path
+            # Names resolve case-insensitively; a repeat within one file is check_model's.
+            names: dict[str, str] = {}
+            for o in getattr(doc, attr) or []:
+                names.setdefault(o.name.upper(), o.name)
+            for key, name in names.items():
+                if key not in first:
+                    first[key] = (name, path)
+                    continue
+                spelled, where = first[key]
+                also = f" (as {spelled!r})" if spelled != name else ""
+                problems.append(f"{kind} {name!r} is defined in both {where}{also} and {path}")
     return problems
 
 
@@ -114,23 +121,31 @@ def _combine(docs: list[OssieDocument]) -> OssieDocument:
     def union(attr: str) -> list | None:
         return [o for d in docs for o in getattr(d, attr) or []] or None
 
-    ai = docs[0].ai_context
-    texts = [t for d in docs if (t := _instructions(d.ai_context))]
-    if len(texts) > 1 or (texts and not _instructions(ai)):
-        joined = "\n\n".join(texts)
-        ai = (
-            ai.model_copy(update={"instructions": joined})
-            if isinstance(ai, OssieAIContextObject)
-            else joined
-        )
     return docs[0].model_copy(
         update={
             "datasets": union("datasets"),
             "relationships": union("relationships"),
             "metrics": union("metrics"),
             "custom_extensions": union("custom_extensions"),
-            "ai_context": ai,
+            "ai_context": _ai_context(docs),
         }
+    )
+
+
+def _ai_context(docs: list[OssieDocument]) -> str | OssieAIContextObject | None:
+    """Every file's root ``ai_context`` as one: instructions joined in file order,
+    synonyms and examples united. A string when no file has the object form."""
+    objects = [d.ai_context for d in docs if isinstance(d.ai_context, OssieAIContextObject)]
+    texts = [t for d in docs if (t := _instructions(d.ai_context))]
+    joined = "\n\n".join(texts) or None
+    if not objects:
+        return joined
+
+    def united(attr: str) -> tuple[str, ...] | None:
+        return tuple(dict.fromkeys(v for o in objects for v in getattr(o, attr) or ())) or None
+
+    return OssieAIContextObject(
+        instructions=joined, synonyms=united("synonyms"), examples=united("examples")
     )
 
 
@@ -236,8 +251,11 @@ def join_problems(doc: OssieDocument) -> list[str]:
 
 
 def _duplicates(kind: str, names: list[str]) -> list[str]:
+    """Names that repeat, compared case-insensitively: that is how they resolve."""
     seen: set[str] = set()
-    return [f"duplicate {kind} name {n!r}" for n in names if n in seen or seen.add(n)]
+    return [
+        f"duplicate {kind} name {n!r}" for n in names if n.upper() in seen or seen.add(n.upper())
+    ]
 
 
 def _entries(node) -> list:

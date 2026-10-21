@@ -732,15 +732,17 @@ def test_server_aggregates_outside_the_spec_are_checked_as_aggregates(catalog):
     assert "HAVING countIf(store_sales.ss_quantity > 1) > 5" in sql and "WHERE" not in sql
 
 
-def test_the_server_names_aggregates_sqlglot_does_not_know():
-    """A user-defined or newer aggregate is one only on the server's word."""
+@pytest.mark.parametrize("name", ["myAgg", "medianExact"])
+def test_the_server_names_aggregates_sqlglot_does_not_know(name):
+    """An aggregate SQLGlot's list lacks, user-defined or built in, is one only
+    on the server's word."""
     planner = _with_metrics(
-        per_store="SUM(store_sales.ss_ext_sales_price) / myAgg(store.s_store_sk)"
+        per_store=f"SUM(store_sales.ss_ext_sales_price) / {name}(store.s_store_sk)"
     )
     query = Query(metrics=("per_store",))
-    assert "myAgg(store.s_store_sk)" in planner.sql(query)
-    planner.catalog = Catalog(aggregate=lambda name: name == "myAgg")
-    with pytest.raises(PlanError, match=r"applies myAgg\(store.s_store_sk\)"):
+    assert f"{name}(store.s_store_sk)" in planner.sql(query)
+    planner.catalog = Catalog(aggregate=lambda n: n == name)
+    with pytest.raises(PlanError, match=rf"applies {name}\(store.s_store_sk\)"):
         planner.sql(query)
 
 

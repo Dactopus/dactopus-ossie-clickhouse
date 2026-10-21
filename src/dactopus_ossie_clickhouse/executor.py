@@ -358,8 +358,8 @@ class Executor:
             problems.append(
                 "system.functions cannot be read: functions outside the spec are not "
                 "checked, and an aggregate among them that SQLGlot's list of ClickHouse "
-                "aggregates lacks (a user-defined one) is planned as a plain function, "
-                "so nothing refuses it over joined rows that repeat"
+                "aggregates lacks (medianExact, a user-defined one) is planned as a plain "
+                "function, so nothing refuses it over joined rows that repeat"
             )
         return problems
 

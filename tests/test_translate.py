@@ -2,7 +2,11 @@ import pytest
 from ossie import OssieDialect, OssieDialectExpression, OssieExpression
 
 from dactopus_ossie_clickhouse.translate import (
+    _CATALOG,
+    _SIGNATURES,
     convert_format,
+    parse,
+    passthrough_functions,
     pick_expression,
     to_clickhouse,
     translate,
@@ -98,7 +102,15 @@ def test_translate_uses_picked_dialect():
         # date/time
         ("CURRENT_TIME", "toTime(now())"),
         ("DAYOFYEAR(d)", "toDayOfYear(d)"),
-        ("DAYOFMONTH(d)", "toDayOfMonth(d)"),
+        # outside the spec: as written, for ClickHouse to resolve (docs/design.md)
+        ("DAYOFMONTH(d)", "DAYOFMONTH(d)"),
+        ("DayOfWeek(d)", "DayOfWeek(d)"),
+        ("COUNT_IF(x > 1)", "COUNT_IF(x > 1)"),
+        ("ARG_MAX(x, s)", "ARG_MAX(x, s)"),
+        ("DECODE(x, 1, 'a')", "DECODE(x, 1, 'a')"),
+        # the spec's aliases still translate
+        ("NVL(x, 0)", "COALESCE(x, 0)"),
+        ("CEILING(x)", "CEIL(x)"),
         ("EXTRACT(DAYOFWEEK FROM d)", "toDayOfWeek(d)"),
         ("EXTRACT(DAYOFYEAR FROM d)", "toDayOfYear(d)"),
         ("TO_DATE('2024-01-15')", "toDate('2024-01-15')"),
@@ -131,6 +143,12 @@ def test_translate_uses_picked_dialect():
 )
 def test_to_clickhouse(ossie, expected):
     assert to_clickhouse(ossie) == expected
+
+
+def test_passthrough_functions_are_the_names_outside_the_catalog():
+    tree = parse("DAYOFWEEK(TO_DATE(s)) + sumIf(x, ZEROIFNULL(y) > 0) + NVL(x, 0)")
+    assert passthrough_functions(tree) == {"DAYOFWEEK", "sumIf"}
+    assert set(_SIGNATURES) <= _CATALOG
 
 
 def test_convert_format_tokens():

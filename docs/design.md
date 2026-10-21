@@ -30,6 +30,40 @@ depended on: it parses and validates the spec's SQL, but the mapping to
 ClickHouse stays this project's work either way. Switch parsing to it once
 it merges; the rewrite layer is unchanged.
 
+## Functions outside the spec pass through as written
+
+`parse()` gives SQLGlot's typed nodes to the spec's function catalog only
+(`_CATALOG` in `translate.py`, the tables of `expression_language.md`);
+any other function name parses as `exp.Anonymous` and prints as written.
+SQLGlot's default dialect knows the functions of many engines, and its
+ClickHouse generator renames 135 of them (counted on SQLGlot 30.23):
+`DAYOFWEEK(d)` became `DAY_OF_WEEK(d)` and `BOOL_AND(x)` became
+`LOGICAL_AND(x)`, neither of which ClickHouse 26.9 has, though it accepts
+`DAYOFWEEK` itself as a case-insensitive alias of `toDayOfWeek`. The
+query failed and `validate` said nothing (#35). The spec's own rule for
+what it does not define is to pass it through ("Dialect Extensions"),
+and a name sent as written is what the author can look up in
+ClickHouse's documentation.
+
+The cost is SQLGlot's translation of other engines' spellings: `ARG_MAX`,
+`COUNT_IF`, `LEN` no longer become `argMax`, `countIf`, `CHAR_LENGTH`.
+The spec's aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`, `CHARINDEX`)
+are in the catalog and still translate. `ANY_VALUE`, `BOOL_AND` and
+`BOOL_OR` left the planner's list of aggregates that may read a joined
+dataset on their own: they are not the spec's, `BOOL_AND` and `BOOL_OR`
+never ran, and `ANY_VALUE` runs as ClickHouse's alias of `any` but as a
+function the planner does not inspect.
+
+Whether a pass-through function exists only the server can say.
+`Executor` reads `system.functions`, which lists user-defined functions
+too, and matches a name as ClickHouse does: as written, or in any case
+when the server marks it case-insensitive, and for an aggregate with
+combinators after it, each as written (`sumIf` and `uniqExactOrNull`
+resolve, `SUMIF` does not; `countIf` is not listed, `count` and the `If`
+combinator are). A field or metric calling a function the server lacks
+is hidden like one that does not translate and reported by `validate
+--url` with the nearest names. Without a server nothing checks it.
+
 ## SQLGlot bounds move only in minor releases
 
 Some rewrites in `translate.py` cover gaps in SQLGlot's ClickHouse
@@ -252,10 +286,10 @@ The planner refuses both after it picks the root, on the rewritten tree
 (`APPROX_PERCENTILE` is an aggregate only after rewrite):
 
 - An aggregate whose argument reads joined datasets and no root column is
-  refused unless repeats cannot change it (`MIN`, `MAX`, `ANY_VALUE`,
-  `BOOL_AND`, `BOOL_OR`, `DISTINCT`, `APPROX_COUNT_DISTINCT`), or every
-  dataset it reads is joined on a key of the root: a one-to-one extension
-  table, whose rows a root row references at most once.
+  refused unless repeats cannot change it (`MIN`, `MAX`, `DISTINCT`,
+  `APPROX_COUNT_DISTINCT`), or every dataset it reads is joined on a key
+  of the root: a one-to-one extension table, whose rows a root row
+  references at most once.
   Everything else, percentiles included, counts as repeat-sensitive. A
   mixed argument such as `SUM(qty * price)` is one value per root row and
   passes; `SUM(CASE WHEN root.x THEN joined.y END)` passes too, though it

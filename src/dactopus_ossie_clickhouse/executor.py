@@ -8,6 +8,7 @@ Learns what it needs from the server (`system.tables`, `system.columns`,
 from __future__ import annotations
 
 import datetime as dt
+import difflib
 import math
 import os
 import re
@@ -28,7 +29,12 @@ from dactopus_ossie_clickhouse.planner import (
     source_table,
     unanswerable_metrics,
 )
-from dactopus_ossie_clickhouse.translate import parse, pick_expression, untranslatable
+from dactopus_ossie_clickhouse.translate import (
+    parse,
+    passthrough_functions,
+    pick_expression,
+    untranslatable,
+)
 
 DEFAULT_URL = "http://127.0.0.1:8123"
 TABLES = "SELECT database, name, engine, engine_full FROM system.tables"
@@ -62,6 +68,45 @@ class Result:
         ]
 
 
+class ServerFunctions:
+    """What system.functions says the server has, matched as ClickHouse matches
+    a call: the name as written, or in any case when the server marks it
+    case-insensitive (DAYOFWEEK, any_value), and for an aggregate with any
+    combinators after it, each as written: sumIf and uniqExactOrNull, not SUMIF.
+    User-defined functions are listed too."""
+
+    def __init__(self, rows: list[tuple], combinators: list[str]):
+        self.names = {name for name, _, _ in rows}
+        self.folded = {name.lower() for name, insensitive, _ in rows if insensitive}
+        self.aggregates = {name for name, _, aggregate in rows if aggregate}
+        self.folded_aggregates = {
+            name.lower() for name, insensitive, aggregate in rows if insensitive and aggregate
+        }
+        self.combinators = sorted(combinators, key=len, reverse=True)
+
+    def has(self, name: str, aggregate: bool = False) -> bool:
+        names, folded = (
+            (self.aggregates, self.folded_aggregates) if aggregate else (self.names, self.folded)
+        )
+        if name in names or name.lower() in folded:
+            return True
+        return any(
+            len(name) > len(c) and name.endswith(c) and self.has(name[: -len(c)], aggregate=True)
+            for c in self.combinators
+        )
+
+    def problem(self, tree: exp.Expression) -> str | None:
+        """Why a parsed expression cannot run here: the first function it calls
+        that the server lacks, with the nearest names it has."""
+        for name in sorted(passthrough_functions(tree)):
+            if not self.has(name):
+                by_lower = {n.lower(): n for n in sorted(self.names)}
+                close = difflib.get_close_matches(name.lower(), by_lower, n=3, cutoff=0.6)
+                hint = f" (did you mean: {', '.join(by_lower[c] for c in close)}?)" if close else ""
+                return f"calls {name}(), a function this ClickHouse server does not have{hint}"
+        return None
+
+
 class Executor:
     """Runs as whoever the client is connected as; sees only what that user may read."""
 
@@ -75,6 +120,7 @@ class Executor:
             "SELECT currentUser(), enabledRoles(), currentDatabase()"
         ).result_rows[0]
         self.catalog = self.introspect()
+        self._hide_unknown_functions()
         # The databases the model reads, not the connection's: no credentials, and
         # not joined to the URL, whose path may be a proxy's.
         self.location = f"{self.client.url} (database {', '.join(self.databases) or self.database})"
@@ -118,6 +164,34 @@ class Executor:
         for f in ds.fields or []:
             if f"{ds.name}.{f.name}" not in self.untranslatable_fields:
                 yield f, parse(pick_expression(f.expression))
+
+    def _hide_unknown_functions(self) -> None:
+        """A field or metric calling a function this server does not have is
+        hidden like one that does not translate, and reported the same way.
+
+        Functions outside the spec reach ClickHouse as written (translate.py),
+        so only the server can say whether they exist. Without system.functions
+        (not readable, or an empty answer) nothing is checked."""
+        try:
+            rows = self.client.query(
+                "SELECT name, case_insensitive, is_aggregate FROM system.functions"
+            ).result_rows
+            combinators = self.client.query(
+                "SELECT name FROM system.aggregate_function_combinators"
+            ).result_rows
+        except Exception:
+            return
+        if not rows:
+            return
+        functions = ServerFunctions(rows, [c for (c,) in combinators])
+        for ds in self.full_model.datasets:
+            for f, tree in list(self._parsed_fields(ds)):
+                if problem := functions.problem(tree):
+                    self.untranslatable_fields[f"{ds.name}.{f.name}"] = problem
+        for m in self.full_model.metrics or []:
+            if m.name not in self.untranslatable_metrics:
+                if problem := functions.problem(parse(pick_expression(m.expression))):
+                    self.untranslatable_metrics[m.name] = problem
 
     # --- introspection ------------------------------------------------------
 

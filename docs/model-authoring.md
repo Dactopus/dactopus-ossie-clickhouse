@@ -74,8 +74,8 @@ dataset appears once per root row that references it, and only if one
 does. The planner refuses what that would get wrong:
 
 - An aggregate that reads only joined datasets, unless repeats do not
-  change it: `MIN`, `MAX`, `ANY_VALUE`, `BOOL_AND`, `BOOL_OR`,
-  `APPROX_COUNT_DISTINCT` or `DISTINCT`. `SUM(store.s_number_employees)`
+  change it: `MIN`, `MAX`, `APPROX_COUNT_DISTINCT` or `DISTINCT`.
+  `SUM(store.s_number_employees)`
   over sales would count a store's staff once per sale. An argument that
   mixes root and joined columns is computed once per root row and is fine:
   `SUM(lines.qty * products.price)`. So is a dataset joined on a key of
@@ -115,6 +115,16 @@ tree; `EXTRACT(DAYOFWEEK ...)` and `DAYOFYEAR` become `toDayOfWeek` and
 float division by zero and a one-row `STDDEV` come back as NULL, not
 `inf` or `nan`.
 Subqueries and statements inside an expression are rejected.
+
+A function outside the catalog is sent to ClickHouse as written, with
+ClickHouse's own meaning: `toString(x)`, `DAYOFWEEK(d)`, an aggregate
+with combinators such as `sumIf(x, c)`, a user-defined function. Nothing
+checks such a call before the query runs, except `validate --url`, which
+hides and reports a field or metric calling a function the server does
+not have, matched as ClickHouse matches it (`sumIf`, not `SUMIF`). The
+planner does not know such an aggregate is one: it cannot refuse it over
+repeated rows (below), and a filter made of it goes to `WHERE`, where
+ClickHouse rejects it.
 
 `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec requires, and hold
 every value of the group in memory; `APPROX_PERCENTILE` is the fast

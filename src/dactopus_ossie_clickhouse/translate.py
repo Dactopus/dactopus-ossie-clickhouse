@@ -1,9 +1,10 @@
 """Translate Ossie expressions to ClickHouse SQL.
 
 Parsing uses SQLGlot's default (ANSI-like) dialect plus the few spec shapes
-it gets wrong. Generation uses SQLGlot's ClickHouse dialect after rewriting
-the spec functions ClickHouse lacks. Every rewrite works on the AST, never on
-SQL text.
+it gets wrong, typing only the spec's function catalog; any other function
+reaches ClickHouse as written. Generation uses SQLGlot's ClickHouse dialect
+after rewriting the spec functions ClickHouse lacks. Every rewrite works on
+the AST, never on SQL text.
 """
 
 from __future__ import annotations
@@ -72,6 +73,41 @@ _DATE_PARTS = {
     "HOUR", "MINUTE", "SECOND", "MILLISECOND",
 }  # fmt: skip
 
+# The spec's function catalog (core-spec/expression_language.md, "Aggregation
+# Functions" through "Type Conversion Functions"): the names parse() gives
+# SQLGlot's typed nodes, which a rewrite here or SQLGlot's ClickHouse generator
+# translates. Any other function reaches ClickHouse as written, the spec's
+# default for what it does not define ("Dialect Extensions"): SQLGlot knows
+# many functions of other engines and would rename them, DAYOFWEEK(d) to
+# DAY_OF_WEEK(d), which ClickHouse lacks, though it has DAYOFWEEK itself
+# (docs/design.md).
+_CATALOG = frozenset({
+    # aggregates
+    "SUM", "COUNT", "AVG", "MIN", "MAX", "STDDEV", "STDDEV_POP", "STDDEV_SAMP",
+    "VARIANCE", "VAR_POP", "VAR_SAMP", "MEDIAN", "PERCENTILE_CONT", "PERCENTILE_DISC",
+    "APPROX_COUNT_DISTINCT", "APPROX_PERCENTILE",
+    # date and time
+    "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "YEAR", "QUARTER", "MONTH",
+    "DAY", "DAYOFYEAR", "HOUR", "MINUTE", "SECOND", "EXTRACT", "DATE_PART", "DATE_TRUNC",
+    "DATEADD", "DATEDIFF", "TO_DATE", "TO_TIMESTAMP", "TO_CHAR",
+    # strings
+    "CONCAT", "LENGTH", "LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "LEFT", "RIGHT",
+    "SUBSTRING", "REPLACE", "SPLIT_PART", "POSITION", "CHARINDEX", "CONTAINS",
+    "STARTSWITH", "ENDSWITH", "REGEXP_LIKE", "REGEXP_EXTRACT", "REGEXP_REPLACE",
+    "REGEXP_COUNT",
+    # math
+    "ABS", "ROUND", "FLOOR", "CEIL", "CEILING", "TRUNC", "TRUNCATE", "MOD", "SIGN",
+    "POWER", "SQRT", "EXP", "LN", "LOG", "LOG10", "SIN", "COS", "TAN", "ASIN", "ACOS",
+    "ATAN", "ATAN2", "RADIANS", "DEGREES", "PI", "GREATEST", "LEAST",
+    # conditionals
+    "IF", "IFF", "NULLIF", "COALESCE", "IFNULL", "NVL", "NVL2", "ZEROIFNULL", "NULLIFZERO",
+    # windows
+    "ROW_NUMBER", "RANK", "DENSE_RANK", "NTILE", "PERCENT_RANK", "CUME_DIST", "LAG",
+    "LEAD", "FIRST_VALUE", "LAST_VALUE", "NTH_VALUE",
+    # type conversion
+    "CAST", "TRY_CAST",
+})  # fmt: skip
+
 
 def _date_delta(cls):
     """Spec puts the date part first: DATEADD(day, 7, d), DATEDIFF(day, d1, d2)."""
@@ -115,9 +151,15 @@ _BUILDERS = {
 
 
 class _OssieParser(Parser):
+    # Only the catalog's functions get SQLGlot's typed nodes; any other name
+    # parses as exp.Anonymous and prints as written. FUNCTION_PARSERS holds the
+    # special syntaxes (CAST, EXTRACT, TRIM, SUBSTRING ... FROM, POSITION ... IN).
     FUNCTIONS = {
-        **Parser.FUNCTIONS,
+        **{name: Parser.FUNCTIONS[name] for name in _CATALOG if name in Parser.FUNCTIONS},
         **{name: _checked(name, _BUILDERS.get(name)) for name in _SIGNATURES},
+    }
+    FUNCTION_PARSERS = {
+        name: parser for name, parser in Parser.FUNCTION_PARSERS.items() if name in _CATALOG
     }
 
     def _parse_ordered(self, parse_method=None):
@@ -237,6 +279,14 @@ def parse(expression: str) -> exp.Expression:
         if problem := _shape_problem(node):
             raise ValueError(f"{problem}: {expression!r}")
     return tree
+
+
+def passthrough_functions(tree: exp.Expression) -> set[str]:
+    """Function names in a tree from parse() that are not the spec's.
+
+    They reach ClickHouse as written, so only the server can say whether they
+    exist (Executor checks them against system.functions)."""
+    return {f.name for f in tree.find_all(exp.Anonymous) if f.name.upper() not in _CATALOG}
 
 
 # --- ClickHouse rewrites ----------------------------------------------------

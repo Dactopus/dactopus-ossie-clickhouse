@@ -763,13 +763,14 @@ class Planner:
                 )
         group: dict[str, list[str]] = {}  # M -> labels of its filters
         far_datasets = set().union(*(touched[label] for label in far))
+        reach = {d: self._reachable(d) for d in far_datasets}
         tops = [
             d
             for d in sorted(far_datasets)
-            if not any(d != u and d in self._reachable(u) for u in far_datasets)
+            if not any(d != u and d in reach[u] for u in far_datasets)
         ]
         for label in far:
-            owners = [t for t in tops if touched[label] <= self._reachable(t)]
+            owners = [t for t in tops if touched[label] <= reach[t]]
             if not owners:
                 raise PlanError(
                     f"{label} reads {' and '.join(sorted(touched[label]))} in one expression, "
@@ -784,7 +785,7 @@ class Planner:
             group.setdefault(owners[0], []).append(label)
         semi_joins = []
         for top, labels in group.items():
-            if root.name not in self._reachable(top):
+            if root.name not in reach[top]:
                 via = sorted(
                     d.name
                     for d in self.model.datasets

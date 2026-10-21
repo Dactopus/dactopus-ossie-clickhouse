@@ -178,7 +178,9 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
   lacks). The executor checks those names against `system.functions`,
   combinators included, and hides a field or metric calling one the
   server lacks; `validate --url` reports it. `Catalog.aggregate` tells
-  the planner which of them are aggregates; `Planner._parse` types those
+  the planner which of them are aggregates, SQLGlot's list of ClickHouse
+  aggregates when there is no server's word
+  (`_known_clickhouse_aggregate`); `Planner._parse` types those
   as `exp.AnonymousAggFunc`, so every `exp.AggFunc` check covers them.
   Which ClickHouse aggregates repeats cannot change is a list in the
   planner (`_CLICKHOUSE_REPEAT_SAFE`), checked on the server; their value

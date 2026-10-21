@@ -467,8 +467,8 @@ def test_a_server_without_a_function_list_is_reported(ex, monkeypatch):
     assert other.check() == [
         "system.functions cannot be read: functions outside the spec are not checked, "
         "and an aggregate among them that SQLGlot's list of ClickHouse aggregates lacks "
-        "(a user-defined one) is planned as a plain function, so nothing refuses it over "
-        "joined rows that repeat"
+        "(medianExact, a user-defined one) is planned as a plain function, so nothing "
+        "refuses it over joined rows that repeat"
     ]
 
 

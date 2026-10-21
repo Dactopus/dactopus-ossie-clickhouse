@@ -67,8 +67,8 @@ class Catalog(dict[str, TableInfo]):
 def _known_clickhouse_aggregate(name: str) -> bool:
     """Whether SQLGlot's list of ClickHouse aggregates has ``name`` as ClickHouse
     spells it, with any combinators after it (countIf, uniqExactOrNull). For a
-    planner without the server's word: a user-defined aggregate or one newer
-    than the list stays a plain call."""
+    planner without the server's word. The list lacks about half of them
+    (medianExact, group_concat, any user-defined one); those stay plain calls."""
     if name in ClickHouse.Parser.AGG_FUNCTIONS:
         return True
     return any(

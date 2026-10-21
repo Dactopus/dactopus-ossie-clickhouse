@@ -75,8 +75,10 @@ server's word (the `sql` command without `--url`, or a server whose
 `system.functions` cannot be read) the planner asks SQLGlot's list of
 ClickHouse aggregates, with the same combinator rule
 (`_known_clickhouse_aggregate`), so `countIf` is still an aggregate
-there; only one the list lacks, such as a user-defined aggregate, stays
-a plain call.
+there. One the list lacks stays a plain call, and that is about half
+of them: 131 of the 259 aggregates ClickHouse 26.9 lists are missing
+from SQLGlot 30.23's list, among them `medianExact`, `group_concat`,
+`regr_count`, `any_value` and every user-defined aggregate.
 
 One over a joined dataset alone is refused unless repeats cannot change
 it. `system.functions` does not say which do, so the planner lists them

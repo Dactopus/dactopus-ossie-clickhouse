@@ -22,11 +22,13 @@ a minor release may change the Python API.
   `sumDistinct`). Stitched with metrics of other datasets, its value over
   no rows comes from ClickHouse: 0 for `countIf` and `uniq`, NULL for
   `sumIf`. Without a server (`sql` and `validate` without `--url`)
-  SQLGlot's list of ClickHouse aggregates decides, combinators included.
+  SQLGlot's list of ClickHouse aggregates decides, combinators included;
+  it lacks about half of them (`medianExact`, `group_concat`), which
+  are then planned as plain functions.
 - `validate --url` reports a server whose `system.functions` cannot be
   read: functions outside the spec then go unchecked, and an aggregate
-  missing from SQLGlot's list (a user-defined one) is planned as a plain
-  function.
+  missing from SQLGlot's list (`medianExact`, a user-defined one) is
+  planned as a plain function.
 
 ### Changed
 

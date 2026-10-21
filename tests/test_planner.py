@@ -722,13 +722,40 @@ def test_server_aggregates_outside_the_spec_are_checked_as_aggregates():
         planner.sql(query)
     sql = planner.sql(having)
     assert "HAVING countIf(store_sales.ss_quantity > 1) > 5" in sql and "WHERE" not in sql
-    # DISTINCT makes one repeat-safe, as it does a spec aggregate.
-    planner = _with_metrics(
-        tn_staff="SUM(store_sales.ss_ext_sales_price) / "
-        "sumIf(DISTINCT store.s_number_employees, store.s_state = 'TN')",
-    )
-    planner.catalog = Catalog(aggregate=lambda name: name == "sumIf")
-    assert "sumIf(DISTINCT" in planner.sql(Query(metrics=("tn_staff",)))
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "safe"),
+    [
+        ("uniqExact(store.s_store_sk)", True),
+        ("anyLast(store.s_state)", True),
+        ("ANY_VALUE(store.s_state)", True),
+        ("argMax(store.s_state, store.s_number_employees)", True),
+        ("MAXIf(store.s_number_employees, store.s_state = 'TN')", True),
+        ("uniqExactIfOrNull(store.s_store_sk, store.s_state = 'TN')", True),
+        ("singleValueOrNull(store.s_state)", True),
+        # Distinct makes any aggregate repeat-safe, as the keyword does.
+        ("sumDistinct(store.s_number_employees)", True),
+        ("sumIf(DISTINCT store.s_number_employees, store.s_state = 'TN')", True),
+        # Repeat-sensitive, or a combinator that may not keep it: refused.
+        ("countIf(store.s_number_employees > 10)", False),
+        ("sumIf(store.s_number_employees, store.s_state = 'TN')", False),
+        ("uniqArray([store.s_store_sk])", False),
+        ("anyHeavy(store.s_state)", False),
+        ("UNIQEXACT(store.s_store_sk)", False),
+    ],
+)
+def test_clickhouse_aggregates_that_repeats_do_not_change(aggregate, safe):
+    """Over sales rows, each store repeats once per sale: only an aggregate repeats
+    cannot change may read store columns alone."""
+    planner = _with_metrics(per_store=f"SUM(store_sales.ss_ext_sales_price) / {aggregate}")
+    planner.catalog = Catalog(aggregate=lambda name: True)
+    query = Query(metrics=("per_store",))
+    if safe:
+        assert "LEFT JOIN tpcds.store AS store" in planner.sql(query)
+    else:
+        with pytest.raises(PlanError, match="may read a joined dataset on their own"):
+            planner.sql(query)
 
 
 @pytest.mark.parametrize(

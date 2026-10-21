@@ -17,9 +17,11 @@ a minor release may change the Python API.
   `uniqExactOrNull`); user-defined functions count.
 - Connected to a server, the planner treats a function outside the spec
   that the server lists as an aggregate (`countIf`, `uniq`, `sumIfOrNull`)
-  as one: it refuses one over joined rows that repeat, a filter on it goes
-  to `HAVING`, and a metric with one is not stitched with metrics of
-  other datasets, since its value over no rows is unknown.
+  as one: a filter on it goes to `HAVING`, and over joined rows that
+  repeat it is refused unless repeats cannot change it (`uniqExact`,
+  `anyLast`, `argMax`, `sumDistinct`). Stitched with metrics of other
+  datasets, its value over no rows comes from ClickHouse: 0 for
+  `countIf` and `uniq`, NULL for `sumIf`.
 
 ### Changed
 
@@ -38,7 +40,8 @@ a minor release may change the Python API.
 - `ANY_VALUE`, `BOOL_AND` and `BOOL_OR` are no longer among the aggregates
   the planner lets read a joined dataset on their own: they are not the
   spec's. `BOOL_AND` and `BOOL_OR` never ran on ClickHouse; `ANY_VALUE`
-  runs as ClickHouse's alias of `any`, an aggregate outside the spec.
+  runs as ClickHouse's alias of `any`, which a planner connected to a
+  server still lets read a joined dataset on its own.
 
 ## [0.8.0] - 2026-10-15
 

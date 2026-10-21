@@ -124,7 +124,42 @@ _REPEAT_SAFE = {
     exp.Max: "MAX",
     exp.ApproxDistinct: "APPROX_COUNT_DISTINCT",
 }
-_REPEAT_SAFE_NAMES = ", ".join(_REPEAT_SAFE.values()) + " and DISTINCT"
+_REPEAT_SAFE_NAMES = (
+    ", ".join(_REPEAT_SAFE.values()) + ", DISTINCT and ClickHouse's own such as uniq, any, argMax"
+)
+# The same for ClickHouse aggregates outside the spec, named as ClickHouse
+# registers them; those it matches in any case (system.functions) in lower case.
+_CLICKHOUSE_REPEAT_SAFE = frozenset({
+    "any", "anyLast", "anyRespectNulls", "anyLastRespectNulls", "argMin", "argMax",
+    "uniq", "uniqExact", "uniqCombined", "uniqCombined64", "uniqHLL12", "uniqTheta",
+    "groupUniqArray", "groupBitAnd", "groupBitOr", "groupBitmap", "singleValueOrNull",
+})  # fmt: skip
+_CLICKHOUSE_REPEAT_SAFE_ANY_CASE = frozenset({
+    "min", "max", "any_value", "min_by", "max_by", "first_value_respect_nulls",
+})  # fmt: skip
+# Combinators that keep an aggregate repeat-safe, longest first as ClickHouse
+# tries them: If drops rows, OrNull and OrDefault change only the value over no
+# rows, and Distinct makes any aggregate repeat-safe. No aggregate's own name
+# ends in one of them except singleValueOrNull (ClickHouse 26.9).
+_KEEPING_COMBINATORS = ("OrDefault", "Distinct", "OrNull", "If")
+
+
+def _clickhouse_repeat_safe(name: str) -> bool:
+    """Whether a ClickHouse aggregate outside the spec, combinators and all
+    (uniqExactIf, anyLastOrNull, sumDistinct), ignores repeated input rows."""
+    while (
+        name not in _CLICKHOUSE_REPEAT_SAFE and name.lower() not in _CLICKHOUSE_REPEAT_SAFE_ANY_CASE
+    ):
+        suffix = next(
+            (c for c in _KEEPING_COMBINATORS if name.endswith(c) and len(name) > len(c)), None
+        )
+        if suffix is None:
+            return False
+        if suffix == "Distinct":
+            return True
+        name = name[: -len(suffix)]
+    return True
+
 
 Inputs = list[tuple[exp.AggFunc, set[str]]]
 
@@ -137,6 +172,8 @@ def _repeat_safe(agg: exp.AggFunc) -> bool:
         args = agg.args.get("params") or []
     else:
         args = agg.expressions if isinstance(agg, exp.AnonymousAggFunc) else [agg.this]
+    if agg.meta.get("outside_spec") and _clickhouse_repeat_safe(agg.name):
+        return True
     return isinstance(agg, tuple(_REPEAT_SAFE)) or any(isinstance(a, exp.Distinct) for a in args)
 
 
@@ -231,7 +268,7 @@ def _empty_value(tree: exp.Expression) -> exp.Expression | None:
 
     None for a metric with an aggregate outside the spec: ClickHouse gives 0 for
     countIf and uniq, NULL for sumIf, [] for groupArray, and system.functions
-    does not say which."""
+    does not say which; Planner._over_no_rows asks ClickHouse instead."""
     if any(agg.meta.get("outside_spec") for agg in tree.find_all(exp.AggFunc)):
         return None
 
@@ -680,17 +717,10 @@ class Planner:
                     "answered from different datasets; this version cannot answer it, "
                     "ask for it in its own question"
                 )
-        empties = {n: _empty_value(metric_trees[n]) for n in names}
-        for n, empty in empties.items():
-            if empty is None:
-                aggs = metric_trees[n].find_all(exp.AggFunc)
-                agg = next(a for a in aggs if a.meta.get("outside_spec"))
-                raise PlanError(
-                    f"metric {n!r} is answered from different datasets than the question's "
-                    f"other metrics and uses {agg.name}, an aggregate outside the spec whose "
-                    "value over no rows this version cannot tell; ask for it in its own "
-                    "question"
-                )
+        empties = {}
+        for n in names:
+            empty = _empty_value(metric_trees[n])
+            empties[n] = self._over_no_rows(n) if empty is None else empty
         for f, tree in zip(having, having_trees, strict=True):
             if tree.find(exp.AggFunc):
                 raise PlanError(
@@ -789,6 +819,15 @@ class Planner:
                 ordered.add(alias.upper())
                 out.append(exp.Ordered(this=exp.column(alias), desc=False, nulls_first=False))
         return out
+
+    def _over_no_rows(self, name: str) -> exp.Expression:
+        """A metric's value over no rows as ClickHouse computes it: the metric
+        planned on its own, as a scalar subquery over WHERE FALSE, which reads
+        nothing. It runs under the outer query's SETTINGS."""
+        sel = self.plan(Query((name,)))
+        for arg in ("order", "limit", "settings"):
+            sel.set(arg, None)
+        return sel.where(exp.false()).subquery()
 
     def _table(self, ds: OssieDataset) -> exp.Expression:
         table = source_table(ds.source).as_(ds.name)

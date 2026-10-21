@@ -74,7 +74,11 @@ dataset appears once per root row that references it, and only if one
 does. The planner refuses what that would get wrong:
 
 - An aggregate that reads only joined datasets, unless repeats do not
-  change it: `MIN`, `MAX`, `APPROX_COUNT_DISTINCT` or `DISTINCT`.
+  change it: `MIN`, `MAX`, `APPROX_COUNT_DISTINCT` or `DISTINCT`, and
+  ClickHouse's `uniq` family, `any`, `anyLast`, `argMin`, `argMax`,
+  `groupUniqArray`, `groupBitAnd`, `groupBitOr`, `groupBitmap`,
+  `singleValueOrNull`, with the `If`, `OrNull`, `OrDefault` or `Distinct`
+  combinators (`uniqExactIf`); any aggregate with `Distinct` (`sumDistinct`).
   `SUM(store.s_number_employees)`
   over sales would count a store's staff once per sale. An argument that
   mixes root and joined columns is computed once per root row and is fine:
@@ -124,12 +128,11 @@ hides and reports a field or metric calling a function the server does
 not have, matched as ClickHouse matches it (`sumIf`, not `SUMIF`).
 Connected to a server, the planner treats a call the server lists as an
 aggregate (`countIf`, `uniqExact`, `sumIfOrNull`) as one: a filter on it
-goes to `HAVING`, and over a joined dataset it counts as repeat-sensitive
-(below), even `uniq` or `anyLast`, whose value repeats would not change.
-A metric with one is not stitched with metrics of other datasets (below):
-its value over no rows is 0 for `countIf`, NULL for `sumIf`, and nothing
-tells which. The `sql` command, which has no server, knows none of this
-and plans such a call as a plain function.
+goes to `HAVING`, and over a joined dataset alone it is refused unless
+repeats cannot change it (below). Stitched with metrics of other
+datasets, its value over no rows is what ClickHouse computes: 0 for
+`countIf` and `uniq`, NULL for `sumIf`. The `sql` command, which has no
+server, knows none of this and plans such a call as a plain function.
 
 `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec requires, and hold
 every value of the group in memory; `APPROX_PERCENTILE` is the fast

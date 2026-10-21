@@ -51,8 +51,8 @@ The spec's aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`, `CHARINDEX`)
 are in the catalog and still translate. `ANY_VALUE`, `BOOL_AND` and
 `BOOL_OR` left the planner's list of aggregates that may read a joined
 dataset on their own: they are not the spec's, `BOOL_AND` and `BOOL_OR`
-never ran, and `ANY_VALUE` runs as ClickHouse's alias of `any`, an
-aggregate outside the spec like any other (below).
+never ran, and `ANY_VALUE` runs as ClickHouse's alias of `any`, which
+the planner knows as repeat-safe when connected to a server (below).
 
 Whether a pass-through function exists only the server can say.
 `Executor` reads `system.functions`, which lists user-defined functions
@@ -67,15 +67,21 @@ is hidden like one that does not translate and reported by `validate
 The same list tells the planner which pass-through calls aggregate.
 `Catalog.aggregate` answers it with the combinator rule above, and the
 planner types such a call as `exp.AnonymousAggFunc`, so every check on
-aggregates covers it: one over a joined dataset alone is refused unless
-the join is on a key of the root (none counts as repeat-safe), and a
-filter on it goes to `HAVING`. Before, SQLGlot typed a few of them
-(`countIf`, `argMax`, `corr`) and left the rest (`sumIf`, `uniq`)
-unchecked; a metric like `countIf(store.x > 10)` next to a sales
-dimension counted each store once per sale. Such a metric is refused in
-a stitched question: its value over no rows varies (0 for `countIf` and
-`uniq`, NULL for `sumIf`, `[]` for `groupArray`) and `system.functions`
-does not say which.
+aggregates covers it, and a filter on it goes to `HAVING`. Before,
+SQLGlot typed a few of them (`countIf`, `argMax`, `corr`) and left the
+rest (`sumIf`, `uniq`) unchecked; a metric like `countIf(store.x > 10)`
+next to a sales dimension counted each store once per sale.
+
+One over a joined dataset alone is refused unless repeats cannot change
+it. `system.functions` does not say which do, so the planner lists them
+(`_CLICKHOUSE_REPEAT_SAFE`), each checked on ClickHouse 26.9 against its
+input with rows repeated: the `uniq` family, `any`, `anyLast`, `argMin`,
+`argMax`, `groupUniqArray`, `groupBitAnd`, `groupBitOr`, `groupBitmap`,
+`singleValueOrNull`, and `min`, `max`, `any_value`, `min_by`, `max_by` in
+any case. A combinator keeps that only if it is `If`, `OrNull`,
+`OrDefault`, or `Distinct`, which makes any aggregate repeat-safe; names
+are split as ClickHouse splits them, longest combinator first. Any other
+is repeat-sensitive, as the spec's are.
 
 ## SQLGlot bounds move only in minor releases
 
@@ -364,7 +370,13 @@ A metric missing from a group shows its value over no rows (section
 6.11.5): NULL for `SUM`, 0 for `COUNT`, 0 for `COALESCE(SUM(x), 0)`. The
 planner computes it by replacing each aggregate with its value over no
 rows, 0 for counts and NULL otherwise, and each group marks its rows so
-the merge can tell a missing group from a NULL value.
+the merge can tell a missing group from a NULL value. A ClickHouse
+aggregate outside the spec has no such rule: under
+`aggregate_functions_null_for_empty` it gives 0 for `countIf`, `uniq`
+and `deltaSum`, `[]` for `groupArray` and `topK`, NULL for most others,
+and `system.functions` does not say which. ClickHouse computes it
+instead: the metric planned on its own, as a scalar subquery over
+`WHERE FALSE`, which reads no rows and runs under the outer `SETTINGS`.
 
 Aggregate filters run on the merged rows (step A.9) and may name metrics,
 selected or not, and the question's dimensions. Refused: an aggregate

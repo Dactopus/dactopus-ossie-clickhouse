@@ -10,7 +10,12 @@ from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor, ServerFunctions
 from dactopus_ossie_clickhouse.model import overrides
-from dactopus_ossie_clickhouse.planner import PlanError, Query
+from dactopus_ossie_clickhouse.planner import (
+    _CLICKHOUSE_REPEAT_SAFE,
+    _CLICKHOUSE_REPEAT_SAFE_ANY_CASE,
+    PlanError,
+    Query,
+)
 from dactopus_ossie_clickhouse.translate import parse
 from tests.conftest import FakeClickHouse
 
@@ -371,6 +376,23 @@ def test_cli_query(ex, capsys):
     assert capsys.readouterr().out == "revenue\n65.0\n"
     assert main(["sql", str(FIXTURE), "-m", "revenue", "--url", ex.client.url]) == 0
     assert "FINAL" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", sorted(_CLICKHOUSE_REPEAT_SAFE | _CLICKHOUSE_REPEAT_SAFE_ANY_CASE))
+def test_listed_clickhouse_aggregates_ignore_repeated_rows(clickhouse, name):
+    """The planner's list, checked on the server: the same value over rows
+    repeated up to five times as over the rows once."""
+    args = "x, x % 7" if name.lower() in ("argmin", "argmax", "min_by", "max_by") else "x"
+    agg = f"arraySort({name}({args}))" if name == "groupUniqArray" else f"{name}({args})"
+    x = "5" if name == "singleValueOrNull" else "number % 13"
+    once = f"SELECT {agg} FROM (SELECT {x} AS x FROM numbers(100))"
+    repeated = (
+        f"SELECT {agg} FROM (SELECT {x} AS x FROM numbers(100) "
+        "ARRAY JOIN range(1 + number % 5) AS r)"
+    )
+    sql = f"SELECT toString(({once})) = toString(({repeated})), toString(({once}))"
+    same, value = clickhouse.query(sql).result_rows[0]
+    assert same and value not in ("", "\\N")
 
 
 def test_server_functions_match_as_clickhouse_does():

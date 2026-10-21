@@ -722,6 +722,22 @@ def test_server_aggregates_outside_the_spec_are_checked_as_aggregates():
         planner.sql(query)
     sql = planner.sql(having)
     assert "HAVING countIf(store_sales.ss_quantity > 1) > 5" in sql and "WHERE" not in sql
+    # ClickHouse runs a quoted name as the same aggregate.
+    quoted = _with_metrics(
+        big_store_sales="SUM(store_sales.ss_ext_sales_price) / "
+        '"countIf"(store.s_number_employees > 10)',
+    )
+    quoted.catalog = planner.catalog
+    with pytest.raises(PlanError, match=r"applies countIf\(store.s_number_employees > 10\)"):
+        quoted.sql(query)
+
+
+def test_a_plain_dict_catalog_still_plans():
+    catalog = {"store": TableInfo("ReplacingMergeTree", frozenset(), dedup=True)}
+    sql = Planner(MODEL, catalog).sql(
+        Query(metrics=("total_sales",), dimensions=("store.s_state",))
+    )
+    assert "tpcds.store AS store FINAL" in sql
 
 
 @pytest.mark.parametrize(

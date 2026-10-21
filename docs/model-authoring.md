@@ -131,8 +131,10 @@ aggregate (`countIf`, `uniqExact`, `sumIfOrNull`) as one: a filter on it
 goes to `HAVING`, and over a joined dataset alone it is refused unless
 repeats cannot change it (below). Stitched with metrics of other
 datasets, its value over no rows is what ClickHouse computes: 0 for
-`countIf` and `uniq`, NULL for `sumIf`. The `sql` command, which has no
-server, knows none of this and plans such a call as a plain function.
+`countIf` and `uniq`, NULL for `sumIf`. The `sql` command without
+`--url` has no server, knows none of this and plans such a call as a
+plain function. ClickHouse's parametric form `quantile(0.9)(x)` is not
+supported: the expression is reported as one that does not translate.
 
 `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec requires, and hold
 every value of the group in memory; `APPROX_PERCENTILE` is the fast

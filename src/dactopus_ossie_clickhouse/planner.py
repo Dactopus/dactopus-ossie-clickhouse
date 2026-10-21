@@ -275,7 +275,7 @@ def _empty_value(tree: exp.Expression) -> exp.Expression | None:
     def empty(node: exp.Expression) -> exp.Expression:
         agg = node.this if isinstance(node, exp.Filter) else node  # COUNT(x) FILTER (...)
         if isinstance(agg, exp.AggFunc):
-            counts = isinstance(agg, exp.Count | exp.CountIf | exp.ApproxDistinct)
+            counts = isinstance(agg, exp.Count | exp.ApproxDistinct)
             return exp.Literal.number(0) if counts else exp.Null()
         return node
 
@@ -372,14 +372,15 @@ class Planner:
         says is an aggregate (countIf, uniqExactOrNull) typed as one, so every
         check on aggregates covers it. Without a catalog it stays a plain call."""
         tree = parse(expression)
-        aggregate = self.catalog.aggregate if self.catalog is not None else None
+        aggregate = getattr(self.catalog, "aggregate", None)  # a plain dict has none
         if aggregate is None:
             return tree
 
         def mark(node: exp.Expression) -> exp.Expression:
-            # A quoted name stays a plain call: AnonymousAggFunc prints it unquoted.
-            if outside_spec(node) and isinstance(node.this, str) and aggregate(node.name):
-                agg = exp.AnonymousAggFunc(this=node.this, expressions=node.expressions)
+            # ClickHouse runs "countIf"(x) as countIf(x); an aggregate's name never
+            # needs the quotes, which AnonymousAggFunc would not print.
+            if outside_spec(node) and aggregate(node.name):
+                agg = exp.AnonymousAggFunc(this=node.name, expressions=node.expressions)
                 agg.meta["outside_spec"] = True
                 return agg
             return node
@@ -717,16 +718,16 @@ class Planner:
                     "answered from different datasets; this version cannot answer it, "
                     "ask for it in its own question"
                 )
-        empties = {}
-        for n in names:
-            empty = _empty_value(metric_trees[n])
-            empties[n] = self._over_no_rows(n) if empty is None else empty
         for f, tree in zip(having, having_trees, strict=True):
             if tree.find(exp.AggFunc):
                 raise PlanError(
                     f"filter {f!r} applies an aggregate function to metrics answered from "
                     "different datasets; this version cannot answer it, name a metric instead"
                 )
+        empties = {}
+        for n in names:
+            empty = _empty_value(metric_trees[n])
+            empties[n] = self._over_no_rows(n) if empty is None else empty
 
         dims = [self.field_ref(d)[1].name for d in q.dimensions]
         marked = [  # groups with a metric whose value over no rows is not NULL

@@ -126,14 +126,15 @@ with combinators such as `sumIf(x, c)`, a user-defined function. Nothing
 checks such a call before the query runs, except `validate --url`, which
 hides and reports a field or metric calling a function the server does
 not have, matched as ClickHouse matches it (`sumIf`, not `SUMIF`).
-Connected to a server, the planner treats a call the server lists as an
-aggregate (`countIf`, `uniqExact`, `sumIfOrNull`) as one: a filter on it
-goes to `HAVING`, and over a joined dataset alone it is refused unless
-repeats cannot change it (below). Stitched with metrics of other
-datasets, its value over no rows is what ClickHouse computes: 0 for
-`countIf` and `uniq`, NULL for `sumIf`. The `sql` command without
-`--url` has no server, knows none of this and plans such a call as a
-plain function. ClickHouse's parametric form `quantile(0.9)(x)` is not
+The planner treats a call the server lists as an aggregate (`countIf`,
+`uniqExact`, `sumIfOrNull`) as one: a filter on it goes to `HAVING`, and
+over a joined dataset alone it is refused unless repeats cannot change
+it (below). Stitched with metrics of other datasets, its value over no
+rows is what ClickHouse computes: 0 for `countIf` and `uniq`, NULL for
+`sumIf`. Without a server (the `sql` command without `--url`) SQLGlot's
+list of ClickHouse aggregates decides instead, so only an aggregate the
+list lacks, such as a user-defined one, is planned as a plain function
+there. ClickHouse's parametric form `quantile(0.9)(x)` is not
 supported: the expression is reported as one that does not translate.
 
 `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec requires, and hold

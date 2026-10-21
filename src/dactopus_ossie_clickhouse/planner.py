@@ -17,6 +17,7 @@ from functools import cache
 
 from ossie import OssieDataset, OssieDocument, OssieField, OssieRelationship
 from sqlglot import exp
+from sqlglot.dialects.clickhouse import ClickHouse
 
 from dactopus_ossie_clickhouse.model import covers_key, join_problem
 from dactopus_ossie_clickhouse.translate import (
@@ -55,11 +56,25 @@ class TableInfo:
 class Catalog(dict[str, TableInfo]):
     """What the executor learned from the server: TableInfo by dataset name, and
     ``aggregate``, whether a function outside the spec is an aggregate (None when
-    system.functions could not be read)."""
+    system.functions could not be read: the planner then asks
+    _known_clickhouse_aggregate)."""
 
     def __init__(self, tables=(), aggregate: Callable[[str], bool] | None = None):
         super().__init__(tables)
         self.aggregate = aggregate
+
+
+def _known_clickhouse_aggregate(name: str) -> bool:
+    """Whether SQLGlot's list of ClickHouse aggregates has ``name`` as ClickHouse
+    spells it, with any combinators after it (countIf, uniqExactOrNull). For a
+    planner without the server's word: a user-defined aggregate or one newer
+    than the list stays a plain call."""
+    if name in ClickHouse.Parser.AGG_FUNCTIONS:
+        return True
+    return any(
+        len(name) > len(c) and name.endswith(c) and _known_clickhouse_aggregate(name[: -len(c)])
+        for c in ClickHouse.Parser.AGG_FUNCTIONS_SUFFIXES
+    )
 
 
 @dataclass(frozen=True)
@@ -370,11 +385,11 @@ class Planner:
     def _parse(self, expression: str) -> exp.Expression:
         """parse(), with a call of a function outside the spec that the server
         says is an aggregate (countIf, uniqExactOrNull) typed as one, so every
-        check on aggregates covers it. Without a catalog it stays a plain call."""
+        check on aggregates covers it. Without the server's word, SQLGlot's list
+        of ClickHouse aggregates decides (_known_clickhouse_aggregate)."""
         tree = parse(expression)
-        aggregate = getattr(self.catalog, "aggregate", None)  # a plain dict has none
-        if aggregate is None:
-            return tree
+        # A plain dict has no aggregate; a catalog has None without system.functions.
+        aggregate = getattr(self.catalog, "aggregate", None) or _known_clickhouse_aggregate
 
         def mark(node: exp.Expression) -> exp.Expression:
             # ClickHouse runs "countIf"(x) as countIf(x); an aggregate's name never

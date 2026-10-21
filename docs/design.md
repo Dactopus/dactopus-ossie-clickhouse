@@ -70,7 +70,13 @@ planner types such a call as `exp.AnonymousAggFunc`, so every check on
 aggregates covers it, and a filter on it goes to `HAVING`. Before,
 SQLGlot typed a few of them (`countIf`, `argMax`, `corr`) and left the
 rest (`sumIf`, `uniq`) unchecked; a metric like `countIf(store.x > 10)`
-next to a sales dimension counted each store once per sale.
+next to a sales dimension counted each store once per sale. Without the
+server's word (the `sql` command without `--url`, or a server whose
+`system.functions` cannot be read) the planner asks SQLGlot's list of
+ClickHouse aggregates, with the same combinator rule
+(`_known_clickhouse_aggregate`), so `countIf` is still an aggregate
+there; only one the list lacks, such as a user-defined aggregate, stays
+a plain call.
 
 One over a joined dataset alone is refused unless repeats cannot change
 it. `system.functions` does not say which do, so the planner lists them

@@ -15,16 +15,18 @@ a minor release may change the Python API.
   ClickHouse matches them: as written, in any case for the functions it
   marks case-insensitive, and with aggregate combinators (`sumIf`,
   `uniqExactOrNull`); user-defined functions count.
-- Connected to a server, the planner treats a function outside the spec
-  that the server lists as an aggregate (`countIf`, `uniq`, `sumIfOrNull`)
-  as one: a filter on it goes to `HAVING`, and over joined rows that
-  repeat it is refused unless repeats cannot change it (`uniqExact`,
-  `anyLast`, `argMax`, `sumDistinct`). Stitched with metrics of other
-  datasets, its value over no rows comes from ClickHouse: 0 for
-  `countIf` and `uniq`, NULL for `sumIf`.
+- The planner treats a function outside the spec that the server lists
+  as an aggregate (`countIf`, `uniq`, `sumIfOrNull`) as one: a filter on
+  it goes to `HAVING`, and over joined rows that repeat it is refused
+  unless repeats cannot change it (`uniqExact`, `anyLast`, `argMax`,
+  `sumDistinct`). Stitched with metrics of other datasets, its value over
+  no rows comes from ClickHouse: 0 for `countIf` and `uniq`, NULL for
+  `sumIf`. Without a server (`sql` and `validate` without `--url`)
+  SQLGlot's list of ClickHouse aggregates decides, combinators included.
 - `validate --url` reports a server whose `system.functions` cannot be
-  read: functions outside the spec then go unchecked, and their
-  aggregates are planned as plain functions.
+  read: functions outside the spec then go unchecked, and an aggregate
+  missing from SQLGlot's list (a user-defined one) is planned as a plain
+  function.
 
 ### Changed
 

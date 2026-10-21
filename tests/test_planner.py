@@ -701,35 +701,47 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     assert message in str(e.value)
 
 
-def test_server_aggregates_outside_the_spec_are_checked_as_aggregates():
-    """countIf is an aggregate only to the server: with the catalog's word for it,
-    the planner refuses it over repeated rows and filters on it in HAVING."""
+@pytest.mark.parametrize(
+    "catalog",
+    [
+        None,  # no server: SQLGlot's list of ClickHouse aggregates
+        {},  # a plain dict says nothing either
+        Catalog(),  # system.functions could not be read
+        Catalog(aggregate=lambda name: name == "countIf"),  # the server's word
+    ],
+)
+def test_server_aggregates_outside_the_spec_are_checked_as_aggregates(catalog):
+    """countIf is an aggregate to ClickHouse, not to the spec: the planner refuses
+    it over repeated rows and filters on it in HAVING, with or without a server."""
     planner = _with_metrics(
         big_store_sales="SUM(store_sales.ss_ext_sales_price) / "
         "countIf(store.s_number_employees > 10)",
+        quoted='SUM(store_sales.ss_ext_sales_price) / "countIf"(store.s_number_employees > 10)',
     )
-    query = Query(metrics=("big_store_sales",))
+    planner.catalog = catalog
     having = Query(
         metrics=("total_sales",),
         dimensions=("store_sales.ss_store_sk",),
         filters=("countIf(store_sales.ss_quantity > 1) > 5",),
     )
-    # Without a server nothing says countIf aggregates.
-    assert "countIf(store.s_number_employees > 10)" in planner.sql(query)
-    assert "WHERE countIf(" in planner.sql(having)
-    planner.catalog = Catalog(aggregate=lambda name: name == "countIf")
-    with pytest.raises(PlanError, match=r"applies countIf\(store.s_number_employees > 10\)"):
-        planner.sql(query)
+    # ClickHouse runs a quoted name as the same aggregate.
+    for name in ("big_store_sales", "quoted"):
+        with pytest.raises(PlanError, match=r"applies countIf\(store.s_number_employees > 10\)"):
+            planner.sql(Query(metrics=(name,)))
     sql = planner.sql(having)
     assert "HAVING countIf(store_sales.ss_quantity > 1) > 5" in sql and "WHERE" not in sql
-    # ClickHouse runs a quoted name as the same aggregate.
-    quoted = _with_metrics(
-        big_store_sales="SUM(store_sales.ss_ext_sales_price) / "
-        '"countIf"(store.s_number_employees > 10)',
+
+
+def test_the_server_names_aggregates_sqlglot_does_not_know():
+    """A user-defined or newer aggregate is one only on the server's word."""
+    planner = _with_metrics(
+        per_store="SUM(store_sales.ss_ext_sales_price) / myAgg(store.s_store_sk)"
     )
-    quoted.catalog = planner.catalog
-    with pytest.raises(PlanError, match=r"applies countIf\(store.s_number_employees > 10\)"):
-        quoted.sql(query)
+    query = Query(metrics=("per_store",))
+    assert "myAgg(store.s_store_sk)" in planner.sql(query)
+    planner.catalog = Catalog(aggregate=lambda name: name == "myAgg")
+    with pytest.raises(PlanError, match=r"applies myAgg\(store.s_store_sk\)"):
+        planner.sql(query)
 
 
 def test_a_plain_dict_catalog_still_plans():

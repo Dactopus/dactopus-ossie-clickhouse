@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-21
+
 ### Added
 
 - `validate --url` reports a field or metric that calls a function the
@@ -32,6 +34,9 @@ a minor release may change the Python API.
 
 ### Changed
 
+- Requires SQLGlot 30.24 or later. None of this project's rewrites
+  became redundant: SQLGlot 30.24 changed nothing in its ClickHouse
+  generator that they cover.
 - A function outside the spec's catalog reaches ClickHouse as written
   (#35). SQLGlot knows the functions of other engines and renamed them in
   ClickHouse SQL: `DAYOFWEEK(d)` became `DAY_OF_WEEK(d)` and `BOOL_AND(x)`

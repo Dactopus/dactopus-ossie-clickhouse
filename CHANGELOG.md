@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-21
+
 ### Added
 
 - A row filter on a dataset whose rows reference the root's is a

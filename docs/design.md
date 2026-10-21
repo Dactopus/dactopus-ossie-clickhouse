@@ -242,9 +242,11 @@ them, or ClickHouse fixes them.
 
 The spec has no cardinality attribute. A relationship is used only when its
 `to_columns` cover the primary key or a unique key of the target, which is
-what makes a `LEFT JOIN` safe against fan-out. Star schemas need nothing
-more; one-to-many questions wait for demand. Metrics of several facts are
-stitched (below).
+what makes a `LEFT JOIN` safe against fan-out. A row filter on the many
+side of a relationship is a semi-join, and metrics of several facts are
+stitched (both below). A metric that reads both sides of a one-to-many
+relationship, which symmetric aggregates would answer, waits for demand
+(#10).
 
 The spec calls `to_columns` "Primary/unique key columns"; covering, a
 superset of a key, is how the reference validator reads it
@@ -406,6 +408,86 @@ returns once per order.
 Refusals no longer advise asking for each metric in its own question: the
 advice was given only when each metric planned alone, and such a question
 is now stitched.
+
+## Semi-joins for filters on the many side
+
+A row filter on a dataset whose rows reference the root's, such as
+`-m sessions -f "purchases.revenue > 0"` (sessions with a purchase of a
+value) or `-m device_count -f "readings.reading_date = '2026-10-19'"`
+(devices with a reading that day), made the referencing dataset the root,
+and the check of the previous sections refused the metric: it would count
+each session once per purchase. Models worked around it with a field on
+the root (`sessions.has_purchase`), which cannot take the filter's
+condition. Two models of dactopus-data-models asked for it (#10).
+
+Such a filter is now a semi-join, a filtering join in apache/ossie#246
+(`cc0d070`) section 6.5: `sessions.session_key IN (SELECT
+purchases.session_key FROM purchases WHERE purchases.revenue > 0)`. A root
+row stays when at least one row of the filtered dataset references it and
+passes the filter, and counts once. That reading follows from step A.6.1,
+which puts a `WHERE` dataset into every metric's datasets, and Semantic 2,
+which counts each row of a metric's dataset at most once whatever the
+question joins for filtering. Section 6.8 defers an explicit semi-join
+form, `EXISTS_IN`, for many-to-many relationships, with NULL handling and
+negation open; a later proposal may define an anti-semi-join differently.
+
+The planner tries it only when the question is refused as before. It then
+takes the root of the metrics, dimensions and aggregate filters alone; a
+row filter on datasets that root reaches stays a `WHERE` over its joins,
+and a row filter on datasets it does not reach, one of which reaches it
+through many-to-one relationships, becomes the semi-join. A question
+planned before plans the same: `-d devices.country -f "readings..."` keeps
+readings as its root and the NULL group of readings without a device.
+When the root of the metrics does not answer them either, the question is
+stitched or refused with the error it got before, which names the root
+and why.
+
+- All filters on one dataset M and on datasets M reaches go into one
+  subquery joined by `AND`, so one row of M passes all of them, as one
+  joined row would: `-f "lines.qty > 1" -f "orders.status = 'paid'"`
+  keeps a customer with a paid order that has such a line. M is the
+  dataset among those filters that reaches the others. It must be named,
+  as the root must (above): a filter on `items` alone, which reaches no
+  customer, is refused with the dataset that links them (`lines`) in the
+  message, since which fact links two datasets is a choice of meaning.
+- The subquery is planned as a question over M: its own `LEFT JOIN`s,
+  `FINAL` and dictionaries. M reaches the root along one path of
+  relationships (two are ambiguous, section 6.9), with one `IN` per step,
+  and a key of several columns is a tuple.
+- `NOT` stays inside the subquery: `NOT readings.reading_date = '...'`
+  keeps devices that have a reading on another day. A filter that holds on
+  a missing row, such as `readings.value IS NULL`, is checked against rows
+  that exist. Absence is asked through a field on the root, such as
+  `devices.last_reading_at`. A person at the command line can also
+  subtract two answers (`device_count` with and without the filter); the
+  MCP server's instructions do not suggest it, since they forbid an agent
+  to derive numbers.
+- A NULL key references nothing: ClickHouse answers `NULL IN (...)` with
+  NULL and a tuple with a NULL in it with 0, as SQL does, when
+  `transform_null_in` is 0 (checked on 26.9). It is 0 by default, and
+  every generated `SELECT` now sets it, since a user's profile may set 1,
+  under which a NULL matches a NULL.
+
+Refused: a filter that mixes the root's datasets and M's in one
+expression (split it into two filters; an `OR` across the sides cannot be
+split), a dataset that both reaches the root and is reached by it
+(ambiguous, as before), and two paths from M to the root. A dimension of
+M and a metric that reads M, `FILTER (WHERE ...)` included, make M one of
+the question's datasets as before: the dimension is refused, and the
+metric is answered over M's rows (its per-row expression is the author's,
+as in the previous section). Inside a stitched question each group plans
+its own semi-joins: `-m device_count -m reading_count -f "readings..."`
+filters readings with a `WHERE` and devices with an `IN`.
+
+`tests/test_semi_join.py` compares answers with DuckDB running `EXISTS`, on
+data where a customer has two matching orders, one has none, an order and
+a line have NULL keys, two filters pass on different orders of one
+customer, and an order was updated in a `ReplacingMergeTree`, so a
+subquery without `FINAL` counts it. On the GA4 sample loaded with
+dactopus-data-models, 4,446 sessions have a purchase with revenue above
+0, as a join with `uniqExact` counts them; `sessions.has_purchase` gives
+4,848, since 450 purchases carry no revenue. On a Sensor.Community load,
+35 of 36 devices have a reading on 2026-10-19.
 
 ## Remote MCP server, designed, not built
 

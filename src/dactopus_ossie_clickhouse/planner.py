@@ -1,10 +1,11 @@
 """Turn a semantic query (metrics, dimensions, filters) into one ClickHouse SELECT.
 
 Minimum planner: one root dataset plus many-to-one joins along the one path
-to each dataset the query touches. Metrics that no one root can answer together
-are each answered from their own root and merged on the dimensions
-(stitching). Anything else is rejected with a message that names the
-nearest supported thing.
+to each dataset the query touches. A row filter on a dataset that reaches the
+root but that the root does not reach is a semi-join (IN). Metrics that no one
+root can answer together are each answered from their own root and merged on
+the dimensions (stitching). Anything else is rejected with a message that
+names the nearest supported thing.
 """
 
 from __future__ import annotations
@@ -270,10 +271,16 @@ def _settings() -> list[exp.Expression]:
 
     join_use_nulls: unmatched LEFT JOIN columns are NULL, not the type's default.
     aggregate_functions_null_for_empty: an aggregate over no rows (no GROUP BY, or a
-    FILTER that matches nothing) is NULL, not 0; counts stay 0."""
+    FILTER that matches nothing) is NULL, not 0; counts stay 0.
+    transform_null_in: NULL IN (...) is not true, so a semi-join's NULL key
+    references nothing, whatever the user's profile says."""
     return [
-        exp.EQ(this=exp.var(name), expression=exp.Literal.number(1))
-        for name in ("join_use_nulls", "aggregate_functions_null_for_empty")
+        exp.EQ(this=exp.var(name), expression=exp.Literal.number(value))
+        for name, value in (
+            ("join_use_nulls", 1),
+            ("aggregate_functions_null_for_empty", 1),
+            ("transform_null_in", 0),
+        )
     ]
 
 
@@ -326,6 +333,24 @@ def _check_rows(
             f"unless it is joined on a key of {root} (one row each); "
             "this version cannot answer it"
         )
+
+
+def _ambiguous(start: str, target: str, paths: list[tuple[OssieRelationship, ...]]) -> str:
+    shown = " and ".join(
+        " -> ".join(repr(r.name) for r in p)
+        for p in sorted(paths, key=lambda p: (len(p), [r.name for r in p]))
+    )
+    return (
+        f"ambiguous join from {start!r} to {target!r}: relationship paths "
+        f"{shown}; this version cannot choose between them"
+    )
+
+
+def _in(table: str, columns: list[str], sub: exp.Select) -> exp.In:
+    """table.columns IN (sub): a tuple for a key of several columns."""
+    cols = [exp.column(c, table=table) for c in columns]
+    this = cols[0] if len(cols) == 1 else exp.Tuple(expressions=cols)
+    return exp.In(this=this, query=sub.subquery())
 
 
 def _suggest(name: str, options) -> str:
@@ -500,14 +525,7 @@ class Planner:
         for name in sorted(used - {root.name}):
             paths = self._paths(root.name, name)
             if len(paths) > 1:
-                shown = " and ".join(
-                    " -> ".join(repr(r.name) for r in p)
-                    for p in sorted(paths, key=lambda p: (len(p), [r.name for r in p]))
-                )
-                raise PlanError(
-                    f"ambiguous join from {root.name!r} to {name!r}: relationship paths "
-                    f"{shown}; this version cannot choose between them"
-                )
+                raise PlanError(_ambiguous(root.name, name, paths))
             for i, r in enumerate(paths[0]):  # _root chose a dataset that reaches every other
                 depth[r.name] = (i, r)
         joins = [r for _, r in sorted(depth.values(), key=lambda d: (d[0], d[1].name))]
@@ -592,7 +610,7 @@ class Planner:
             checked.append((label, _aggregate_inputs(tree)))
             selects.append(tree.as_(alias(m.name)))
 
-        where: list[exp.Expression] = []
+        rows: dict[str, exp.Expression] = {}  # row filter label -> rewritten tree
         having: list[exp.Expression] = []  # filters over aggregates or metric names
         row_filters: list[str] = []
         aggregate_filters: list[str] = []
@@ -609,7 +627,7 @@ class Planner:
                     "filtered in the same SELECT, select it and filter the rows instead"
                 )
             if not tree.find(exp.AggFunc):
-                where.append(tree)
+                rows[label] = tree
                 row_filters.append(f)
                 continue
             # HAVING may only see aggregates and GROUP BY expressions.
@@ -629,18 +647,50 @@ class Planner:
             checked.append((label, _aggregate_inputs(tree)))
 
         used = set().union(*touched.values())
+        where = list(rows.values())
+        semi_joins: list[exp.Expression] = []
         try:
             root = self._root(used)
             one_to_one = self._one_to_one(root.name)
             for label, inputs in checked:
                 _check_rows(label, inputs, root.name, touched, one_to_one)
         except PlanError:
-            stitched = self._stitch(q, row_filters, aggregate_filters)
-            if stitched is not None:
-                return stitched
-            raise
-        sel = exp.select(*selects).from_(self._table(root))
-        dict_keys: dict[str, exp.Expression] = {}  # dictionary dataset -> key expression
+            split = self._split_filters(touched, rows, checked)
+            if split is None:
+                stitched = self._stitch(q, row_filters, aggregate_filters)
+                if stitched is not None:
+                    return stitched
+                raise
+            root, joined, semi_joins = split  # joined: row filters the root's joins answer
+            where = [rows[label] for label in joined]
+            kept = [ds for label, ds in touched.items() if label not in rows or label in joined]
+            used = set().union(*kept)
+        sel, dict_keys = self._from(exp.select(*selects), root, used)
+        if where:
+            sel = sel.where(exp.and_(*where))
+        if group:
+            sel = sel.group_by(*group)
+        if having:
+            sel = sel.having(exp.and_(*having))
+        if order := self._order(q, selects):
+            sel = sel.order_by(*order)
+        if q.limit is not None:
+            sel = sel.limit(q.limit)
+        if dict_keys:
+            sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
+        if semi_joins:  # after the transform: their subqueries read datasets of their own
+            sel = sel.where(exp.and_(*semi_joins))
+        sel.set("settings", _settings())
+        return sel
+
+    def _from(
+        self, sel: exp.Select, root: OssieDataset, used: set[str]
+    ) -> tuple[exp.Select, dict[str, exp.Expression]]:
+        """FROM ``root`` with a LEFT JOIN to each used dataset, and the dictionary
+        datasets read with dictGetOrNull instead, by dataset name -> key expression;
+        the caller rewrites their columns once the SELECT is complete."""
+        sel = sel.from_(self._table(root))
+        dict_keys: dict[str, exp.Expression] = {}
         joins = self._joins(root, used)
         joined_from = {r.from_dataset.upper() for r in joins}
         for r in joins:
@@ -664,20 +714,123 @@ class Planner:
                 )
             )
             sel = sel.join(self._table(target), on=on, join_type="left")
-        if where:
-            sel = sel.where(exp.and_(*where))
-        if group:
-            sel = sel.group_by(*group)
-        if having:
-            sel = sel.having(exp.and_(*having))
-        if order := self._order(q, selects):
-            sel = sel.order_by(*order)
-        if q.limit is not None:
-            sel = sel.limit(q.limit)
+        return sel, dict_keys
+
+    def _split_filters(
+        self,
+        touched: dict[str, set[str]],
+        rows: dict[str, exp.Expression],
+        checked: list[tuple[str, Inputs]],
+    ) -> tuple[OssieDataset, list[str], list[exp.Expression]] | None:
+        """A question refused over the root of all it reads, planned from the root
+        of its metrics, dimensions and aggregate filters instead, with each row
+        filter that root cannot join to as a semi-join: the root, the row filters
+        it joins to (labels), and the semi-joins. None when that root does not
+        answer the metrics either, or every row filter joins to it.
+
+        A row of the root stays when at least one row of the filtered dataset M
+        references it and passes the filter, so no root row repeats; NOT stays
+        inside (#246 §6.5, filtering join; Semantic 2). Filters on M and on
+        datasets M reaches go into one subquery, so one row of M passes all of
+        them, as a joined row would. The subquery is a question over M, with its
+        own joins, FINAL and dictionaries; M reaches the root along one path of
+        relationships, one IN per step."""
+        core = {label: ds for label, ds in touched.items() if label not in rows}
+        if not set().union(*core.values()):
+            return None
+        try:
+            root = self._root(set().union(*core.values()))
+            one_to_one = self._one_to_one(root.name)
+            for label, inputs in checked:
+                _check_rows(label, inputs, root.name, core, one_to_one)
+        except PlanError:
+            return None
+        near = self._reachable(root.name)
+        joined = [label for label in rows if touched[label] <= near]
+        far = [label for label in rows if label not in joined]
+        if not far:
+            return None
+        # A dataset both ways from the root is refused as ambiguous, as before.
+        self._root(set().union(*core.values(), *(touched[label] for label in joined)))
+        for label in far:
+            if mixed := " and ".join(sorted(touched[label] & near)):
+                other = " and ".join(sorted(touched[label] - near))
+                raise PlanError(
+                    f"{label} reads {mixed} and {other} in one expression, but {mixed} is "
+                    f"read with each {root.name} row and {other} only searched for a row "
+                    "that matches. Split it into one filter per side; an OR across the "
+                    "sides cannot be split, and this version cannot answer it"
+                )
+        group: dict[str, list[str]] = {}  # M -> labels of its filters
+        far_datasets = set().union(*(touched[label] for label in far))
+        tops = [
+            d
+            for d in sorted(far_datasets)
+            if not any(d != u and d in self._reachable(u) for u in far_datasets)
+        ]
+        for label in far:
+            owners = [t for t in tops if touched[label] <= self._reachable(t)]
+            if not owners:
+                raise PlanError(
+                    f"{label} reads {' and '.join(sorted(touched[label]))} in one expression, "
+                    "and no one of them reaches the others through many-to-one "
+                    "relationships; split it into one filter per dataset"
+                )
+            if len(owners) > 1:
+                raise PlanError(
+                    f"{label} could be checked against rows of {' or '.join(owners)}, which "
+                    f"the other filters name; this version cannot choose between them"
+                )
+            group.setdefault(owners[0], []).append(label)
+        semi_joins = []
+        for top, labels in group.items():
+            if root.name not in self._reachable(top):
+                via = sorted(
+                    d.name
+                    for d in self.model.datasets
+                    if {root.name, top} <= self._reachable(d.name) and d.name != top
+                )
+                hint = (
+                    f"; name the dataset that links them ({', '.join(via)}) in a filter"
+                    if via
+                    else ""
+                )
+                raise PlanError(
+                    f"{labels[0]} reads {top}, which {root.name} does not join to and which "
+                    f"does not reach {root.name} through many-to-one relationships{hint}"
+                )
+            used = set().union({top}, *(touched[label] for label in labels))
+            semi_joins.append(
+                self._semi_join(root, self.dataset(top), [rows[label] for label in labels], used)
+            )
+        return root, joined, semi_joins
+
+    def _semi_join(
+        self, root: OssieDataset, m: OssieDataset, filters: list[exp.Expression], used: set[str]
+    ) -> exp.Expression:
+        """root's key IN the keys of ``m`` rows that pass ``filters``, one IN per
+        relationship on the one path from ``m`` to ``root``."""
+        paths = self._paths(m.name, root.name)
+        if len(paths) > 1:
+            raise PlanError(_ambiguous(m.name, root.name, paths))
+        path = paths[0]
+        for r in path:
+            if problem := join_problem(r, self.dataset(r.to)):
+                raise PlanError(problem)
+        first = path[0]
+        sub = exp.select(*(exp.column(c, table=m.name) for c in first.from_columns))
+        sub, dict_keys = self._from(sub, m, used)
+        sub = sub.where(exp.and_(*filters))
         if dict_keys:
-            sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
-        sel.set("settings", _settings())
-        return sel
+            sub = sub.transform(lambda n: self._dict_get(n, dict_keys))
+        for before, r in zip(path, path[1:], strict=False):
+            at = self.dataset(r.from_dataset)
+            sub = (
+                exp.select(*(exp.column(c, table=at.name) for c in r.from_columns))
+                .from_(self._table(at))
+                .where(_in(at.name, before.to_columns, sub))
+            )
+        return _in(root.name, path[-1].to_columns, sub)
 
     def _stitch(self, q: Query, where: list[str], having: list[str]) -> exp.Select | None:
         """Metrics no one root answers together, each answered from its own root and

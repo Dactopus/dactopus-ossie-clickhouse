@@ -87,8 +87,8 @@ does. The planner refuses what that would get wrong:
   order id): its rows do not repeat.
 - A metric that aggregates no column of the root at all, even with a
   repeat-safe aggregate. `COUNT(DISTINCT sessions.user_id)` in a question
-  whose root is purchases (because of a purchases metric, dimension or
-  filter) counts only users with a purchase.
+  whose root is purchases (because of a purchases metric or dimension)
+  counts only users with a purchase.
 - `COUNT(*)` on its own: it names no dataset, so it would count stores when
   asked by store and sales when asked next to a sales metric. Count a key
   instead, `COUNT(orders.order_id)`, or keep it next to an aggregate that
@@ -99,8 +99,29 @@ does. The planner refuses what that would get wrong:
 customers who bought, which is what such a metric means. A metric that
 sums columns of two datasets, such as sales per employee written as
 `SUM(sales.amount) / SUM(store.employees)`, is refused in every question
-and reported by `validate`. To filter one dataset's metric by another
-dataset, give the first a field for it (`sessions.has_purchase`).
+and reported by `validate`.
+
+A filter on a dataset whose rows reference the metric's, the many side
+of a relationship, keeps each row that at least one matching row
+references, once. `-m sessions -f "purchases.revenue > 0"` counts
+sessions with a purchase of some value; `-m device_count -f
+"readings.reading_date = '2026-10-19'"` counts devices with a reading
+that day. The planner writes it as `sessions.session_key IN (SELECT
+purchases.session_key FROM purchases WHERE ...)`, along a path of
+several relationships too (customers through orders through order
+lines). Filters on one such dataset, and on the datasets it reaches
+(`items` through order lines), must hold for the same row: a customer
+with a paid order and a large order line counts only when the large line
+is on a paid order.
+
+Such a filter cannot ask for rows without a match: `NOT
+readings.reading_date = '2026-10-19'` counts devices that have a reading
+on another day. For absence, give the root a field
+(`devices.last_reading_at`, `sessions.has_purchase`). Refused, with a message that says why: a filter that
+mixes columns of both sides in one expression (write two filters; an
+`OR` across the sides cannot be split), a filter on `items` alone with no
+filter on the order lines that link items to customers, and a dimension
+of the many side next to a metric of the one side.
 
 ## Expressions
 

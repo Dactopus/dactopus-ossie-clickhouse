@@ -72,6 +72,8 @@ def test_instructions_carry_the_model_instructions():
     text = instructions(MODEL)
     assert text.startswith("Semantic model 'tpcds_retail_model' over ClickHouse.")
     assert "Every number you state must come from a query result" in text
+    # A filter on the many side is a semi-join: it cannot find rows without a match.
+    assert "it cannot find rows without a match" in text
     assert text.endswith(f"Instructions of this model:\n{summary(MODEL)['instructions']}")
     bare = MODEL.model_copy(update={"ai_context": None})
     assert "Instructions of this model" not in instructions(bare)

@@ -1,0 +1,101 @@
+# Test model: customers are counted by filters on orders, order lines and
+# items, which reach customers but which customers do not reach; accounts by
+# filters on logins, joined on a key of two columns. Created by
+# tests/test_semi_join.py.
+version: "0.2.0.dev0"
+name: semi_join_model
+datasets:
+  - name: customers
+    source: ossie_semi.customers
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: name
+        expression: {dialects: [{dialect: ANSI_SQL, expression: name}]}
+      - name: region
+        expression: {dialects: [{dialect: ANSI_SQL, expression: region}]}
+  - name: orders
+    source: ossie_semi.orders
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: customer_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: customer_id}]}
+      - name: status
+        expression: {dialects: [{dialect: ANSI_SQL, expression: status}]}
+      - name: total
+        expression: {dialects: [{dialect: ANSI_SQL, expression: total}]}
+  - name: lines
+    source: ossie_semi.lines
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: order_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}
+      - name: item_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: item_id}]}
+      - name: qty
+        expression: {dialects: [{dialect: ANSI_SQL, expression: qty}]}
+  - name: items
+    source: ossie_semi.items
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: category
+        expression: {dialects: [{dialect: ANSI_SQL, expression: category}]}
+  - name: accounts
+    source: ossie_semi.accounts
+    primary_key: [tenant, account]
+    fields:
+      - name: tenant
+        expression: {dialects: [{dialect: ANSI_SQL, expression: tenant}]}
+      - name: account
+        expression: {dialects: [{dialect: ANSI_SQL, expression: account}]}
+      - name: plan
+        expression: {dialects: [{dialect: ANSI_SQL, expression: plan}]}
+  - name: logins
+    source: ossie_semi.logins
+    primary_key: [id]
+    fields:
+      - name: id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
+      - name: tenant
+        expression: {dialects: [{dialect: ANSI_SQL, expression: tenant}]}
+      - name: account
+        expression: {dialects: [{dialect: ANSI_SQL, expression: account}]}
+      - name: day
+        expression: {dialects: [{dialect: ANSI_SQL, expression: day}]}
+relationships:
+  - name: orders_to_customer
+    from: orders
+    to: customers
+    from_columns: [customer_id]
+    to_columns: [id]
+  - name: lines_to_order
+    from: lines
+    to: orders
+    from_columns: [order_id]
+    to_columns: [id]
+  - name: lines_to_item
+    from: lines
+    to: items
+    from_columns: [item_id]
+    to_columns: [id]
+  - name: logins_to_account
+    from: logins
+    to: accounts
+    from_columns: [tenant, account]
+    to_columns: [tenant, account]
+metrics:
+  - name: customer_count
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(customers.name)"}]}
+  - name: order_count
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(orders.id)"}]}
+  - name: account_count
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(accounts.plan)"}]}
+  - name: paid_customers
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(customers.name) FILTER (WHERE orders.status = 'paid')"}]}

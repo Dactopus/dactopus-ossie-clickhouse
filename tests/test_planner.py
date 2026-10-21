@@ -16,7 +16,9 @@ from tests.test_model import FIXTURE
 
 MODEL = load_model(FIXTURE)
 P = Planner(MODEL)
-SETTINGS = "SETTINGS join_use_nulls = 1, aggregate_functions_null_for_empty = 1"
+SETTINGS = (
+    "SETTINGS join_use_nulls = 1, aggregate_functions_null_for_empty = 1, transform_null_in = 0"
+)
 
 
 def test_source_table():
@@ -350,7 +352,7 @@ def test_filter_on_unselected_metric_adds_its_join():
     assert sql.endswith(
         "GROUP BY item.i_brand HAVING ((SUM(store_sales.ss_ext_sales_price) * 1.0) / "
         "COUNT(DISTINCT customer.c_customer_sk)) > 1 ORDER BY total_sales DESC, i_brand ASC "
-        "SETTINGS join_use_nulls = 1, aggregate_functions_null_for_empty = 1"
+        "SETTINGS join_use_nulls = 1, aggregate_functions_null_for_empty = 1, transform_null_in = 0"
     )
 
 
@@ -644,10 +646,6 @@ def _with_metrics(**expressions: str) -> Planner:
         ),
         # Even a repeat-safe aggregate is about other rows: only customers who bought.
         (
-            Query(metrics=("customers",), filters=("store_sales.ss_quantity > 1",)),
-            "(because of filter 'store_sales.ss_quantity > 1')",
-        ),
-        (
             Query(metrics=("customers",), dimensions=("store_sales.ss_store_sk",)),
             "(because of dimension 'store_sales.ss_store_sk')",
         ),
@@ -699,6 +697,18 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     with pytest.raises(PlanError) as e:
         planner.sql(query)
     assert message in str(e.value)
+
+
+def test_a_filter_on_rows_that_reference_the_root_is_a_semi_join():
+    """Customers who bought more than one of an item: a semi-join on store_sales,
+    not an answer over sales rows (tests/test_semi_join.py has the values)."""
+    planner = _with_metrics(customers="COUNT(DISTINCT customer.c_customer_sk)")
+    sql = planner.sql(Query(metrics=("customers",), filters=("store_sales.ss_quantity > 1",)))
+    assert sql.startswith(
+        "SELECT COUNT(DISTINCT customer.c_customer_sk) AS customers FROM tpcds.customer AS "
+        "customer WHERE customer.c_customer_sk IN (SELECT store_sales.ss_customer_sk FROM "
+        "tpcds.store_sales AS store_sales WHERE store_sales.ss_quantity > 1)"
+    )
 
 
 @pytest.mark.parametrize(

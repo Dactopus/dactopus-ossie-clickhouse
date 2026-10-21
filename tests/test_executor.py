@@ -414,6 +414,10 @@ def test_functions_outside_the_spec_run_as_written_or_are_hidden(ex, tmp_path, c
     other = Executor(ex.client, load_model(p))
     # as written: 2024-03-15 is a Friday, ISO 5; amounts above 15 are 20 and 30
     assert other.execute(Query(("big",), ("orders.weekday",))).rows == [(5, 50.0)]
+    # the server says sumIf aggregates, so a filter on it goes to HAVING
+    assert other.catalog.aggregate("sumIf") and not other.catalog.aggregate("toString")
+    assert other.execute(Query(("big",), ("orders.weekday",), ("big > 40",))).rows == [(5, 50.0)]
+    assert other.execute(Query(("big",), ("orders.weekday",), ("big > 60",))).rows == []
     assert other.check() == []
     # the others are hidden like untranslatable ones
     with pytest.raises(PlanError, match="unknown field"):

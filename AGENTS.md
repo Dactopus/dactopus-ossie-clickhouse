@@ -177,7 +177,9 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
   SQLGlot never renames it (`DAYOFWEEK` to `DAY_OF_WEEK`, which ClickHouse
   lacks). The executor checks those names against `system.functions`,
   combinators included, and hides a field or metric calling one the
-  server lacks; `validate --url` reports it.
+  server lacks; `validate --url` reports it. `Catalog.aggregate` tells
+  the planner which of them are aggregates; `Planner._parse` types those
+  as `exp.AnonymousAggFunc`, so every `exp.AggFunc` check covers them.
 
 ## Development
 

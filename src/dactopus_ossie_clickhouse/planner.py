@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 
@@ -18,7 +19,13 @@ from ossie import OssieDataset, OssieDocument, OssieField, OssieRelationship
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse.model import covers_key, join_problem
-from dactopus_ossie_clickhouse.translate import parse, pick_expression, rewrite_tree, untranslatable
+from dactopus_ossie_clickhouse.translate import (
+    outside_spec,
+    parse,
+    pick_expression,
+    rewrite_tree,
+    untranslatable,
+)
 
 
 class PlanError(ValueError):
@@ -45,7 +52,14 @@ class TableInfo:
     dictionary_key: str | None = None  # single-key dictionary: read with dictGetOrNull
 
 
-Catalog = dict[str, TableInfo]  # by dataset name
+class Catalog(dict[str, TableInfo]):
+    """What the executor learned from the server: TableInfo by dataset name, and
+    ``aggregate``, whether a function outside the spec is an aggregate (None when
+    system.functions could not be read)."""
+
+    def __init__(self, tables=(), aggregate: Callable[[str], bool] | None = None):
+        super().__init__(tables)
+        self.aggregate = aggregate
 
 
 @dataclass(frozen=True)
@@ -117,8 +131,12 @@ Inputs = list[tuple[exp.AggFunc, set[str]]]
 
 def _repeat_safe(agg: exp.AggFunc) -> bool:
     # A parametric aggregate, name(p)(args), keeps its arguments in params:
-    # MEDIAN(DISTINCT x) is rewritten to one.
-    args = (agg.args.get("params") or []) if isinstance(agg, exp.ParameterizedAgg) else [agg.this]
+    # MEDIAN(DISTINCT x) is rewritten to one. One outside the spec keeps them in
+    # expressions: sumIf(DISTINCT x, c).
+    if isinstance(agg, exp.ParameterizedAgg):
+        args = agg.args.get("params") or []
+    else:
+        args = agg.expressions if isinstance(agg, exp.AnonymousAggFunc) else [agg.this]
     return isinstance(agg, tuple(_REPEAT_SAFE)) or any(isinstance(a, exp.Distinct) for a in args)
 
 
@@ -161,14 +179,14 @@ def _repeated(inputs: Inputs, root: str, one_to_one: set[str]) -> Inputs:
     ]
 
 
-def unanswerable_metrics(model: OssieDocument) -> dict[str, str]:
+def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -> dict[str, str]:
     """Metrics the planner refuses in every question, with why.
 
     One that names an unknown field or reads no column, and one with a
     duplicate-sensitive aggregate over each of two datasets: whichever is the
     root, the other one's rows repeat. Untranslatable metrics are reported by
     untranslatable()."""
-    planner = Planner(model)
+    planner = Planner(model, catalog)
     skip = set(untranslatable(model)[1])
     out = {}
     for m in model.metrics or []:
@@ -207,9 +225,15 @@ def _settings() -> list[exp.Expression]:
     ]
 
 
-def _empty_value(tree: exp.Expression) -> exp.Expression:
+def _empty_value(tree: exp.Expression) -> exp.Expression | None:
     """A metric over no rows: what a stitched group missing from the metric's fact
-    shows. #246 §6.11.5: NULL for SUM, 0 for COUNT, 0 for COALESCE(SUM(x), 0)."""
+    shows. #246 §6.11.5: NULL for SUM, 0 for COUNT, 0 for COALESCE(SUM(x), 0).
+
+    None for a metric with an aggregate outside the spec: ClickHouse gives 0 for
+    countIf and uniq, NULL for sumIf, [] for groupArray, and system.functions
+    does not say which."""
+    if any(agg.meta.get("outside_spec") for agg in tree.find_all(exp.AggFunc)):
+        return None
 
     def empty(node: exp.Expression) -> exp.Expression:
         agg = node.this if isinstance(node, exp.Filter) else node  # COUNT(x) FILTER (...)
@@ -306,6 +330,25 @@ class Planner:
             raise PlanError(f"unknown field {ref!r}{_suggest(ref, names)}")
         return ds, f
 
+    def _parse(self, expression: str) -> exp.Expression:
+        """parse(), with a call of a function outside the spec that the server
+        says is an aggregate (countIf, uniqExactOrNull) typed as one, so every
+        check on aggregates covers it. Without a catalog it stays a plain call."""
+        tree = parse(expression)
+        aggregate = self.catalog.aggregate if self.catalog is not None else None
+        if aggregate is None:
+            return tree
+
+        def mark(node: exp.Expression) -> exp.Expression:
+            # A quoted name stays a plain call: AnonymousAggFunc prints it unquoted.
+            if outside_spec(node) and isinstance(node.this, str) and aggregate(node.name):
+                agg = exp.AnonymousAggFunc(this=node.this, expressions=node.expressions)
+                agg.meta["outside_spec"] = True
+                return agg
+            return node
+
+        return tree.transform(mark)
+
     def resolve(self, expression: str, used: set[str], metrics: bool = False) -> exp.Expression:
         """Parse an expression, inline `dataset.field` references, qualify columns.
 
@@ -314,7 +357,7 @@ class Planner:
         Records the datasets touched in ``used`` (by model name).
         """
         try:
-            tree = parse(expression)
+            tree = self._parse(expression)
         except ValueError as e:
             raise PlanError(str(e)) from e
 
@@ -358,7 +401,7 @@ class Planner:
 
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
-        tree = parse(pick_expression(f.expression))
+        tree = self._parse(pick_expression(f.expression))
 
         def qualify(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Column) and not node.table:
@@ -601,7 +644,7 @@ class Planner:
         names = list(dict.fromkeys(self.metric(n).name for n in q.metrics))
         having_trees = []
         for f in having:
-            tree = parse(f)
+            tree = self._parse(f)
             for col in tree.find_all(exp.Column):
                 if not col.table and self.metric(col.name).name not in names:
                     names.append(self.metric(col.name).name)  # filtered on, not selected
@@ -637,6 +680,17 @@ class Planner:
                     "answered from different datasets; this version cannot answer it, "
                     "ask for it in its own question"
                 )
+        empties = {n: _empty_value(metric_trees[n]) for n in names}
+        for n, empty in empties.items():
+            if empty is None:
+                aggs = metric_trees[n].find_all(exp.AggFunc)
+                agg = next(a for a in aggs if a.meta.get("outside_spec"))
+                raise PlanError(
+                    f"metric {n!r} is answered from different datasets than the question's "
+                    f"other metrics and uses {agg.name}, an aggregate outside the spec whose "
+                    "value over no rows this version cannot tell; ask for it in its own "
+                    "question"
+                )
         for f, tree in zip(having, having_trees, strict=True):
             if tree.find(exp.AggFunc):
                 raise PlanError(
@@ -645,7 +699,6 @@ class Planner:
                 )
 
         dims = [self.field_ref(d)[1].name for d in q.dimensions]
-        empties = {n: _empty_value(metric_trees[n]) for n in names}
         marked = [  # groups with a metric whose value over no rows is not NULL
             g
             for g, (members, _) in enumerate(branches)

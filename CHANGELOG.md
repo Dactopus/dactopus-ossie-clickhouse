@@ -15,6 +15,11 @@ a minor release may change the Python API.
   ClickHouse matches them: as written, in any case for the functions it
   marks case-insensitive, and with aggregate combinators (`sumIf`,
   `uniqExactOrNull`); user-defined functions count.
+- Connected to a server, the planner treats a function outside the spec
+  that the server lists as an aggregate (`countIf`, `uniq`, `sumIfOrNull`)
+  as one: it refuses one over joined rows that repeat, a filter on it goes
+  to `HAVING`, and a metric with one is not stitched with metrics of
+  other datasets, since its value over no rows is unknown.
 
 ### Changed
 
@@ -27,11 +32,13 @@ a minor release may change the Python API.
   `toDayOfMonth(d)`. Other engines' spellings SQLGlot used to translate
   (`ARG_MAX`, `COUNT_IF`, `LEN`) are sent as written too; the spec's
   aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`) still translate.
+  ClickHouse's `any(x)` is sent as written too; it was read as the
+  `ANY (subquery)` predicate and printed as `ANY(x)`, which ClickHouse
+  does not have.
 - `ANY_VALUE`, `BOOL_AND` and `BOOL_OR` are no longer among the aggregates
   the planner lets read a joined dataset on their own: they are not the
   spec's. `BOOL_AND` and `BOOL_OR` never ran on ClickHouse; `ANY_VALUE`
-  runs as ClickHouse's alias of `any`, as a function the planner does not
-  inspect.
+  runs as ClickHouse's alias of `any`, an aggregate outside the spec.
 
 ## [0.8.0] - 2026-10-15
 

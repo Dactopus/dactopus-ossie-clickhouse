@@ -229,6 +229,12 @@ def _frame_problem(spec: exp.WindowSpec) -> str | None:
 
 def _shape_problem(node: exp.Expression) -> str | None:
     """Spec shapes an argument count cannot express."""
+    # SQLGlot reads ClickHouse's quantile(0.5)(x) as quantile(0.5) AS (x): SQL that
+    # fails, with x an alias the grant checks never see as a column.
+    if isinstance(node, exp.Aliases):
+        return "ClickHouse's parametric call name(params)(args) is not supported"
+    if isinstance(node, exp.Alias):
+        return "an alias (AS) is not allowed in an expression"
     if isinstance(node, exp.PercentileCont | exp.PercentileDisc):
         signature = _SIGNATURES[node.sql_name()][0]
         if not isinstance(node.parent, exp.WithinGroup):

@@ -229,6 +229,9 @@ def test_format_must_be_literal():
             "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x NULLS FIRST) OVER (ORDER BY k)",
             r"NULLS FIRST is allowed only in a window's ORDER BY",
         ),
+        # SQLGlot reads a ClickHouse parametric call as an alias: SQL that fails
+        ("quantile(0.9)(x)", r"parametric call name\(params\)\(args\) is not supported"),
+        ("SUM(x) AS total", r"an alias \(AS\) is not allowed"),
         # does not tokenize
         ("'abc", r"cannot parse"),
     ],

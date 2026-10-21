@@ -22,6 +22,9 @@ a minor release may change the Python API.
   `anyLast`, `argMax`, `sumDistinct`). Stitched with metrics of other
   datasets, its value over no rows comes from ClickHouse: 0 for
   `countIf` and `uniq`, NULL for `sumIf`.
+- `validate --url` reports a server whose `system.functions` cannot be
+  read: functions outside the spec then go unchecked, and their
+  aggregates are planned as plain functions.
 
 ### Changed
 
@@ -42,6 +45,14 @@ a minor release may change the Python API.
   spec's. `BOOL_AND` and `BOOL_OR` never ran on ClickHouse; `ANY_VALUE`
   runs as ClickHouse's alias of `any`, which a planner connected to a
   server still lets read a joined dataset on its own.
+
+### Fixed
+
+- An expression with an alias (`SUM(x) AS total`) or ClickHouse's
+  parametric form (`quantile(0.9)(x)`, which SQLGlot read as
+  `quantile(0.9) AS (x)`) does not translate: it is hidden and reported
+  by `validate`. Before, it passed and every question with it failed with
+  a syntax error.
 
 ## [0.8.0] - 2026-10-15
 

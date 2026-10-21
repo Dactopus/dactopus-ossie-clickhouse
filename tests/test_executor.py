@@ -458,6 +458,19 @@ def test_functions_outside_the_spec_run_as_written_or_are_hidden(ex, tmp_path, c
     assert "weekday" not in err and "'big'" not in err
 
 
+def test_a_server_without_a_function_list_is_reported(ex, monkeypatch):
+    """Without system.functions nothing checks functions outside the spec or
+    types their aggregates: validate says so instead of passing."""
+    monkeypatch.setattr(Executor, "_server_functions", lambda self: None)
+    other = Executor(ex.client, load_model(FIXTURE))
+    assert other.catalog.aggregate is None
+    assert other.check() == [
+        "system.functions cannot be read: functions outside the spec are not checked, "
+        "and an aggregate among them (countIf, uniq) is planned as a plain function, "
+        "so nothing refuses it over joined rows that repeat"
+    ]
+
+
 def test_untranslatable_expressions_are_hidden_and_reported(ex, tmp_path, capsys):
     # Snowflake's four-argument REGEXP_COUNT is outside the spec signature.
     bad = "REGEXP_COUNT(country_code, 'e', 1, 'i')"

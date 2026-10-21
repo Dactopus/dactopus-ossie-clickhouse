@@ -311,7 +311,8 @@ class Executor:
     # --- checks -------------------------------------------------------------
 
     def check(self) -> list[str]:
-        """Problems that only the database can reveal: missing sources and columns.
+        """Problems that only the database can reveal: missing sources and columns,
+        and a server whose functions cannot be listed.
 
         Run as a user who can read everything; for a restricted user, missing
         means hidden, not broken."""
@@ -353,6 +354,12 @@ class Executor:
                         problems.append(
                             f"relationship {r.name!r}: column {c!r} not in dataset {ds_name!r}"
                         )
+        if self.functions is None:
+            problems.append(
+                "system.functions cannot be read: functions outside the spec are not "
+                "checked, and an aggregate among them (countIf, uniq) is planned as a "
+                "plain function, so nothing refuses it over joined rows that repeat"
+            )
         return problems
 
     # --- execution ----------------------------------------------------------

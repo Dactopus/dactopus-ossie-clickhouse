@@ -258,22 +258,39 @@ def test_a_group_that_cannot_reach_a_dimension_names_its_metrics():
         )
 
 
-def test_an_aggregate_outside_the_spec_is_not_stitched():
-    """Over no rows countIf is 0 and sumIf NULL; nothing here can tell which."""
+def _with_server_aggregates() -> OssieDocument:
     data = load_model(FIXTURE).model_dump(by_alias=True, exclude_none=True)
-    data["metrics"].append(
-        {
-            "name": "big_orders",
-            "expression": {
-                "dialects": [{"dialect": "ANSI_SQL", "expression": "countIf(orders.amount > 60)"}]
-            },
-        }
-    )
-    planner = Planner(
-        OssieDocument.model_validate(data), Catalog(aggregate=lambda name: name == "countIf")
-    )
-    assert "countIf(orders.amount > 60)" in planner.sql(
-        Query(("big_orders",), ("customers.region",))
-    )
-    with pytest.raises(PlanError, match="uses countIf, an aggregate outside the spec"):
-        planner.sql(Query(("big_orders", "total_returns"), ("customers.region",)))
+    for name, expression in (
+        ("big_orders", "countIf(orders.amount > 60)"),
+        ("big_sum", "sumIf(orders.amount, orders.amount > 60)"),
+        ("order_ids", "uniqExact(orders.id)"),
+    ):
+        data["metrics"].append(
+            {
+                "name": name,
+                "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": expression}]},
+            }
+        )
+    return OssieDocument.model_validate(data)
+
+
+def test_an_aggregate_outside_the_spec_is_stitched_with_clickhouse_empty_value():
+    """Over no rows countIf and uniqExact are 0 and sumIf NULL, and nothing lists
+    which: ClickHouse computes the metric over WHERE FALSE."""
+    aggregates = {"countIf", "sumIf", "uniqExact"}
+    planner = Planner(_with_server_aggregates(), Catalog(aggregate=aggregates.__contains__))
+    sql = planner.sql(Query(("big_orders", "total_returns"), ("customers.region",)))
+    assert (
+        "(SELECT countIf(orders.amount > 60) AS big_orders "
+        "FROM ossie_stitch.orders AS orders WHERE FALSE)"
+    ) in sql
+
+
+def test_clickhouse_empty_values_of_stitched_metrics(ex):
+    other = Executor(ex.client, _with_server_aggregates())
+    q = Query(("big_orders", "big_sum", "order_ids", "total_returns"), ("customers.region",))
+    rows = {r[0]: r[1:] for r in other.execute(q).rows}
+    # NORTH has returns and no orders; the orphan order of 30 matches no condition.
+    assert rows["NORTH"][:3] == (0, None, 0)
+    assert rows["EAST"][:3] == (2, 300, 3)
+    assert rows[None][:3] == (0, None, 1)

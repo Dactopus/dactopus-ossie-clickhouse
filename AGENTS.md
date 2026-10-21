@@ -180,6 +180,9 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
   server lacks; `validate --url` reports it. `Catalog.aggregate` tells
   the planner which of them are aggregates; `Planner._parse` types those
   as `exp.AnonymousAggFunc`, so every `exp.AggFunc` check covers them.
+  Which ClickHouse aggregates repeats cannot change is a list in the
+  planner (`_CLICKHOUSE_REPEAT_SAFE`), checked on the server; their value
+  over no rows in a stitched question is a `WHERE FALSE` scalar subquery.
 
 ## Development
 

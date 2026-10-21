@@ -121,10 +121,15 @@ ClickHouse's own meaning: `toString(x)`, `DAYOFWEEK(d)`, an aggregate
 with combinators such as `sumIf(x, c)`, a user-defined function. Nothing
 checks such a call before the query runs, except `validate --url`, which
 hides and reports a field or metric calling a function the server does
-not have, matched as ClickHouse matches it (`sumIf`, not `SUMIF`). The
-planner does not know such an aggregate is one: it cannot refuse it over
-repeated rows (below), and a filter made of it goes to `WHERE`, where
-ClickHouse rejects it.
+not have, matched as ClickHouse matches it (`sumIf`, not `SUMIF`).
+Connected to a server, the planner treats a call the server lists as an
+aggregate (`countIf`, `uniqExact`, `sumIfOrNull`) as one: a filter on it
+goes to `HAVING`, and over a joined dataset it counts as repeat-sensitive
+(below), even `uniq` or `anyLast`, whose value repeats would not change.
+A metric with one is not stitched with metrics of other datasets (below):
+its value over no rows is 0 for `countIf`, NULL for `sumIf`, and nothing
+tells which. The `sql` command, which has no server, knows none of this
+and plans such a call as a plain function.
 
 `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec requires, and hold
 every value of the group in memory; `APPROX_PERCENTILE` is the fast

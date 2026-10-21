@@ -13,6 +13,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
+from functools import partial
 
 import clickhouse_connect
 from ossie import OssieDataset, OssieDocument
@@ -83,6 +84,7 @@ class ServerFunctions:
             name.lower() for name, insensitive, aggregate in rows if insensitive and aggregate
         }
         self.combinators = sorted(combinators, key=len, reverse=True)
+        self.by_lower = {n.lower(): n for n in sorted(self.names)}  # for suggestions
 
     def has(self, name: str, aggregate: bool = False) -> bool:
         names, folded = (
@@ -100,9 +102,12 @@ class ServerFunctions:
         that the server lacks, with the nearest names it has."""
         for name in sorted(passthrough_functions(tree)):
             if not self.has(name):
-                by_lower = {n.lower(): n for n in sorted(self.names)}
-                close = difflib.get_close_matches(name.lower(), by_lower, n=3, cutoff=0.6)
-                hint = f" (did you mean: {', '.join(by_lower[c] for c in close)}?)" if close else ""
+                close = difflib.get_close_matches(name.lower(), self.by_lower, n=3, cutoff=0.6)
+                hint = (
+                    f" (did you mean: {', '.join(self.by_lower[c] for c in close)}?)"
+                    if close
+                    else ""
+                )
                 return f"calls {name}(), a function this ClickHouse server does not have{hint}"
         return None
 
@@ -119,6 +124,7 @@ class Executor:
         self.user, self.roles, self.database = self.client.query(
             "SELECT currentUser(), enabledRoles(), currentDatabase()"
         ).result_rows[0]
+        self.functions = self._server_functions()
         self.catalog = self.introspect()
         self._hide_unknown_functions()
         # The databases the model reads, not the connection's: no credentials, and
@@ -128,7 +134,8 @@ class Executor:
         # spend a turn on each. validate reports them.
         hidden = self._hidden_by_grants() | Hidden(
             fields=frozenset(self.untranslatable_fields),
-            metrics=frozenset(self.untranslatable_metrics) | frozenset(unanswerable_metrics(model)),
+            metrics=frozenset(self.untranslatable_metrics)
+            | frozenset(unanswerable_metrics(model, self.catalog)),
         )
         if policy:
             hidden |= policy.hidden_for(self.user, list(self.roles))
@@ -165,13 +172,8 @@ class Executor:
             if f"{ds.name}.{f.name}" not in self.untranslatable_fields:
                 yield f, parse(pick_expression(f.expression))
 
-    def _hide_unknown_functions(self) -> None:
-        """A field or metric calling a function this server does not have is
-        hidden like one that does not translate, and reported the same way.
-
-        Functions outside the spec reach ClickHouse as written (translate.py),
-        so only the server can say whether they exist. Without system.functions
-        (not readable, or an empty answer) nothing is checked."""
+    def _server_functions(self) -> ServerFunctions | None:
+        """What system.functions lists; None when it cannot be read or is empty."""
         try:
             rows = self.client.query(
                 "SELECT name, case_insensitive, is_aggregate FROM system.functions"
@@ -180,17 +182,25 @@ class Executor:
                 "SELECT name FROM system.aggregate_function_combinators"
             ).result_rows
         except Exception:
+            return None
+        return ServerFunctions(rows, [c for (c,) in combinators]) if rows else None
+
+    def _hide_unknown_functions(self) -> None:
+        """A field or metric calling a function this server does not have is
+        hidden like one that does not translate, and reported the same way.
+
+        Functions outside the spec reach ClickHouse as written (translate.py),
+        so only the server can say whether they exist. Without system.functions
+        nothing is checked."""
+        if self.functions is None:
             return
-        if not rows:
-            return
-        functions = ServerFunctions(rows, [c for (c,) in combinators])
         for ds in self.full_model.datasets:
             for f, tree in list(self._parsed_fields(ds)):
-                if problem := functions.problem(tree):
+                if problem := self.functions.problem(tree):
                     self.untranslatable_fields[f"{ds.name}.{f.name}"] = problem
         for m in self.full_model.metrics or []:
             if m.name not in self.untranslatable_metrics:
-                if problem := functions.problem(parse(pick_expression(m.expression))):
+                if problem := self.functions.problem(parse(pick_expression(m.expression))):
                     self.untranslatable_metrics[m.name] = problem
 
     # --- introspection ------------------------------------------------------
@@ -206,8 +216,10 @@ class Executor:
                 continue
             tables.setdefault((t.db or self.database, t.name), []).append(ds)
         self.databases = sorted({db for db, _ in tables})
+        # Which functions outside the spec are aggregates, for the planner's checks.
+        aggregate = partial(self.functions.has, aggregate=True) if self.functions else None
         if not tables:
-            return {}
+            return Catalog(aggregate=aggregate)
         params = {"pairs": list(tables)}  # bound server-side: names never enter SQL text
         pairs = "{pairs:Array(Tuple(String, String))}"
         rows = self.client.query(
@@ -229,7 +241,7 @@ class Executor:
             dicts = []
         attributes = {(db, n): set(a) for db, n, a in dicts}
 
-        catalog: Catalog = {}
+        catalog = Catalog(aggregate=aggregate)
         self.undecided: set[str] = set()  # datasets whose need for FINAL this user cannot see
         for db, name, engine, full in rows:
             key = None

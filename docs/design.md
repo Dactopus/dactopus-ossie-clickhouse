@@ -51,8 +51,8 @@ The spec's aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`, `CHARINDEX`)
 are in the catalog and still translate. `ANY_VALUE`, `BOOL_AND` and
 `BOOL_OR` left the planner's list of aggregates that may read a joined
 dataset on their own: they are not the spec's, `BOOL_AND` and `BOOL_OR`
-never ran, and `ANY_VALUE` runs as ClickHouse's alias of `any` but as a
-function the planner does not inspect.
+never ran, and `ANY_VALUE` runs as ClickHouse's alias of `any`, an
+aggregate outside the spec like any other (below).
 
 Whether a pass-through function exists only the server can say.
 `Executor` reads `system.functions`, which lists user-defined functions
@@ -63,6 +63,19 @@ resolve, `SUMIF` does not; `countIf` is not listed, `count` and the `If`
 combinator are). A field or metric calling a function the server lacks
 is hidden like one that does not translate and reported by `validate
 --url` with the nearest names. Without a server nothing checks it.
+
+The same list tells the planner which pass-through calls aggregate.
+`Catalog.aggregate` answers it with the combinator rule above, and the
+planner types such a call as `exp.AnonymousAggFunc`, so every check on
+aggregates covers it: one over a joined dataset alone is refused unless
+the join is on a key of the root (none counts as repeat-safe), and a
+filter on it goes to `HAVING`. Before, SQLGlot typed a few of them
+(`countIf`, `argMax`, `corr`) and left the rest (`sumIf`, `uniq`)
+unchecked; a metric like `countIf(store.x > 10)` next to a sales
+dimension counted each store once per sale. Such a metric is refused in
+a stitched question: its value over no rows varies (0 for `countIf` and
+`uniq`, NULL for `sumIf`, `[]` for `groupArray`) and `system.functions`
+does not say which.
 
 ## SQLGlot bounds move only in minor releases
 

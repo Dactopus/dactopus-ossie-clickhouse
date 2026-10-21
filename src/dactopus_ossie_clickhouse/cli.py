@@ -127,7 +127,10 @@ def _run(args: argparse.Namespace) -> int:
     problems = [f"field {k}: {v}" for k, v in fields.items()]
     problems += [f"metric {k!r}: {v}" for k, v in metrics.items()]
     problems += join_problems(doc)
-    problems += [f"metric {k!r}: {v}" for k, v in unanswerable_metrics(doc).items()]
+    problems += [
+        f"metric {k!r}: {v}"
+        for k, v in unanswerable_metrics(doc, ex.catalog if ex else None).items()
+    ]
     where = ""
     if ex:
         problems += ex.check()

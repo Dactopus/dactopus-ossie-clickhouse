@@ -3,6 +3,7 @@ import pytest
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.planner import (
+    Catalog,
     PlanError,
     Planner,
     Query,
@@ -416,7 +417,9 @@ def test_join_on_superset_of_unique_key():
 def test_dictionary_joined_on_superset_of_its_key_is_a_join():
     """dictGet by the key alone would ignore the extra column and match rows the join would not."""
     planner = _variant(_superset_of_item_key)
-    planner.catalog = {"item": TableInfo("Dictionary", frozenset(), dictionary_key="i_item_sk")}
+    planner.catalog = Catalog(
+        {"item": TableInfo("Dictionary", frozenset(), dictionary_key="i_item_sk")}
+    )
     sql = planner.sql(Query(metrics=("total_sales",), dimensions=("item.i_brand",)))
     assert "LEFT JOIN tpcds.item AS item" in sql and "dictGet" not in sql
 
@@ -476,10 +479,12 @@ def test_field_may_only_use_its_own_columns():
 
 def test_catalog_final_and_dictionary():
     """The executor's catalog changes the SQL shape; pinned here without a server."""
-    catalog = {
-        "store_sales": TableInfo("ReplacingMergeTree", frozenset(), dedup=True),
-        "item": TableInfo("Dictionary", frozenset(), dictionary_key="i_item_sk"),
-    }
+    catalog = Catalog(
+        {
+            "store_sales": TableInfo("ReplacingMergeTree", frozenset(), dedup=True),
+            "item": TableInfo("Dictionary", frozenset(), dictionary_key="i_item_sk"),
+        }
+    )
     sql = Planner(MODEL, catalog).sql(
         Query(metrics=("total_sales",), dimensions=("item.i_brand", "item.i_item_sk"))
     )
@@ -696,6 +701,36 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     assert message in str(e.value)
 
 
+def test_server_aggregates_outside_the_spec_are_checked_as_aggregates():
+    """countIf is an aggregate only to the server: with the catalog's word for it,
+    the planner refuses it over repeated rows and filters on it in HAVING."""
+    planner = _with_metrics(
+        big_store_sales="SUM(store_sales.ss_ext_sales_price) / "
+        "countIf(store.s_number_employees > 10)",
+    )
+    query = Query(metrics=("big_store_sales",))
+    having = Query(
+        metrics=("total_sales",),
+        dimensions=("store_sales.ss_store_sk",),
+        filters=("countIf(store_sales.ss_quantity > 1) > 5",),
+    )
+    # Without a server nothing says countIf aggregates.
+    assert "countIf(store.s_number_employees > 10)" in planner.sql(query)
+    assert "WHERE countIf(" in planner.sql(having)
+    planner.catalog = Catalog(aggregate=lambda name: name == "countIf")
+    with pytest.raises(PlanError, match=r"applies countIf\(store.s_number_employees > 10\)"):
+        planner.sql(query)
+    sql = planner.sql(having)
+    assert "HAVING countIf(store_sales.ss_quantity > 1) > 5" in sql and "WHERE" not in sql
+    # DISTINCT makes one repeat-safe, as it does a spec aggregate.
+    planner = _with_metrics(
+        tn_staff="SUM(store_sales.ss_ext_sales_price) / "
+        "sumIf(DISTINCT store.s_number_employees, store.s_state = 'TN')",
+    )
+    planner.catalog = Catalog(aggregate=lambda name: name == "sumIf")
+    assert "sumIf(DISTINCT" in planner.sql(Query(metrics=("tn_staff",)))
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -842,12 +877,14 @@ def test_dictionary_on_a_path():
     """A dictionary at the end of a path is read with dictGetOrNull on the key of
     the dataset before it; one in the middle is joined, since the next join reads it."""
     planner = _variant(_area)
-    catalog = {"store_area": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")}
+    catalog = Catalog(
+        {"store_area": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")}
+    )
     query = Query(metrics=("total_sales",), dimensions=("store_area.s_state",))
     sql = Planner(planner.model, catalog).sql(query)
     assert "dictGetOrNull('tpcds.store', 's_state', store.s_store_sk)" in sql
     assert "LEFT JOIN tpcds.store AS store ON" in sql and "AS store_area" not in sql
-    catalog = {"store": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")}
+    catalog = Catalog({"store": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")})
     sql = Planner(planner.model, catalog).sql(query)
     assert "dictGet" not in sql and "LEFT JOIN tpcds.store AS store ON" in sql
 

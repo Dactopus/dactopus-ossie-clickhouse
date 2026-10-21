@@ -108,6 +108,8 @@ def test_translate_uses_picked_dialect():
         ("COUNT_IF(x > 1)", "COUNT_IF(x > 1)"),
         ("ARG_MAX(x, s)", "ARG_MAX(x, s)"),
         ("DECODE(x, 1, 'a')", "DECODE(x, 1, 'a')"),
+        ("any(x)", "any(x)"),
+        ("ANY(x) + 1", "ANY(x) + 1"),
         # the spec's aliases still translate
         ("NVL(x, 0)", "COALESCE(x, 0)"),
         ("CEILING(x)", "CEIL(x)"),
@@ -148,6 +150,7 @@ def test_to_clickhouse(ossie, expected):
 def test_passthrough_functions_are_the_names_outside_the_catalog():
     tree = parse("DAYOFWEEK(TO_DATE(s)) + sumIf(x, ZEROIFNULL(y) > 0) + NVL(x, 0)")
     assert passthrough_functions(tree) == {"DAYOFWEEK", "sumIf"}
+    assert passthrough_functions(parse("any(x) + ANY(y)")) == {"any", "ANY"}
     assert set(_SIGNATURES) <= _CATALOG
 
 

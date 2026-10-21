@@ -161,6 +161,11 @@ class _OssieParser(Parser):
     FUNCTION_PARSERS = {
         name: parser for name, parser in Parser.FUNCTION_PARSERS.items() if name in _CATALOG
     }
+    # ANY is x = ANY (subquery), which the spec has no use for; without this,
+    # ClickHouse's any(x) printed as ANY(x), and ANY(x) + 1 parsed as ANY((x) + 1).
+    NO_PAREN_FUNCTION_PARSERS = {
+        name: parser for name, parser in Parser.NO_PAREN_FUNCTION_PARSERS.items() if name != "ANY"
+    }
 
     def _parse_ordered(self, parse_method=None):
         ordered = super()._parse_ordered(parse_method)
@@ -281,12 +286,17 @@ def parse(expression: str) -> exp.Expression:
     return tree
 
 
+def outside_spec(node: exp.Expression) -> bool:
+    """A call, in a tree from parse(), of a function that is not the spec's."""
+    return isinstance(node, exp.Anonymous) and node.name.upper() not in _CATALOG
+
+
 def passthrough_functions(tree: exp.Expression) -> set[str]:
     """Function names in a tree from parse() that are not the spec's.
 
     They reach ClickHouse as written, so only the server can say whether they
     exist (Executor checks them against system.functions)."""
-    return {f.name for f in tree.find_all(exp.Anonymous) if f.name.upper() not in _CATALOG}
+    return {f.name for f in tree.find_all(exp.Anonymous) if outside_spec(f)}
 
 
 # --- ClickHouse rewrites ----------------------------------------------------

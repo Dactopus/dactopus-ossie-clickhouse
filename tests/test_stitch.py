@@ -11,10 +11,17 @@ SUM, 0 for COUNT (§6.11.5)."""
 from pathlib import Path
 
 import pytest
+from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.executor import Executor
-from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
+from dactopus_ossie_clickhouse.planner import (
+    Catalog,
+    PlanError,
+    Planner,
+    Query,
+    unanswerable_metrics,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "stitch.yaml"
 ROWS = {
@@ -249,3 +256,24 @@ def test_a_group_that_cannot_reach_a_dimension_names_its_metrics():
         Planner(load_model(FIXTURE)).sql(
             Query(("total_revenue", "total_returns"), ("orders.status",))
         )
+
+
+def test_an_aggregate_outside_the_spec_is_not_stitched():
+    """Over no rows countIf is 0 and sumIf NULL; nothing here can tell which."""
+    data = load_model(FIXTURE).model_dump(by_alias=True, exclude_none=True)
+    data["metrics"].append(
+        {
+            "name": "big_orders",
+            "expression": {
+                "dialects": [{"dialect": "ANSI_SQL", "expression": "countIf(orders.amount > 60)"}]
+            },
+        }
+    )
+    planner = Planner(
+        OssieDocument.model_validate(data), Catalog(aggregate=lambda name: name == "countIf")
+    )
+    assert "countIf(orders.amount > 60)" in planner.sql(
+        Query(("big_orders",), ("customers.region",))
+    )
+    with pytest.raises(PlanError, match="uses countIf, an aggregate outside the spec"):
+        planner.sql(Query(("big_orders", "total_returns"), ("customers.region",)))

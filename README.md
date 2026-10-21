@@ -114,7 +114,9 @@ questions it refuses.
 - Expressions in `OSSIE_SQL_2026` or `ANSI_SQL` are translated on the
   [SQLGlot](https://github.com/tobymao/sqlglot) AST; the spec's function
   catalog is mapped to ClickHouse equivalents and checked by value against
-  [DuckDB](https://duckdb.org) and the spec text.
+  [DuckDB](https://duckdb.org) and the spec text. Any other function
+  reaches ClickHouse as written (`toString`, `sumIf`, `DAYOFWEEK`, a
+  user-defined function), and `validate --url` checks the server has it.
 - Rows come sorted by the first metric, descending, unless `order_by` says
   otherwise, so the top rows come first and nobody has to rank them by hand.
   Rows without a value (NULL) come last in either direction. Ties are
@@ -129,7 +131,7 @@ questions it refuses.
 
 | Command | What it does |
 | --- | --- |
-| `validate <model>... [--url]` | Check the model; with `--url`, also that every source, column and relationship column exists in ClickHouse. |
+| `validate <model>... [--url]` | Check the model; with `--url`, also that every source, column, relationship column and function outside the spec exists in ClickHouse. |
 | `sql <model>... ...` | Print the SQL for a question without running it. |
 | `query <model>... ... [--json]` | Run it; TSV or JSON rows. |
 | `serve <model>...` | MCP server over stdio (needs the `[mcp]` extra). |

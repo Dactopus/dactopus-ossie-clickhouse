@@ -7,6 +7,32 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- `validate --url` reports a field or metric that calls a function the
+  server does not have, with the nearest names it has, and the executor
+  hides it like one that does not translate. Names are matched as
+  ClickHouse matches them: as written, in any case for the functions it
+  marks case-insensitive, and with aggregate combinators (`sumIf`,
+  `uniqExactOrNull`); user-defined functions count.
+
+### Changed
+
+- A function outside the spec's catalog reaches ClickHouse as written
+  (#35). SQLGlot knows the functions of other engines and renamed them in
+  ClickHouse SQL: `DAYOFWEEK(d)` became `DAY_OF_WEEK(d)` and `BOOL_AND(x)`
+  became `LOGICAL_AND(x)`, which ClickHouse does not have, so the query failed
+  and `validate` said nothing. Now `DAYOFWEEK(d)` runs as ClickHouse's own
+  `DAYOFWEEK`, and `DAYOFMONTH(d)` prints as written instead of
+  `toDayOfMonth(d)`. Other engines' spellings SQLGlot used to translate
+  (`ARG_MAX`, `COUNT_IF`, `LEN`) are sent as written too; the spec's
+  aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`) still translate.
+- `ANY_VALUE`, `BOOL_AND` and `BOOL_OR` are no longer among the aggregates
+  the planner lets read a joined dataset on their own: they are not the
+  spec's. `BOOL_AND` and `BOOL_OR` never ran on ClickHouse; `ANY_VALUE`
+  runs as ClickHouse's alias of `any`, as a function the planner does not
+  inspect.
+
 ## [0.8.0] - 2026-10-15
 
 ### Added

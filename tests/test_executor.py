@@ -8,9 +8,10 @@ import pytest
 
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.cli import main
-from dactopus_ossie_clickhouse.executor import Executor
+from dactopus_ossie_clickhouse.executor import Executor, ServerFunctions
 from dactopus_ossie_clickhouse.model import overrides
 from dactopus_ossie_clickhouse.planner import PlanError, Query
+from dactopus_ossie_clickhouse.translate import parse
 from tests.conftest import FakeClickHouse
 
 FIXTURE = Path(__file__).parent / "fixtures" / "history.yaml"
@@ -370,6 +371,65 @@ def test_cli_query(ex, capsys):
     assert capsys.readouterr().out == "revenue\n65.0\n"
     assert main(["sql", str(FIXTURE), "-m", "revenue", "--url", ex.client.url]) == 0
     assert "FINAL" in capsys.readouterr().out
+
+
+def test_server_functions_match_as_clickhouse_does():
+    rows = [("toString", 0, 0), ("DAYOFWEEK", 1, 0), ("sum", 1, 1), ("uniqExact", 0, 1)]
+    fns = ServerFunctions(rows, ["If", "OrNull", "Array"])
+    found = ["toString", "DAYOFWEEK", "dayofweek", "DayOfWeek", "sum", "SUM", "sumIf"]
+    found += ["sumIfOrNull", "SUMIf", "uniqExact", "uniqExactArray"]
+    assert all(fns.has(n) for n in found)
+    missing = ["tostring", "SUMIF", "sumif", "uniqexact", "If", "DAY_OF_WEEK", "toStringIf"]
+    assert not any(fns.has(n) for n in missing)
+    assert fns.problem(parse("SUM(x) + sumIf(y, z) + DAYOFWEEK(d)")) is None
+    problem = fns.problem(parse("DAYOFWEEK(d) + NO_SUCH(x) + DAY_OF_WEEK(d)"))
+    assert problem.startswith(
+        "calls DAY_OF_WEEK(), a function this ClickHouse server does not have"
+    )
+    assert "did you mean: DAYOFWEEK" in problem
+
+
+def test_functions_outside_the_spec_run_as_written_or_are_hidden(ex, tmp_path, capsys):
+    # ClickHouse's own DAYOFWEEK, an aggregate with a combinator, and two the
+    # server lacks: a misspelling and a combinator in the wrong case.
+    text = FIXTURE.read_text().replace(
+        "      - name: country_code\n",
+        "      - name: weekday\n        expression: {dialects: [{dialect: ANSI_SQL, "
+        "expression: DAYOFWEEK(toDate('2024-03-15'))}]}\n"
+        "      - name: label\n        expression: {dialects: [{dialect: ANSI_SQL, "
+        "expression: NO_SUCH_FUNCTION(order_id)}]}\n"
+        "      - name: country_code\n",
+        1,
+    )
+    text = text.replace(
+        "metrics:\n",
+        "metrics:\n  - name: big\n    expression: {dialects: [{dialect: ANSI_SQL, "
+        'expression: "sumIf(orders.amount, orders.amount > 15)"}]}\n'
+        "  - name: big_upper\n    expression: {dialects: [{dialect: ANSI_SQL, "
+        'expression: "SUMIF(orders.amount, orders.amount > 15)"}]}\n',
+        1,
+    )
+    p = tmp_path / "passthrough.yaml"
+    p.write_text(text)
+    other = Executor(ex.client, load_model(p))
+    # as written: 2024-03-15 is a Friday, ISO 5; amounts above 15 are 20 and 30
+    assert other.execute(Query(("big",), ("orders.weekday",))).rows == [(5, 50.0)]
+    assert other.check() == []
+    # the others are hidden like untranslatable ones
+    with pytest.raises(PlanError, match="unknown field"):
+        other.planner.sql(Query(("revenue",), ("orders.label",)))
+    with pytest.raises(PlanError, match="unknown metric"):
+        other.planner.sql(Query(("big_upper",)))
+    # only a server can tell: validate reports them with --url, and nothing without
+    assert main(["validate", str(p)]) == 0
+    assert main(["validate", str(p), "--url", ex.client.url]) == 1
+    err = capsys.readouterr().err
+    assert (
+        "field orders.label: calls NO_SUCH_FUNCTION(), a function this ClickHouse server "
+        "does not have" in err
+    )
+    assert "metric 'big_upper': calls SUMIF(), a function this ClickHouse server" in err
+    assert "weekday" not in err and "'big'" not in err
 
 
 def test_untranslatable_expressions_are_hidden_and_reported(ex, tmp_path, capsys):

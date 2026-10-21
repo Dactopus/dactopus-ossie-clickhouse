@@ -172,6 +172,12 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 - A rewritten function, ours or SQLGlot's, gets its spec signature in
   `_SIGNATURES`; `parse()` rejects other argument counts, so a rewrite
   never drops an argument.
+- `parse()` types only the spec's function catalog (`_CATALOG`); any
+  other function is `exp.Anonymous` and reaches ClickHouse as written, so
+  SQLGlot never renames it (`DAYOFWEEK` to `DAY_OF_WEEK`, which ClickHouse
+  lacks). The executor checks those names against `system.functions`,
+  combinators included, and hides a field or metric calling one the
+  server lacks; `validate --url` reports it.
 
 ## Development
 

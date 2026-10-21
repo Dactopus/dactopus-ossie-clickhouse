@@ -71,7 +71,8 @@ AGGREGATES = [
 CATALOG = [
     # --- date/time extraction
     ("YEAR(d)", DUCK), ("QUARTER(d)", DUCK), ("MONTH(d)", DUCK), ("DAY(d)", DUCK), ("DAYOFYEAR(d)", DUCK),
-    ("DAYOFMONTH(d)", DUCK),
+    # Outside the spec, sent as written: ClickHouse's DAYOFMONTH and DAYOFWEEK (ISO).
+    ("DAYOFMONTH(d)", DUCK), ("DAYOFWEEK(d)", 5),
     ("HOUR(ts)", DUCK), ("MINUTE(ts)", DUCK), ("SECOND(ts)", DUCK),
     ("EXTRACT(YEAR FROM d)", DUCK), ("EXTRACT(MONTH FROM d)", DUCK), ("EXTRACT(DAY FROM d)", DUCK),
     ("EXTRACT(WEEK FROM d)", DUCK), ("EXTRACT(DAYOFYEAR FROM d)", DUCK),

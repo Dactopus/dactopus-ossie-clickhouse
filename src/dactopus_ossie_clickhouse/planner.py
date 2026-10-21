@@ -102,15 +102,12 @@ def source_name(source: str) -> str:
     return f"{t.db}.{t.name}" if t.db else t.name
 
 
-# Aggregates whose value does not change when an input row repeats. Only these
-# may read a joined dataset's columns on their own: each row of a many-to-one
-# target repeats once per root row that references it.
+# Spec aggregates whose value does not change when an input row repeats. Only
+# these may read a joined dataset's columns on their own: each row of a
+# many-to-one target repeats once per root row that references it.
 _REPEAT_SAFE = {
     exp.Min: "MIN",
     exp.Max: "MAX",
-    exp.AnyValue: "ANY_VALUE",
-    exp.LogicalAnd: "BOOL_AND",
-    exp.LogicalOr: "BOOL_OR",
     exp.ApproxDistinct: "APPROX_COUNT_DISTINCT",
 }
 _REPEAT_SAFE_NAMES = ", ".join(_REPEAT_SAFE.values()) + " and DISTINCT"

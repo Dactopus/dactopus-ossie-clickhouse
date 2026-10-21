@@ -92,7 +92,13 @@ questions it refuses.
   [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls)
   so unmatched rows get NULL, not ClickHouse defaults, and
   [`aggregate_functions_null_for_empty = 1`](https://clickhouse.com/docs/operations/settings/settings#aggregate_functions_null_for_empty)
-  so a sum over no rows is NULL, as in SQL, not 0.
+  so a sum over no rows is NULL, as in SQL, not 0, and
+  [`transform_null_in = 0`](https://clickhouse.com/docs/operations/settings/settings#transform_null_in)
+  so a NULL matches nothing in `IN`.
+- A filter on rows that reference the root, such as sessions with a
+  purchase of some value, is a semi-join: each session with at least one
+  such purchase counts once
+  ([semi-joins](docs/design.md#semi-joins-for-filters-on-the-many-side)).
 - Metrics of different facts, such as revenue and returns by region, are
   each computed from their own root and merged on the dimensions
   ([stitching](docs/design.md#stitch-metrics-of-several-facts)): every
@@ -188,7 +194,7 @@ are the stable surface.
 
 Where it goes from here: PyPI once `apache-ossie` is published there; the
 upstream Ossie SQL dialect and compliance suite once they merge;
-fan-out protection for one-to-many joins, `source` as a query
+metrics that read both sides of a one-to-many relationship, `source` as a query
 and a remote multi-user MCP server on the first real request. Ask for one
 in the [issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues).
 

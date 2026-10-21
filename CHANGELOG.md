@@ -7,6 +7,25 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- A row filter on a dataset whose rows reference the root's is a
+  semi-join: `-m sessions -f "purchases.revenue > 0"` counts each session
+  with at least one such purchase once, where it was refused because a
+  join would count it once per purchase (#10). Filters on one such
+  dataset and on the datasets it reaches hold for the same row; a path of
+  several relationships nests one `IN` per step, a key of several columns
+  is a tuple, and the subquery reads `FINAL` and dictionaries like any
+  question. It works inside a stitched question too. `NOT` stays inside
+  the subquery, so it cannot ask for rows without a match. A filter that
+  mixes both sides in one expression is refused. Metrics that read both
+  sides of such a relationship are still refused.
+
+### Changed
+
+- Generated SQL also sets `transform_null_in = 0`, so a NULL key matches
+  nothing in `IN` even when the user's profile sets 1.
+
 ## [0.9.0] - 2026-10-21
 
 ### Added

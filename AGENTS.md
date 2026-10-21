@@ -107,8 +107,16 @@ Python library with a CLI entry point. The parts that constrain code:
   relationships whose `to_columns` cover a primary or unique key of the
   target. Generated SQL carries
   `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
-  and `aggregate_functions_null_for_empty = 1` so an aggregate over no
-  rows is NULL, not 0 (counts stay 0).
+  `aggregate_functions_null_for_empty = 1` so an aggregate over no
+  rows is NULL, not 0 (counts stay 0), and `transform_null_in = 0` so a
+  NULL key matches nothing in `IN`.
+  A row filter on a dataset M that the root does not reach, but that
+  reaches the root, is a semi-join: the root's key `IN` the keys of M rows
+  that pass every filter on M and the datasets M reaches (one subquery,
+  planned as a question over M), one `IN` per relationship on the one path
+  from M. It is tried only when the question is refused over the root of
+  everything it reads, from the root of its metrics, dimensions and
+  aggregate filters; a filter mixing both sides is refused.
   Metrics run over the root's rows, so the planner refuses an aggregate
   that reads only joined datasets unless repeats cannot change it or the
   join is on a key of the root, an aggregate expression that reads no root

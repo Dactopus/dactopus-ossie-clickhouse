@@ -70,7 +70,11 @@ def instructions(model: OssieDocument) -> str:
         "and dimensions by name, never write SQL. Start with list_model. Never add up or "
         "rank rows yourself: for a total, run query without dimensions; for a comparison, "
         "query the exact dimensions you need. If the model has no metric or field for what "
-        "is asked, say so; do not approximate it with filters on other fields. Every number "
+        "is asked, say so; do not approximate it with filters on other fields. A filter on "
+        "rows that reference what you count (purchases for sessions) keeps each counted row "
+        "that has at least one matching row, once; it cannot find rows without a match, and "
+        "NOT inside it means a row with a non-matching one, so ask for absence through a "
+        "field or metric of the model, such as a last activity date. Every number "
         "you state must come from a query result: rounding and formatting are fine, but do "
         "not derive, estimate or recall other numbers, such as the counts behind a rate."
     )

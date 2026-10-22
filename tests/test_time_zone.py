@@ -67,10 +67,10 @@ def table(clickhouse):
     clickhouse.command("DROP DATABASE ossie_zone")
 
 
-def executor(clickhouse, tmp_path, zone: str | None) -> Executor:
+def executor(clickhouse, tmp_path, zone: str | None, given: str | None = None) -> Executor:
     path = tmp_path / "zone.yaml"
     path.write_text(model_text(zone))
-    return Executor(clickhouse, load_model(path))
+    return Executor(clickhouse, load_model(path, time_zone=given))
 
 
 @pytest.mark.parametrize("zone", ["Pacific/Kiritimati", "Pacific/Pago_Pago", None])
@@ -87,6 +87,19 @@ def test_current_date_and_time_are_the_model_zone(clickhouse, table, tmp_path, z
     shown = dt.datetime.fromisoformat(now)
     assert shown.utcoffset() == before.utcoffset()  # the zone's wall clock, with its offset
     assert before - dt.timedelta(seconds=1) <= shown <= after + dt.timedelta(seconds=1)
+
+
+def test_current_date_is_in_the_zone_given_over_the_model_s(clickhouse, table, tmp_path):
+    """A deployment's zone (--time-zone) replaces the one the model names (#54)."""
+    tz = ZoneInfo("Pacific/Pago_Pago")
+    ex = executor(clickhouse, tmp_path, "Pacific/Kiritimati", given="Pacific/Pago_Pago")
+    before = dt.datetime.now(tz).date()
+    [(today,)] = ex.execute(Query(("today_here",))).rows
+    assert today in {before, dt.datetime.now(tz).date()}
+    # Read back in the given zone: 20:00 UTC is 09:00 in Pago Pago, 10:00 the next day
+    # in Kiritimati.
+    q = Query(("events",), filters=("e.at = TIMESTAMP '2026-10-21 09:00:00'",))
+    assert ex.execute(q).rows == [(1,)]
 
 
 def test_current_date_is_on_every_row(clickhouse, table, tmp_path):

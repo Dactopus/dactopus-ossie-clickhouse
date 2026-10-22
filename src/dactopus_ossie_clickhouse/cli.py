@@ -5,17 +5,24 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from decimal import Decimal
 
 import yaml
 from clickhouse_connect.driver.exceptions import ClickHouseError
+from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
 from dactopus_ossie_clickhouse.model import ModelError, join_problems, load_model
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
 from dactopus_ossie_clickhouse.translate import untranslatable
+
+ZONE_HELP = (
+    "IANA time zone of today and of times without an offset, replacing the model's "
+    "(default $OSSIE_CLICKHOUSE_TIME_ZONE)"
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -24,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate", help="check an Ossie model")
     v.add_argument("model", nargs="+", help="YAML or JSON Ossie files, read as one model")
     v.add_argument("--url", help="also check the model against this ClickHouse")
+    v.add_argument("--time-zone", help=ZONE_HELP)
     for name, help_ in (("sql", "build the ClickHouse SQL for a semantic query"),
                         ("query", "run a semantic query and print the rows")):  # fmt: skip
         s = sub.add_parser(name, help=help_)
@@ -40,6 +48,7 @@ def _parser() -> argparse.ArgumentParser:
         s.add_argument("-o", "--order", action="append", default=[], help="name or 'name desc'")
         s.add_argument("-l", "--limit", type=int)
         s.add_argument("--url", help="ClickHouse HTTP URL (default $OSSIE_CLICKHOUSE_URL)")
+        s.add_argument("--time-zone", help=ZONE_HELP)
         s.add_argument("--policy", help="YAML file hiding objects per ClickHouse user or role")
     sub.choices["query"].add_argument(
         "--json", action="store_true", help="JSON rows instead of TSV"
@@ -47,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     sv = sub.add_parser("serve", help="run the MCP server over stdio (needs the [mcp] extra)")
     sv.add_argument("model", nargs="+", help="YAML or JSON Ossie files, read as one model")
     sv.add_argument("--url", help="ClickHouse HTTP URL (default $OSSIE_CLICKHOUSE_URL)")
+    sv.add_argument("--time-zone", help=ZONE_HELP)
     sv.add_argument("--policy", help="YAML file hiding objects per ClickHouse user or role")
     return parser
 
@@ -75,13 +85,19 @@ def _names(args: argparse.Namespace) -> str:
     return ", ".join(args.model)
 
 
+def _load(args: argparse.Namespace) -> OssieDocument:
+    # The deployment's zone: its data was built there, whatever a shared model names.
+    zone = args.time_zone or os.environ.get("OSSIE_CLICKHOUSE_TIME_ZONE") or None
+    return load_model(*args.model, time_zone=zone)
+
+
 def _run(args: argparse.Namespace) -> int:
     policy = Policy.load(args.policy) if getattr(args, "policy", None) else None
 
     if args.command == "serve":
         from dactopus_ossie_clickhouse.mcp_server import build_server
 
-        model = load_model(*args.model)
+        model = _load(args)
         server = build_server(model, lambda: connect(args.url), policy)
         # stderr: stdout carries the protocol.
         print(
@@ -91,7 +107,7 @@ def _run(args: argparse.Namespace) -> int:
         return 0
 
     if args.command in ("sql", "query"):
-        model = load_model(*args.model)
+        model = _load(args)
         q = Query(
             tuple(args.metric),
             tuple(args.dimension),
@@ -119,7 +135,7 @@ def _run(args: argparse.Namespace) -> int:
         return 0
 
     # validate
-    doc = load_model(*args.model)
+    doc = _load(args)
     ex = Executor(connect(args.url), doc) if args.url else None
     fields, metrics = (
         (ex.untranslatable_fields, ex.untranslatable_metrics) if ex else untranslatable(doc)

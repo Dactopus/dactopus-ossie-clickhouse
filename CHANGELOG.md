@@ -7,6 +7,19 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- `validate`, `sql`, `query` and `serve` take `--time-zone`, with
+  `OSSIE_CLICKHOUSE_TIME_ZONE` as the default, and `load_model` a
+  `time_zone` argument (#54). The zone replaces the one the model names
+  for `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, timestamps
+  without an offset and `DATEDIFF`, so a model shared by stores in
+  several zones, such as dactopus-data-models' `commerce`, counts each
+  store's orders of today without a copy of the model per store. A
+  wrong name is refused before anything runs; `validate --url` checks
+  the zone in effect, and `list_model` and the MCP server's
+  instructions name it.
+
 ## [0.9.2] - 2026-10-22
 
 ### Added

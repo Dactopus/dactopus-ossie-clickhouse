@@ -518,6 +518,21 @@ they have two it miscounts hours and longer. A reading at 20:00 UTC in a
 such a pair before this change too. Ossie has no such field;
 apache/ossie may get one, and this entry would then read it.
 
+A model shared by deployments cannot name the zone: dactopus-data-models
+has one `commerce` model for every store and builds each store's dates
+in that store's zone (#54). So the deployment may replace it, as it
+names the database in its URL: `--time-zone`, else
+`OSSIE_CLICKHOUSE_TIME_ZONE`, else the model's entry, else UTC. The
+deployment wins over the model because it knows which zone its data was
+built in, and a model can then carry a default. `load_model` writes the
+zone into the loaded model's `CLICKHOUSE` entry, so the planner, the
+model trimmed to a user's grants, `validate --url` and `list_model` read
+it where they read the model's own. A deployment's file holding only
+the entry was not possible: every file holds a dataset, and the entry in
+two files is refused, since one would be edited and not the other. One
+zone per deployment is still one zone for every store a deployment
+holds.
+
 Not chosen:
 
 - `session_timezone` on every query. A column without a zone then printed

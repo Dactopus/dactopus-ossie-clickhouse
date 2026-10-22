@@ -238,9 +238,22 @@ compared directly with a column (`placed_at > '2026-10-21 16:00:00'`) is
 read by ClickHouse in the column's zone; write `TIMESTAMP '...'` for the
 model's. Ossie has no time zone of its own yet.
 
+A model shared by deployments whose data is built in different zones
+(dactopus-data-models has one `commerce` model for every store) names
+none, or a default, and each deployment gives its own: `--time-zone` on
+`validate`, `sql`, `query` and `serve`, else `OSSIE_CLICKHOUSE_TIME_ZONE`,
+else the model's entry, else UTC. From Python it is
+`load_model(..., time_zone="America/New_York")`.
+
+```bash
+dactopus-ossie-clickhouse query commerce.yaml -m orders -f "orders.order_date = CURRENT_DATE" \
+  --time-zone America/New_York
+```
+
 The zone is an IANA name spelled exactly (`UTC`, `Europe/Berlin`;
 not `utc` or `+03:00`), in one file of a model that spans several.
-`validate --url` checks that the server knows it.
+A wrong one is refused before anything runs, and `validate --url` checks
+that the server knows the zone in effect.
 
 ## Deduplication
 

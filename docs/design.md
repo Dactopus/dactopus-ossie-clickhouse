@@ -558,8 +558,40 @@ A metric of the current time in each model was not chosen: every model
 would have to carry it, and agents would still have to be told to use
 it.
 
+A plain string compared with a time field was still read in the
+column's zone (#58), and agents write it as often as `TIMESTAMP`. On
+dactopus-data-models' commerce model over an earlier build of its
+Shopify fixture (without `sales_events`, so `all_orders` stands in for
+`orders`), built in `America/New_York` with every time column in UTC,
+orders before midnight of September 1 (order 1003 was placed at 22:00
+on August 31 in New York):
+
+| Filter on `orders.order_time` | New York, before | New York, after | UTC, both |
+| --- | --- | --- | --- |
+| `< TIMESTAMP '2026-09-01 00:00:00'` | 3 | 3 | 2 |
+| `< '2026-09-01 00:00:00'` | 2 | 3 | 2 |
+| `< '2026-09-01'` | 2 | 3 | 2 |
+| `< '2026-09-01 00:00:00+00:00'`, with or without `TIMESTAMP` | 2 | 2 | 2 |
+| `< '2026-09-01 00:00:00-04:00'`, with or without `TIMESTAMP` | 3 | 3 | 3 |
+
+A string compared directly with a field or metric whose `datatype` is
+`DateTime` or `DateTimeTz` (`=`, `<>`, `<`, `BETWEEN`, `IN` and the
+like) is now made a `TIMESTAMP` literal before the field is inlined, so
+`rewrite_tree` reads it as one: in the model's zone, an offset kept, a
+fraction as `DateTime64`. The model's `datatype` says which fields hold
+times, so the SQL is the same without a server, as `sql` shows it. A
+field without `datatype` keeps ClickHouse's reading, and so does a
+string compared with an expression of a field
+(`toDate(orders.order_time) = '2026-09-01'`), whose type the planner
+does not know. `Date` and `Time` fields are left alone: a date has no
+zone, and the string compared with one is a date already.
+
 Not chosen:
 
+- The column's type from `system.columns` to tell a time field. The SQL
+  would differ with and without a server, `TableInfo` would carry types
+  it does not need elsewhere, and a field computed from a column would
+  still be unknown.
 - `session_timezone` on every query. A column without a zone then printed
   in the session's zone while `toDate`, `toHour` and `dateTrunc` of it
   still used the server's (`timeZoneOf` stays the server's), so one row

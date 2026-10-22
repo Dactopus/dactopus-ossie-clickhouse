@@ -95,6 +95,8 @@ def test_instructions_carry_the_model_instructions():
     assert "never write a query; SQL goes only in filters" in text
     assert "never with a date you know" in text
     assert "d.day = CURRENT_DATE for today" in text
+    # A plain string compared with a time reads as TIMESTAMP '...' does (#58).
+    assert "or '2026-10-21 16:00:00' compared with a DateTime or DateTimeTz field" in text
     assert text.endswith(f"Instructions of this model:\n{summary(MODEL)['instructions']}")
     bare = MODEL.model_copy(update={"ai_context": None})
     assert "Instructions of this model" not in instructions(bare)

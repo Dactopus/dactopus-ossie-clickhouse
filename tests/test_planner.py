@@ -1059,3 +1059,68 @@ def test_an_aggregate_reading_no_column_counts_the_only_dataset():
     assert planner.sql(Query(("stores",))) == (
         f"SELECT COUNT(*) AS stores FROM tpcds.store AS store {SETTINGS}"
     )
+
+
+def _time_planner() -> Planner:
+    """date_dim.d_date as a DateTimeTz field, and metrics over it."""
+
+    def mutate(m):
+        ds = next(d for d in m["datasets"] if d["name"] == "date_dim")
+        next(f for f in ds["fields"] if f["name"] == "d_date")["datatype"] = "DateTimeTz"
+        for name, expression, datatype in (
+            ("last_sale", "MAX(date_dim.d_date)", "DateTime"),
+            ("last_september_sale", "MAX(CASE WHEN date_dim.d_date >= '2026-09-01' "
+             "THEN date_dim.d_date END)", "DateTimeTz"),
+        ):  # fmt: skip
+            m["metrics"].append({
+                "name": name,
+                "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": expression}]},
+                "datatype": datatype,
+            })  # fmt: skip
+
+    return _variant(mutate)
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected"),
+    [
+        ("date_dim.d_date < '2026-09-01 00:00:00'",
+         "WHERE date_dim.d_date < toDateTime('2026-09-01 00:00:00', 'UTC')"),
+        ("'2026-09-01' > date_dim.d_date",
+         "WHERE toDateTime('2026-09-01', 'UTC') > date_dim.d_date"),
+        ("DATE_DIM.D_DATE BETWEEN '2026-09-01' AND '2026-09-02'",
+         "WHERE date_dim.d_date BETWEEN toDateTime('2026-09-01', 'UTC') "
+         "AND toDateTime('2026-09-02', 'UTC')"),
+        ("date_dim.d_date NOT IN ('2026-09-01 10:00:00.5', '2026-09-02')",
+         "WHERE NOT (date_dim.d_date IN (toDateTime64('2026-09-01 10:00:00.5', 1, 'UTC'), "
+         "toDateTime('2026-09-02', 'UTC')))"),
+        # An offset still names the instant, as in TIMESTAMP '...'.
+        ("date_dim.d_date = '2026-09-01 00:00:00-04:00'",
+         "WHERE date_dim.d_date = toDateTime('2026-09-01 00:00:00-04:00', 'UTC')"),
+        # A metric of another dataset than total_sales: stitched, filtered after the merge.
+        ("last_sale >= '2026-09-01'", "HAVING any(__m1) >= toDateTime('2026-09-01', 'UTC')"),
+        # Not the field itself: its type is not known.
+        ("toDate(date_dim.d_date) = '2026-09-01'", "WHERE toDate(date_dim.d_date) = '2026-09-01'"),
+        ("date_dim.d_quarter_name = '2026-09-01'",
+         "WHERE date_dim.d_quarter_name = '2026-09-01'"),
+    ],
+)  # fmt: skip
+def test_string_compared_with_a_time_is_read_in_the_model_zone(condition, expected):
+    """As TIMESTAMP '...' is; ClickHouse reads a plain string in the column's zone (#58)."""
+    sql = _time_planner().sql(Query(metrics=("total_sales",), filters=(condition,)))
+    assert expected in sql
+
+
+def test_string_compared_with_a_time_in_a_metric():
+    p = _time_planner()
+    sql = p.sql(Query(metrics=("last_sale",), filters=("last_sale >= '2026-09-01'",)))
+    assert "HAVING MAX(date_dim.d_date) >= toDateTime('2026-09-01', 'UTC')" in sql
+    # In the model's own expression too, as TIMESTAMP '...' there is.
+    sql = p.sql(Query(metrics=("last_september_sale",)))
+    assert "WHEN date_dim.d_date >= toDateTime('2026-09-01', 'UTC') THEN" in sql
+
+
+def test_string_compared_with_a_date_is_kept():
+    """A Date has no zone: the string stays a date."""
+    sql = P.sql(Query(metrics=("total_sales",), filters=("date_dim.d_date < '2026-09-01'",)))
+    assert "WHERE date_dim.d_date < '2026-09-01'" in sql

@@ -25,10 +25,21 @@ a minor release may change the Python API.
   agent, none of six wrote `CURRENT_DATE` before and all six did after,
   answering right.
 - ClickHouse's own `today()`, `yesterday()`, `now()` and `now64()`
-  (and the aliases `curdate()` and `localtimestamp()`) without a zone, in a filter or a model, were the server's date and
-  time; they are now the model's zone, as `CURRENT_DATE` is (#56). An
-  agent that wrote `today()` on a server a day ahead of the store
-  answered that no order was placed today.
+  (and the aliases `curdate()` and `localtimestamp()`) without a zone,
+  in a filter or a model, were the server's date and time; they are now
+  the model's zone, as `CURRENT_DATE` is (#56). An agent that wrote
+  `today()` on a server a day ahead of the store answered that no order
+  was placed today.
+- A plain string compared with a time field (`placed_at <
+  '2026-09-01 00:00:00'`) was read in the column's zone, UTC in
+  dactopus-data-models, while `TIMESTAMP '2026-09-01 00:00:00'` was read
+  in the deployment's (#58). In a store in New York the first counted 2
+  orders before September 1 and the second 3. A string compared directly
+  with a field or metric whose `datatype` is `DateTime` or `DateTimeTz`,
+  with `=`, `<`, `BETWEEN`, `IN` and the like, in a filter or a model's
+  metric, is now read as a `TIMESTAMP` literal; one with an offset still
+  names its instant. A field without `datatype` keeps ClickHouse's
+  reading.
 
 ## [0.9.3] - 2026-10-22
 

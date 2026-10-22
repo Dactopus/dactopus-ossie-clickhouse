@@ -149,9 +149,10 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 - Float division by zero and single-row `STDDEV`/`VARIANCE` yield `inf` or
   `nan`, not `NULL`; the executor maps both to `None`.
 - A `DateTime` without a zone, `now()`, `today()` and `CAST('...' AS
-  DateTime)` take the server's zone. Answers must not: `CURRENT_*` and
-  timestamp literals use the model's zone (`model.time_zone`, UTC by
-  default), passed to `rewrite_tree`. Not `session_timezone`: calendar
+  DateTime)` take the server's zone. Answers must not: `CURRENT_*`,
+  timestamp literals and `DATEDIFF` use the model's zone (`model.time_zone`,
+  UTC by default), passed to `rewrite_tree`; `dateDiff` miscounts hours
+  across two zones without it. Not `session_timezone`: calendar
   functions of a column without a zone ignore it. Values are shown with
   their offset from UTC.
 - Table names are `database.table`; Ossie `source` may have three parts,

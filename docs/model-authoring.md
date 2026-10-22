@@ -225,9 +225,13 @@ Without it the zone is UTC, whatever the server's. In that zone:
   `CAST('...' AS TIMESTAMP)`) and a string `TO_TIMESTAMP` parses are read
   there. One with an offset (`'2026-10-21 20:00:00+00:00'`) names its
   instant in any zone.
+- `DATEDIFF` counts day, hour and longer boundaries there, so
+  `DATEDIFF(day, MAX(placed_at), CURRENT_TIMESTAMP)` counts the store's
+  midnights. ClickHouse miscounts hours and longer between two values in
+  different zones unless it is given one.
 
-A column keeps its own zone: `CAST(placed_at AS DATE)`, `DATE_TRUNC` and
-`HOUR` of a `DateTime('UTC')` column are UTC dates and hours whatever the
+Otherwise a column keeps its own zone: `CAST(placed_at AS DATE)`,
+`DATE_TRUNC` and `HOUR` of a `DateTime('UTC')` column are UTC dates and hours whatever the
 model's zone, so store days computed at load time (as dactopus-data-models
 builds `order_date`) are the ones that match `CURRENT_DATE`. A string
 compared directly with a column (`placed_at > '2026-10-21 16:00:00'`) is

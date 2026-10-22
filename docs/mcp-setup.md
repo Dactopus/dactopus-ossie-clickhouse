@@ -68,7 +68,7 @@ mean" hint reaches the agent.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_model` | none | `name`, `description`, AI hints, `datasets` (name, description, synonyms, field count), `metrics` (name, description, synonyms), `relationships` (`from -> to`), `usage`. |
+| `list_model` | none | `name`, `description`, AI hints, `datasets` (name, description, synonyms, field count), `metrics` (name, description, synonyms), `relationships` (`from -> to`), `time_zone` (the model's, UTC by default: today, the current time and times without an offset), `usage`. |
 | `search_model` | `text` | Up to 20 objects whose name, description or synonyms contain every word of `text`: `kind` (`dataset`, `field`, `metric`), `name`, `description`, `synonyms`. |
 | `describe_object` | `name`: dataset, `dataset.field` or metric, case-insensitive | The object with `instructions` and `examples` from `ai_context`. A dataset lists `fields` (with `datatype`, `is_time`) and `relationships`; a field or metric carries its `expression` and `datatype`. Unknown name: `error` with similar names. |
 | `query` | `metrics`, `dimensions` (`dataset.field`), `filters`, `order_by` (all lists of strings, default empty), `limit` (default 100) | `columns`, `rows`, `row_count`, `sql`. |
@@ -84,8 +84,9 @@ reads as ClickHouse prints it, a `DateTime` with its offset from UTC
 (`-01:02:03`, `2024-03-15 10:30:45+00:00`), as in the CLI's output, and
 works as a filter literal.
 The server's `instructions` tell the agent to start with `list_model`,
-never to write SQL, never to add up or rank rows itself, and to state only
-numbers a query returned. They end with the model's own
+never to write SQL, never to add up or rank rows itself, to state only
+numbers a query returned, and which time zone today and times without an
+offset are in. They end with the model's own
 `ai_context.instructions`, so an agent that starts with `search_model`
 still gets them; `list_model` repeats them for clients that ignore server
 instructions.

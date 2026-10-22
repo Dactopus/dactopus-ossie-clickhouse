@@ -355,10 +355,13 @@ class Executor:
                             f"relationship {r.name!r}: column {c!r} not in dataset {ds_name!r}"
                         )
         zone = time_zone(self.full_model)
-        known = self.client.query(
-            "SELECT count() FROM system.time_zones WHERE time_zone = {zone:String}",
-            parameters={"zone": zone},
-        ).result_rows[0][0]
+        try:
+            known = self.client.query(
+                "SELECT count() FROM system.time_zones WHERE time_zone = {zone:String}",
+                parameters={"zone": zone},
+            ).result_rows[0][0]
+        except Exception:  # unreadable: a question using a zone it lacks fails naming it
+            known = True
         if not known:  # Python's zone database and the server's may differ
             problems.append(f"model: time zone {zone!r} is not in system.time_zones")
         if self.functions is None:

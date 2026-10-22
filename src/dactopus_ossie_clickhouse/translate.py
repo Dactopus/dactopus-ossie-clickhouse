@@ -434,6 +434,12 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
         return _f("toDate", _f("now", exp.Literal.string(zone)))
     if isinstance(node, exp.CurrentTime):
         return _f("toTime", _f("now", exp.Literal.string(zone)))
+    # dateDiff counts boundaries in its arguments' zone, and when they have two it
+    # miscounts hours and longer: a DateTime('UTC') column 2 hours before now('America/
+    # New_York') is 7 hours apart. Counted in the model's zone, as CURRENT_DATE is.
+    if isinstance(node, exp.DateDiff):
+        unit = exp.Literal.string(node.unit.name.lower())
+        return _f("dateDiff", unit, node.expression, node.this, exp.Literal.string(zone))
     if (
         isinstance(node, exp.Cast)  # TryCast too
         and node.this.is_string

@@ -37,7 +37,7 @@ def test_translate_uses_picked_dialect():
     ("ossie", "expected"),
     [
         # parser: spec argument order
-        ("DATEDIFF(day, d, d2)", "DATE_DIFF(DAY, d, d2)"),
+        ("DATEDIFF(day, d, d2)", "dateDiff('day', d, d2, 'UTC')"),
         ("DATEADD(month, -1, d)", "DATE_ADD(MONTH, -1, d)"),
         ("DATE_PART('year', d)", "EXTRACT(YEAR FROM d)"),
         # aggregates

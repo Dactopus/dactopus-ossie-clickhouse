@@ -23,8 +23,9 @@ a minor release may change the Python API.
 ### Changed
 
 - `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, timestamp literals
-  without an offset and `TO_TIMESTAMP` of a string use the model's zone,
-  UTC by default, not the server's, and `DATEDIFF` counts days and hours
+  and `CAST` or `TRY_CAST` of a string to a timestamp type, without an
+  offset, and `TO_TIMESTAMP` of a string use the model's zone, UTC by
+  default, not the server's, and `DATEDIFF` counts days and hours
   there. On a server outside UTC, answers that
   used them change.
 - The CLI and the MCP server show a `DateTime` with its offset from UTC,

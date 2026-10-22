@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 
-from ossie import OssieDataset, OssieDocument, OssieField, OssieRelationship
+from ossie import OssieDataset, OssieDataType, OssieDocument, OssieField, OssieRelationship
 from sqlglot import exp
 from sqlglot.dialects.clickhouse import ClickHouse
 
@@ -32,6 +32,12 @@ from dactopus_ossie_clickhouse.translate import (
 
 class PlanError(ValueError):
     pass
+
+
+# A string compared with a field or metric of these types is read as TIMESTAMP '...'
+# is, in the model's zone; ClickHouse reads it in the column's (#58).
+_TIMES = (OssieDataType.DATE_TIME, OssieDataType.DATE_TIME_TZ)
+_COMPARISONS = (exp.EQ, exp.NEQ, exp.NullSafeEQ, exp.NullSafeNEQ, exp.LT, exp.LTE, exp.GT, exp.GTE)
 
 
 _QUOTED = r"`(?:[^`]|``)+`|\"(?:[^\"]|\"\")+\""  # non-empty, a doubled quote inside
@@ -440,6 +446,7 @@ class Planner:
             tree = self._parse(expression)
         except ValueError as e:
             raise PlanError(str(e)) from e
+        self._time_strings(tree, metrics)
 
         def inline(node: exp.Expression) -> exp.Expression:
             if not isinstance(node, exp.Column):
@@ -459,6 +466,36 @@ class Planner:
             return self._field_expr(ds, f)
 
         return tree.transform(inline)
+
+    def _time_strings(self, tree: exp.Expression, metrics: bool) -> None:
+        """Make a string compared with a DateTime or DateTimeTz field or metric a
+        TIMESTAMP, which rewrite_tree reads in the model's zone, an offset kept.
+
+        ClickHouse reads it in the column's zone, so the same time written with and
+        without TIMESTAMP named two instants (#58). Only a reference compared directly
+        is known to be one: the datatype says so, before inlining replaces the name."""
+
+        def is_time(node: exp.Expression) -> bool:
+            if not isinstance(node, exp.Column):
+                return False
+            if node.table:
+                ds = self._datasets.get(node.table.upper())
+                obj = ds and self._fields[ds.name.upper()].get(node.name.upper())
+            else:
+                obj = self._metrics.get(node.name.upper()) if metrics else None
+            return getattr(obj, "datatype", None) in _TIMES
+
+        for node in list(tree.find_all(*_COMPARISONS, exp.Between, exp.In)):
+            if isinstance(node, exp.Between):
+                others = [node.args["low"], node.args["high"]] if is_time(node.this) else []
+            elif isinstance(node, exp.In):
+                others = node.expressions if is_time(node.this) else []
+            else:
+                a, b = node.this, node.expression
+                others = ([b] if is_time(a) else []) + ([a] if is_time(b) else [])
+            for other in others:
+                if isinstance(other, exp.Literal) and other.is_string:
+                    other.replace(exp.cast(other.copy(), exp.DType.TIMESTAMP))
 
     def _metric_tree(self, m, used: set[str]) -> exp.Expression:
         """A metric's expression, resolved and rewritten for ClickHouse.
@@ -880,6 +917,7 @@ class Planner:
         having_trees = []
         for f in having:
             tree = self._parse(f)
+            self._time_strings(tree, metrics=True)
             for col in tree.find_all(exp.Column):
                 if not col.table and self.metric(col.name).name not in names:
                     names.append(self.metric(col.name).name)  # filtered on, not selected

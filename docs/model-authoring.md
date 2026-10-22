@@ -225,6 +225,12 @@ Without it the zone is UTC, whatever the server's. In that zone:
   `CAST('...' AS TIMESTAMP)`) and a string `TO_TIMESTAMP` parses are read
   there. One with an offset (`'2026-10-21 20:00:00+00:00'`) names its
   instant in any zone.
+- A plain string compared directly with a field or metric whose
+  `datatype` is `DateTime` or `DateTimeTz` (`placed_at < '2026-09-01'`,
+  `BETWEEN`, `IN`) is read as such a literal. Without `datatype`, or
+  compared with an expression of the field (`toDate(placed_at)`), it is
+  read in the column's zone, as ClickHouse reads it: declare `datatype`
+  on time fields.
 - `DATEDIFF` counts day, hour and longer boundaries there, so
   `DATEDIFF(day, MAX(placed_at), CURRENT_TIMESTAMP)` counts the store's
   midnights. ClickHouse miscounts hours and longer between two values in

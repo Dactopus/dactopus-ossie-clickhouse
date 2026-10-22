@@ -88,7 +88,8 @@ def instructions(model: OssieDocument) -> str:
         "CURRENT_DATE for today, d.day >= CURRENT_DATE - INTERVAL '6' DAY for the last 7 "
         "days, d.day >= DATE_TRUNC('MONTH', CURRENT_DATE) for this month. list_model gives "
         "today and now there; name the date in your answer. A time you write without an "
-        "offset (TIMESTAMP '2026-10-21 16:00:00') is there too; times in results carry "
+        "offset (TIMESTAMP '2026-10-21 16:00:00', or '2026-10-21 16:00:00' compared with "
+        "a DateTime or DateTimeTz field or metric) is there too; times in results carry "
         "their offset from UTC, and a field's description may say whose dates it holds."
     )
     if model_text := _ai(model).get("instructions"):

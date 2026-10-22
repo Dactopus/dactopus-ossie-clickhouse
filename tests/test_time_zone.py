@@ -54,6 +54,7 @@ name: zone_model
         expression: {EXPRESSION.format("id")}
       - name: at
         expression: {EXPRESSION.format("at")}
+        datatype: DateTimeTz
 metrics:
 {metrics}"""
 
@@ -147,6 +148,10 @@ def test_timestamp_literal_is_read_in_the_model_zone(
     # TRY_CAST reads it the same, the offset included (toDateTimeOrNull returns NULL).
     res = ex.execute(Query(("events",), filters=(f"e.at = TRY_CAST('{literal}' AS TIMESTAMP)",)))
     assert res.rows == [(1 if matches else 0,)]
+    # A plain string compared with a DateTimeTz field is read the same; ClickHouse would
+    # read it in the column's zone, Asia/Makassar (#58).
+    for f in (f"e.at = '{literal}'", f"e.at IN ('{literal}')", f"'{literal}' = e.at"):
+        assert ex.execute(Query(("events",), filters=(f,))).rows == [(1 if matches else 0,)]
 
 
 def test_shown_time_carries_the_column_zone(clickhouse, table, tmp_path):

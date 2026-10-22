@@ -3,6 +3,7 @@ table and a dictionary dimension, created here."""
 
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -507,3 +508,30 @@ def test_untranslatable_expressions_are_hidden_and_reported(ex, tmp_path, capsys
         assert "field orders.e_count: cannot parse" in err
         assert "metric 'bad_total': cannot parse" in err
         assert err.count("expected REGEXP_COUNT(str, pattern), got 4") == 2
+
+
+def test_check_reports_a_time_zone_the_server_lacks(tmp_path):
+    """Python's zone database and the server's are kept apart; the server's word wins."""
+
+    class Older(FakeClickHouse):
+        def query(self, sql, parameters=None):
+            if "system.time_zones" in sql:
+                self.asked = parameters["zone"]
+                return SimpleNamespace(result_rows=[(0,)])
+            return super().query(sql, parameters)
+
+    p = tmp_path / "zone.yaml"
+    entry = (
+        "custom_extensions:\n  - vendor_name: CLICKHOUSE\n"
+        '    data: \'{"time_zone": "Asia/Makassar"}\'\n'
+    )
+    p.write_text(FIXTURE.read_text().replace("datasets:\n", entry + "datasets:\n", 1))
+    client = Older(
+        {
+            ("ossie_test", "orders"): ("MergeTree", "", ("", ""), {"order_id", "amount"}),
+            ("ossie_test", "country"): ("Memory", "", ("", ""), {"code", "name"}),
+        }
+    )
+    problems = Executor(client, load_model(p)).check()
+    assert client.asked == "Asia/Makassar"
+    assert "model: time zone 'Asia/Makassar' is not in system.time_zones" in problems

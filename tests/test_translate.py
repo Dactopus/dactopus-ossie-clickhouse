@@ -8,6 +8,7 @@ from dactopus_ossie_clickhouse.translate import (
     parse,
     passthrough_functions,
     pick_expression,
+    rewrite_tree,
     to_clickhouse,
     translate,
 )
@@ -100,7 +101,23 @@ def test_translate_uses_picked_dialect():
         ),
         ("DAYOFYEAR(TO_DATE(s))", "toDayOfYear(toDate(s))"),
         # date/time
-        ("CURRENT_TIME", "toTime(now())"),
+        # the current date and wall-clock time of the model's zone, UTC by default
+        ("CURRENT_TIME", "toTime(now('UTC'))"),
+        ("CURRENT_TIMESTAMP", "now('UTC')"),
+        ("CURRENT_DATE", "toDate(now('UTC'))"),
+        # a timestamp literal is read in it too, not in the server's zone, with its fraction
+        ("TIMESTAMP '2024-01-15 10:30:00'", "toDateTime('2024-01-15 10:30:00', 'UTC')"),
+        ("TIMESTAMP_NTZ '2024-01-15'", "toDateTime('2024-01-15', 'UTC')"),
+        (
+            "CAST('2024-01-15 10:30:00.125' AS TIMESTAMP)",
+            "toDateTime64('2024-01-15 10:30:00.125', 3, 'UTC')",
+        ),
+        (
+            "TRY_CAST('2024-01-15 10:30:00' AS TIMESTAMP_NTZ)",
+            "toDateTimeOrNull('2024-01-15 10:30:00', 'UTC')",
+        ),
+        ("CAST(c AS TIMESTAMP)", "CAST(c AS Nullable(DateTime))"),
+        ("DATE '2024-01-15'", "CAST('2024-01-15' AS Nullable(DATE))"),
         ("DAYOFYEAR(d)", "toDayOfYear(d)"),
         # outside the spec: as written, for ClickHouse to resolve (docs/design.md)
         ("DAYOFMONTH(d)", "DAYOFMONTH(d)"),
@@ -117,7 +134,11 @@ def test_translate_uses_picked_dialect():
         ("EXTRACT(DAYOFYEAR FROM d)", "toDayOfYear(d)"),
         ("TO_DATE('2024-01-15')", "toDate('2024-01-15')"),
         ("TO_DATE('15/01/2024', 'DD/MM/YYYY')", "toDate(parseDateTime('15/01/2024', '%d/%m/%Y'))"),
-        ("TO_TIMESTAMP('2024-01-15 10:30:00')", "parseDateTimeBestEffort('2024-01-15 10:30:00')"),
+        (
+            "TO_TIMESTAMP('2024-01-15 10:30:00')",
+            "parseDateTimeBestEffort('2024-01-15 10:30:00', 'UTC')",
+        ),
+        ("TO_TIMESTAMP(s, 'YYYY-MM-DD')", "parseDateTime(s, '%Y-%m-%d', 'UTC')"),
         ("TO_CHAR(d, 'YYYY-MM-DD HH24:MI:SS')", "formatDateTime(d, '%Y-%m-%d %H:%i:%S')"),
         # strings
         ("SPLIT_PART(s, '-', 2)", "arrayElement(splitByString('-', s), 2)"),
@@ -145,6 +166,18 @@ def test_translate_uses_picked_dialect():
 )
 def test_to_clickhouse(ossie, expected):
     assert to_clickhouse(ossie) == expected
+
+
+def test_to_clickhouse_in_the_model_zone():
+    zone = "America/New_York"
+    assert to_clickhouse("CURRENT_DATE", zone) == "toDate(now('America/New_York'))"
+    assert to_clickhouse("TIMESTAMP '2024-01-15 10:30:00'", zone) == (
+        "toDateTime('2024-01-15 10:30:00', 'America/New_York')"
+    )
+    # rewritten twice, as a metric inlined into a filter is: the same
+    assert rewrite_tree(rewrite_tree(parse("CURRENT_DATE"), zone), zone).sql("clickhouse") == (
+        "toDate(now('America/New_York'))"
+    )
 
 
 def test_passthrough_functions_are_the_names_outside_the_catalog():

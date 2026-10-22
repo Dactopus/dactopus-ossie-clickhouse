@@ -1021,3 +1021,41 @@ def test_nested_rewrite_in_a_metric():
     )
     sql = planner.sql(Query(metrics=("median_or_null",)))
     assert "nullIf(quantileTDigest(0.5)(store_sales.ss_quantity), 0) AS median_or_null" in sql
+
+
+def test_a_metric_that_reads_no_dataset_needs_no_from():
+    """The current time (#52): validate accepted it, and query failed without a dimension."""
+    planner = _with_metrics(now_here="CURRENT_TIMESTAMP", latest_now="MAX(CURRENT_TIMESTAMP)")
+    assert "now_here" not in unanswerable_metrics(planner.model)
+    assert planner.sql(Query(("now_here",))) == f"SELECT now('UTC') AS now_here {SETTINGS}"
+    # With a dimension or a filter, the same value on every row of their dataset.
+    sql = planner.sql(Query(("now_here",), ("store.s_state",)))
+    assert sql.startswith(
+        "SELECT store.s_state AS s_state, now('UTC') AS now_here FROM tpcds.store"
+    )
+    sql = planner.sql(Query(("now_here",), filters=("store.s_state = 'TN'",)))
+    assert "FROM tpcds.store AS store WHERE store.s_state = 'TN'" in sql
+    # Over rows, it is about whichever rows the question is answered over: refused.
+    message = (
+        "metric 'latest_now' uses MAX(now('UTC')), which reads no column, so it would "
+        "aggregate rows of whichever dataset a question is answered over; read a column of "
+        "the dataset it means, or leave out the aggregate for a value that reads no "
+        "dataset, such as CURRENT_TIMESTAMP"
+    )
+    assert unanswerable_metrics(planner.model)["latest_now"] == message
+    with pytest.raises(PlanError, match="aggregates read no column"):
+        planner.sql(Query(("now_here",), filters=("COUNT(*) > 1",)))
+
+
+def test_an_aggregate_reading_no_column_counts_the_only_dataset():
+    def mutate(m):
+        m["datasets"] = [d for d in m["datasets"] if d["name"] == "store"]
+        m["relationships"] = []
+        expression = {"dialects": [{"dialect": "ANSI_SQL", "expression": "COUNT(*)"}]}
+        m["metrics"] = [{"name": "stores", "expression": expression}]
+
+    planner = _variant(mutate)
+    assert not unanswerable_metrics(planner.model)
+    assert planner.sql(Query(("stores",))) == (
+        f"SELECT COUNT(*) AS stores FROM tpcds.store AS store {SETTINGS}"
+    )

@@ -489,6 +489,55 @@ dactopus-data-models, 4,446 sessions have a purchase with revenue above
 4,848, since 450 purchases carry no revenue. On a Sensor.Community load,
 35 of 36 devices have a reading on 2026-10-19.
 
+## The model's time zone, UTC by default
+
+A ClickHouse `DateTime` is an instant; its zone decides how it prints and
+which calendar day or hour it falls on. A column without a zone, `now()`,
+`today()` and `CAST('...' AS DateTime)` use the server's zone, so the same
+question gave different answers on two servers (#52). Measured on
+ClickHouse 26.9.5.2 with a server in `Asia/Makassar` (UTC+8), 2026-10-22:
+
+- `CURRENT_DATE` was the server's date: at 20:00 UTC, already tomorrow.
+- A value the CLI showed for a `DateTime('UTC')` column, filtered back as
+  `TIMESTAMP '2026-10-21 20:00:00'`, matched no row: the cast read it at
+  UTC+8.
+- `CURRENT_TIMESTAMP` printed the server's wall clock without a zone.
+
+The zone belongs to the model's data: dactopus-data-models computes order
+dates in the store's zone and keeps times in UTC. So the model names it
+(`time_zone` in its `CLICKHOUSE` entry), UTC when it does not, as Cube,
+Malloy, Power BI and Superset default to UTC. `CURRENT_DATE` is
+`toDate(now(zone))`, `CURRENT_TIMESTAMP` is `now(zone)`, and a timestamp
+literal is `toDateTime('...', zone)` (`toDateTime64` with its fraction,
+which the cast dropped). Ossie has no such field;
+apache/ossie may get one, and this entry would then read it.
+
+Not chosen:
+
+- `session_timezone` on every query. A column without a zone then printed
+  in the session's zone while `toDate`, `toHour` and `dateTrunc` of it
+  still used the server's (`timeZoneOf` stays the server's), so one row
+  showed 12:00 with an hour of 20. ClickHouse marks the setting beta and
+  documents that some parsing paths ignore it.
+- A literal read in the zone of the column it is compared with.
+  ClickHouse does that for a string compared directly with a column, but
+  a literal inside `DATEDIFF`, `GREATEST` or on its own has no column.
+  Values are shown with their offset instead (`2026-10-21 20:00:00+00:00`),
+  which ClickHouse reads back as that instant in a comparison and a cast.
+- Calendar functions of columns in the model's zone. A `Date` column
+  refuses a zone argument in `dateTrunc('month', ...)` and `toStartOfMonth`,
+  and the planner does not know column types. It can be done without
+  them (`toStartOfMonth(toDate(x, zone))`), when the standard's field asks
+  for it.
+
+A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is answered
+without `FROM`: one row, or the same value on every row of a question's
+dataset; in a stitched question it joins a group of the others, where a
+group of its own would add a row for every dimension value. An aggregate
+of it (`MAX(CURRENT_TIMESTAMP)`) is still refused in a model of several
+datasets: it would aggregate the rows of whichever dataset the question
+is answered over.
+
 ## Remote MCP server, designed, not built
 
 Streamable HTTP with OAuth 2.1 is built only when a real deployment asks

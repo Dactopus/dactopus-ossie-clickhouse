@@ -10,6 +10,8 @@ here, and all problems are reported at once rather than one per run.
 from __future__ import annotations
 
 import json
+import zoneinfo
+from functools import cache
 from pathlib import Path
 
 import yaml
@@ -25,9 +27,9 @@ from pydantic import ValidationError
 SUPPORTED_VERSION = "0.2.0.dev0"
 SUPPORTED_DIALECTS = frozenset({OssieDialect.OSSIE_SQL_2026, OssieDialect.ANSI_SQL})
 # The custom_extensions namespace this project owns (docs/model-authoring.md):
-# a JSON object on a dataset, with these keys and values.
+# a JSON object on a dataset or on the model, with these keys and values.
 VENDOR = "CLICKHOUSE"
-_EXTENSION_KEYS = {"dedup": ("final", "none")}
+DEFAULT_TIME_ZONE = "UTC"
 
 
 class ModelError(ValueError):
@@ -112,6 +114,11 @@ def _clashes(read: list[tuple[Path, OssieDocument]]) -> list[str]:
                 spelled, where = first[key]
                 also = f" (as {spelled!r})" if spelled != name else ""
                 problems.append(f"{kind} {name!r} is defined in both {where}{also} and {path}")
+    declaring = [path for path, doc in read if _entries(doc)]
+    if len(declaring) > 1:
+        problems.append(
+            f"the model's {VENDOR} entry is in both {declaring[0]} and {declaring[1]}; keep one"
+        )
     return problems
 
 
@@ -173,8 +180,8 @@ def _check_file(doc: OssieDocument) -> list[str]:
         )
     for kind, attr in _NAMED:
         problems += _duplicates(kind, [o.name for o in getattr(doc, attr) or []])
-    if _entries(doc):  # nothing reads it there; see _check_whole
-        problems.append(f"model: a {VENDOR} entry in custom_extensions is read on datasets only")
+    # Per file, so a problem names its file; _clashes refuses an entry in two files.
+    problems += _extension(doc)[1]
     return problems
 
 
@@ -214,7 +221,8 @@ def _check_whole(doc: OssieDocument) -> list[str]:
     for what, node in elsewhere:
         if _entries(node):
             problems.append(
-                f"{what}: a {VENDOR} entry in custom_extensions is read on datasets only"
+                f"{what}: a {VENDOR} entry in custom_extensions is read on the model and "
+                "datasets only"
             )
     return problems
 
@@ -227,6 +235,16 @@ def overrides(ds: OssieDataset) -> dict:
     if problems:
         raise ModelError(problems)
     return data
+
+
+def time_zone(doc: OssieDocument) -> str:
+    """The zone of the model's dates and wall-clock times, from its CLICKHOUSE entry;
+    UTC without one. CURRENT_DATE is the date there, and a timestamp literal without
+    an offset is read there. Raises ``ModelError`` like overrides()."""
+    data, problems = _extension(doc)
+    if problems:
+        raise ModelError(problems)
+    return data.get("time_zone", DEFAULT_TIME_ZONE)
 
 
 def declared_keys(ds: OssieDataset) -> list[list[str]]:
@@ -276,10 +294,34 @@ def _entries(node) -> list:
     return [e for e in node.custom_extensions or [] if e.vendor_name.upper() == VENDOR]
 
 
-def _extension(ds: OssieDataset) -> tuple[dict, list[str]]:
-    """The dataset's CLICKHOUSE entry parsed, and the problems with it."""
-    where = f"dataset {ds.name!r}: {VENDOR} entry"
-    entries = _entries(ds)
+@cache
+def _zones() -> frozenset[str]:
+    return frozenset(zoneinfo.available_timezones())
+
+
+def _one_of(*values: str):
+    choices = " or ".join(json.dumps(v) for v in values)
+    return lambda v: None if v in values else choices
+
+
+def _zone(v) -> str | None:
+    # Exact spelling: ClickHouse matches zone names case-sensitively.
+    return None if v in _zones() else 'a time zone name such as "UTC" or "America/New_York"'
+
+
+# Keys of the entry on a dataset and on the model; each check returns None for a
+# good value, else what the value must be.
+_DATASET_KEYS = {"dedup": _one_of("final", "none")}
+_MODEL_KEYS = {"time_zone": _zone}
+
+
+def _extension(node: OssieDataset | OssieDocument) -> tuple[dict, list[str]]:
+    """The CLICKHOUSE entry of a dataset or of the model parsed, and the problems with it."""
+    if isinstance(node, OssieDataset):
+        where, keys = f"dataset {node.name!r}: {VENDOR} entry", _DATASET_KEYS
+    else:
+        where, keys = f"model: {VENDOR} entry", _MODEL_KEYS
+    entries = _entries(node)
     if not entries:
         return {}, []
     if len(entries) > 1:
@@ -292,14 +334,11 @@ def _extension(ds: OssieDataset) -> tuple[dict, list[str]]:
         return {}, [f"{where}: {e}"]
     if not isinstance(data, dict):
         return {}, [f"{where}: data must be a JSON object, got {json.dumps(data)}"]
-    known = ", ".join(_EXTENSION_KEYS)
-    problems = [
-        f"{where}: unknown key {k!r}; known: {known}" for k in data if k not in _EXTENSION_KEYS
-    ]
-    for key, values in _EXTENSION_KEYS.items():
-        if key in data and data[key] not in values:
-            choices = " or ".join(json.dumps(v) for v in values)
-            problems.append(f"{where}: {key!r} must be {choices}, got {json.dumps(data[key])}")
+    known = ", ".join(keys)
+    problems = [f"{where}: unknown key {k!r}; known: {known}" for k in data if k not in keys]
+    for key, check in keys.items():
+        if key in data and (must := check(data[key])):
+            problems.append(f"{where}: {key!r} must be {must}, got {json.dumps(data[key])}")
     return ({}, problems) if problems else (data, [])
 
 

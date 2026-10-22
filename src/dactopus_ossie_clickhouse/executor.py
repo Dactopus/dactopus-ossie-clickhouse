@@ -20,7 +20,7 @@ from ossie import OssieDataset, OssieDocument
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse.access import Hidden, Policy, restrict
-from dactopus_ossie_clickhouse.model import declared_keys, overrides
+from dactopus_ossie_clickhouse.model import declared_keys, overrides, time_zone
 from dactopus_ossie_clickhouse.planner import (
     Catalog,
     PlanError,
@@ -312,7 +312,7 @@ class Executor:
 
     def check(self) -> list[str]:
         """Problems that only the database can reveal: missing sources and columns,
-        and a server whose functions cannot be listed.
+        a time zone the server lacks, and a server whose functions cannot be listed.
 
         Run as a user who can read everything; for a restricted user, missing
         means hidden, not broken."""
@@ -354,6 +354,13 @@ class Executor:
                         problems.append(
                             f"relationship {r.name!r}: column {c!r} not in dataset {ds_name!r}"
                         )
+        zone = time_zone(self.full_model)
+        known = self.client.query(
+            "SELECT count() FROM system.time_zones WHERE time_zone = {zone:String}",
+            parameters={"zone": zone},
+        ).result_rows[0][0]
+        if not known:  # Python's zone database and the server's may differ
+            problems.append(f"model: time zone {zone!r} is not in system.time_zones")
         if self.functions is None:
             problems.append(
                 "system.functions cannot be read: functions outside the spec are not "
@@ -382,24 +389,40 @@ def _non_finite_to_none(v):
 
 
 def _as_printed(v, type_name: str):
-    """A Time, Time64, DateTime or DateTime64 value as ClickHouse's toString prints it.
+    """A Time, Time64, DateTime or DateTime64 value as ClickHouse's toString prints it,
+    a DateTime with its offset from UTC after it.
 
     clickhouse-connect reads Time as a timedelta, whose str() of -01:02:03 is
     "-1 day, 22:57:57" and pydantic's "-PT1H2M3S"; datetimes get a T over MCP and
     a space in the CLI. ClickHouse's own text reads the same everywhere and goes
-    back into a filter. Fractions show the column's digits; clickhouse-connect
-    keeps microseconds, so digits 7 to 9 are 0."""
+    back into a filter, the offset included. Fractions show the column's digits;
+    clickhouse-connect keeps microseconds, so digits 7 to 9 are 0."""
     while type_name.startswith(("Nullable(", "LowCardinality(")):
         type_name = type_name[type_name.index("(") + 1 : -1]
     kind, _, args = type_name.partition("(")
     digits = int(args.split(",")[0].rstrip(")")) if kind in ("Time64", "DateTime64") else 0
+    offset = ""
     if isinstance(v, dt.timedelta) and kind in ("Time", "Time64"):
         us = v // dt.timedelta(microseconds=1)
         s, fraction = divmod(abs(us), 1_000_000)
         text = f"{'-' if us < 0 else ''}{s // 3600:02d}:{s // 60 % 60:02d}:{s % 60:02d}"
     elif isinstance(v, dt.datetime) and kind in ("DateTime", "DateTime64"):
         # Already the wall time of the column's time zone, which toString prints.
+        # Without the offset a reader cannot tell which zone that is: a column
+        # without one shows the server's. clickhouse-connect leaves a value naive
+        # only in UTC.
         text, fraction = v.strftime("%Y-%m-%d %H:%M:%S"), v.microsecond
+        offset = _offset(v.utcoffset() or dt.timedelta(0))
     else:
         return v
-    return f"{text}.{fraction:06d}000"[: len(text) + 1 + digits] if digits else text
+    text = f"{text}.{fraction:06d}000"[: len(text) + 1 + digits] if digits else text
+    return text + offset
+
+
+def _offset(delta: dt.timedelta) -> str:
+    """+05:30 for 5.5 hours east of UTC; seconds only when there are some (local mean
+    time before a zone adopted standard time: +07:07:12)."""
+    s = int(delta.total_seconds())
+    sign, s = "-" if s < 0 else "+", abs(s)
+    text = f"{sign}{s // 3600:02d}:{s // 60 % 60:02d}"
+    return text + (f":{s % 60:02d}" if s % 60 else "")

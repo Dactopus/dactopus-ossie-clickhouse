@@ -71,20 +71,39 @@ def shown(clickhouse, model):
 
 
 def test_values_read_as_clickhouse_prints_them(clickhouse, shown):
-    text = ", ".join(f"toString({c})" for c in ("id", *COLUMNS))
+    # A DateTime gets its offset from UTC, which ClickHouse's text leaves out.
+    text = ", ".join(
+        f"concat(toString({c}), {_offset_sql(c)})" if t.startswith("DateTime") else f"toString({c})"
+        for c, t in {"id": "Int32", **COLUMNS}.items()
+    )
     printed = clickhouse.query(f"SELECT {text} FROM ossie_values.v ORDER BY id").result_rows
     # A Date stays a date, whose str() is ClickHouse's text already.
     assert [tuple(None if v is None else str(v) for v in r) for r in shown] == printed
     assert shown[1][1:3] == ["-01:02:03", "-00:00:00.500"] and shown[2][1] == "100:00:00"
+    assert shown[0][3] == "2024-03-15 10:30:45+09:00"
+
+
+def _offset_sql(c: str) -> str:
+    """+09:00 from ClickHouse's own offset of the value, in seconds."""
+    s = f"timeZoneOffset({c})"
+    return (
+        f"concat(if({s} < 0, '-', '+'), leftPad(toString(intDiv(abs({s}), 3600)), 2, '0'), "
+        f"':', leftPad(toString(intDiv(abs({s}), 60) % 60), 2, '0'))"
+    )
 
 
 def test_shown_values_filter_back_to_their_row(clickhouse, model, shown):
     ex = Executor(clickhouse, load_model(model))
     for row in shown:
         for column, value in zip(COLUMNS, row[1:], strict=True):
-            if value is not None:
-                q = Query(("rows",), ("v.id",), (f"v.{column} = '{value}'", f"v.id = {row[0]}"))
-                assert ex.execute(q).rows == [(row[0], 1)], (column, value)
+            if value is None:
+                continue
+            literals = [f"'{value}'"]
+            if COLUMNS[column].startswith("DateTime"):
+                literals.append(f"TIMESTAMP '{value}'")  # read in the model's zone, but
+            for literal in literals:  # the offset names the instant
+                q = Query(("rows",), ("v.id",), (f"v.{column} = {literal}", f"v.id = {row[0]}"))
+                assert ex.execute(q).rows == [(row[0], 1)], (column, literal)
 
 
 @pytest.mark.anyio

@@ -20,7 +20,7 @@ from ossie import OssieDataset, OssieDocument, OssieField, OssieRelationship
 from sqlglot import exp
 from sqlglot.dialects.clickhouse import ClickHouse
 
-from dactopus_ossie_clickhouse.model import covers_key, join_problem
+from dactopus_ossie_clickhouse.model import covers_key, join_problem, time_zone
 from dactopus_ossie_clickhouse.translate import (
     outside_spec,
     parse,
@@ -365,8 +365,10 @@ class Planner:
     _datasets: dict[str, OssieDataset] = field(init=False)
     _fields: dict[str, dict[str, OssieField]] = field(init=False)
     _metrics: dict[str, object] = field(init=False)
+    _zone: str = field(init=False)  # model.time_zone(): CURRENT_DATE and literals
 
     def __post_init__(self):
+        self._zone = time_zone(self.model)
         # Spec: unquoted identifiers are case-insensitive; index by upper case,
         # but always emit the physical names as written in the model.
         self._datasets = {d.name.upper(): d for d in self.model.datasets}
@@ -461,19 +463,28 @@ class Planner:
     def _metric_tree(self, m, used: set[str]) -> exp.Expression:
         """A metric's expression, resolved and rewritten for ClickHouse.
 
-        Refuses an aggregate that reads no column (COUNT(*)) unless the metric's
-        other aggregates name the one dataset whose rows it counts: otherwise it
-        would count rows of whichever dataset a question is answered over."""
-        tree = rewrite_tree(self.resolve(pick_expression(m.expression), used))
+        Refuses an aggregate that reads no column (COUNT(*), MAX(CURRENT_TIMESTAMP))
+        unless the metric's other aggregates name the one dataset whose rows it
+        aggregates: otherwise it would aggregate rows of whichever dataset a question
+        is answered over. A metric without aggregates that reads no column (the
+        current time) is answered over any rows, or none."""
+        tree = rewrite_tree(self.resolve(pick_expression(m.expression), used), self._zone)
         if len(self.model.datasets) > 1:
             inputs = _aggregate_inputs(tree)
             unnamed = [agg for agg, ds in inputs if not ds]
             if unnamed and len(_homes(inputs)) != 1:
+                agg = unnamed[0]
+                why = (
+                    "count rows of whichever dataset a question is answered over; count a "
+                    "column of the dataset it means, such as COUNT(dataset.key)"
+                    if isinstance(agg, exp.Count)
+                    else "aggregate rows of whichever dataset a question is answered over; "
+                    "read a column of the dataset it means, or leave out the aggregate for "
+                    "a value that reads no dataset, such as CURRENT_TIMESTAMP"
+                )
                 raise PlanError(
-                    f"metric {m.name!r} uses {unnamed[0].sql('clickhouse')}, which reads no "
-                    "column, so it would count rows of whichever dataset a question is "
-                    "answered over; count a column of the dataset it means, such as "
-                    "COUNT(dataset.key)"
+                    f"metric {m.name!r} uses {agg.sql('clickhouse')}, which reads no "
+                    f"column, so it would {why}"
                 )
         return tree
 
@@ -599,7 +610,7 @@ class Planner:
         for ref in q.dimensions:
             ds, f = self.field_ref(ref)
             touched.setdefault(f"dimension {ref!r}", set()).add(ds.name)
-            e = rewrite_tree(self._field_expr(ds, f))
+            e = rewrite_tree(self._field_expr(ds, f), self._zone)
             selects.append(e.as_(alias(f.name)))
             group.append(e.copy())
 
@@ -620,7 +631,7 @@ class Planner:
         for f in q.filters:
             label = f"filter {f!r}"
             tree = self.resolve(f, touched.setdefault(label, set()), metrics=True)
-            tree = rewrite_tree(tree)
+            tree = rewrite_tree(tree, self._zone)
             if tree.find(exp.Window):
                 raise PlanError(
                     f"filter {f!r} uses a window function; a window metric cannot be "
@@ -649,23 +660,40 @@ class Planner:
         used = set().union(*touched.values())
         where = list(rows.values())
         semi_joins: list[exp.Expression] = []
-        try:
-            root = self._root(used)
-            one_to_one = self._one_to_one(root.name)
-            for label, inputs in checked:
-                _check_rows(label, inputs, root.name, touched, one_to_one)
-        except PlanError:
-            split = self._split_filters(touched, rows, checked)
-            if split is None:
-                stitched = self._stitch(q, row_filters, aggregate_filters)
-                if stitched is not None:
-                    return stitched
-                raise
-            root, joined, semi_joins = split  # joined: row filters the root's joins answer
-            where = [rows[label] for label in joined]
-            kept = [ds for label, ds in touched.items() if label not in rows or label in joined]
-            used = set().union(*kept)
-        sel, dict_keys = self._from(exp.select(*selects), root, used)
+        aggregates = any(e.find(exp.AggFunc) for e in [*selects, *having])
+        if not used and len(self.model.datasets) == 1 and aggregates:
+            # An aggregate that reads no column (COUNT(*)) aggregates the one dataset's
+            # rows; with several, _metric_tree refuses it unless another names one.
+            used = {self.model.datasets[0].name}
+        root = None
+        if used:
+            try:
+                root = self._root(used)
+                one_to_one = self._one_to_one(root.name)
+                for label, inputs in checked:
+                    _check_rows(label, inputs, root.name, touched, one_to_one)
+            except PlanError:
+                split = self._split_filters(touched, rows, checked)
+                if split is None:
+                    stitched = self._stitch(q, row_filters, aggregate_filters)
+                    if stitched is not None:
+                        return stitched
+                    raise
+                root, joined, semi_joins = split  # joined: row filters the root's joins answer
+                where = [rows[label] for label in joined]
+                kept = [ds for label, ds in touched.items() if label not in rows or label in joined]
+                used = set().union(*kept)
+        elif aggregates:
+            raise PlanError(
+                "this question's aggregates read no column, so nothing says whose rows "
+                "they aggregate; read a column of the dataset meant, such as "
+                "COUNT(dataset.key)"
+            )
+        if root is None:
+            # Reads no dataset (the current time): one row, without FROM.
+            sel, dict_keys = exp.select(*selects), {}
+        else:
+            sel, dict_keys = self._from(exp.select(*selects), root, used)
         if where:
             sel = sel.where(exp.and_(*where))
         if group:
@@ -861,6 +889,11 @@ class Planner:
         groups: dict[frozenset[str], list[str]] = {}
         for n, tree in metric_trees.items():
             groups.setdefault(frozenset(_homes(_aggregate_inputs(tree))), []).append(n)
+        if len(groups) > 1 and frozenset() in groups:
+            # A metric that reads no dataset (the current time) takes its value in any
+            # group; a group of its own would add a row for every dimension value.
+            loose = groups.pop(frozenset())
+            next(iter(groups.values())).extend(loose)
         if len(groups) < 2:
             return None
         branches = []
@@ -950,7 +983,7 @@ class Planner:
                     return exp.column(by_ref[ref.upper()])
                 return node
 
-            conditions = [rewrite_tree(t).transform(to_merged) for t in having_trees]
+            conditions = [rewrite_tree(t, self._zone).transform(to_merged) for t in having_trees]
             sel = sel.having(exp.and_(*conditions))
         if order := self._order(q, selects):
             sel = sel.order_by(*order)

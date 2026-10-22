@@ -40,6 +40,8 @@ class FakeClickHouse:
             rows = [self.tables[k][2] for k in known]
         elif "system.tables" in sql:
             rows = [(*k, *self.tables[k][:2]) for k in known]
+        elif "system.time_zones" in sql:
+            rows = [(1,)]  # every zone is known
         else:
             rows = []
         return SimpleNamespace(result_rows=rows)

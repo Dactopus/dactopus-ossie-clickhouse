@@ -574,12 +574,26 @@ def test_connect_takes_tls_from_the_scheme(monkeypatch, url, interface):
     assert asked["dsn"] == url and asked["interface"] == interface
 
 
-@pytest.mark.parametrize("url", ["ftp://h", "h:8123", "clickhouse://u:pw@h:9000"])
-def test_connect_refuses_other_schemes(monkeypatch, url):
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://h",
+        "h:8123",
+        "localhost:8123",
+        "clickhouse://u:pw@h:9000",
+        "user:pw@h:8123",
+        # No host: clickhouse-connect would connect to localhost.
+        "https:/h:9443",
+        "https://",
+        "http://u:pw@:8123",
+    ],
+)
+def test_connect_refuses_other_schemes_and_no_host(monkeypatch, url):
     monkeypatch.setattr(executor.clickhouse_connect, "get_client", lambda **kw: pytest.fail())
-    with pytest.raises(ValueError, match="http:// or https://") as e:
+    with pytest.raises(ValueError, match="http://host or https://host") as e:
         executor.connect(url)
-    assert "pw" not in str(e.value)
+    assert "pw" not in str(e.value) and "user" not in str(e.value)
+    assert "localhost" not in str(e.value)
 
 
 def test_https_to_a_plain_server_fails(clickhouse):

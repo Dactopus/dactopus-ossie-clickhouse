@@ -51,10 +51,15 @@ def connect(url: str | None = None):
     url = url or os.environ.get("OSSIE_CLICKHOUSE_URL", DEFAULT_URL)
     # clickhouse-connect ignores a DSN's scheme and turns TLS on by the port (443
     # or 8443), so https on any other port went out in the clear (#60). The scheme
-    # passed as `interface` decides it on every port, both ways.
-    scheme = urlsplit(url).scheme
-    if scheme not in ("http", "https"):
-        raise ValueError(f"ClickHouse URL must start with http:// or https://, not {scheme!r}")
+    # passed as `interface` decides it on every port, both ways. A URL without a host
+    # would connect to localhost. The message quotes nothing: `localhost:8123` parses
+    # with `localhost` as its scheme, and `user:pw@h` with the user name.
+    parts = urlsplit(url)
+    scheme = parts.scheme
+    if scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError(
+            "ClickHouse URL must be http://host or https://host, with an optional port"
+        )
     # No session: nothing here needs one, and a session serializes queries, so
     # concurrent MCP tool calls on one client would fail.
     return clickhouse_connect.get_client(dsn=url, interface=scheme, autogenerate_session_id=False)

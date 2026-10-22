@@ -16,8 +16,10 @@ a minor release may change the Python API.
   clickhouse-connect, checked on 1.9.0 and 1.11.0, ignores a URL's
   scheme and turns TLS on by the port; the scheme now decides it on
   every port, both ways, for `--url` and `OSSIE_CLICKHOUSE_URL` alike.
-  A URL with any other scheme, or none, is refused before anything
-  connects.
+  An `http://` URL on port 443 or 8443, which used to get TLS, now
+  goes without it: write `https://`. A URL with any other scheme, or
+  none, or without a host (which connected to localhost) is refused
+  before anything connects.
 
 ## [0.9.4] - 2026-10-22
 

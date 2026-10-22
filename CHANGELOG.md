@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-22
+
 ### Added
 
 - `list_model` returns `today` and `now`, the date and time in the zone

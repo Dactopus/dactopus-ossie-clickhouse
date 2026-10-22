@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-22
+
 ### Added
 
 - `validate`, `sql`, `query` and `serve` take `--time-zone`, with

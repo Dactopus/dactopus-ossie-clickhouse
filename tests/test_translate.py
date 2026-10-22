@@ -197,6 +197,9 @@ def test_to_clickhouse_in_the_model_zone():
         ("now()", "now('America/New_York')"),
         ("now64()", "now64(3, 'America/New_York')"),
         ("now64(6)", "now64(6, 'America/New_York')"),
+        # ClickHouse's aliases of today() and now()
+        ("curdate()", "toDate(now('America/New_York'))"),
+        ("localtimestamp()", "now('America/New_York')"),
         # A zone written is kept.
         ("now('UTC')", "now('UTC')"),
         ("now64(6, 'UTC')", "now64(6, 'UTC')"),

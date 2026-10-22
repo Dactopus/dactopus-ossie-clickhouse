@@ -25,7 +25,7 @@ a minor release may change the Python API.
   agent, none of six wrote `CURRENT_DATE` before and all six did after,
   answering right.
 - ClickHouse's own `today()`, `yesterday()`, `now()` and `now64()`
-  without a zone, in a filter or a model, were the server's date and
+  (and the aliases `curdate()` and `localtimestamp()`) without a zone, in a filter or a model, were the server's date and
   time; they are now the model's zone, as `CURRENT_DATE` is (#56). An
   agent that wrote `today()` on a server a day ahead of the store
   answered that no order was placed today.

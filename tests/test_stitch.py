@@ -294,3 +294,27 @@ def test_clickhouse_empty_values_of_stitched_metrics(ex):
     assert rows["NORTH"][:3] == (0, None, 0)
     assert rows["EAST"][:3] == (2, 300, 3)
     assert rows[None][:3] == (0, None, 1)
+
+
+def _with_the_current_date() -> OssieDocument:
+    data = load_model(FIXTURE).model_dump(by_alias=True, exclude_none=True)
+    expression = {"dialects": [{"dialect": "ANSI_SQL", "expression": "CURRENT_DATE"}]}
+    data["metrics"].append({"name": "today", "expression": expression})
+    return OssieDocument.model_validate(data)
+
+
+def test_a_metric_that_reads_no_dataset_joins_a_group():
+    """Its own group would add a row for every region, with or without orders or returns."""
+    sql = Planner(_with_the_current_date()).sql(
+        Query(("total_revenue", "total_returns", "today"), ("customers.region",))
+    )
+    assert sql.count("UNION ALL") == 1
+
+
+def test_a_metric_that_reads_no_dataset_is_on_every_stitched_row(ex):
+    other = Executor(ex.client, _with_the_current_date())
+    q = Query(("total_revenue", "total_returns", "today"), ("customers.region",))
+    rows = {r[0]: r[1:] for r in other.execute(q).rows}
+    # NORTH has returns and no orders, the NULL region an orphan of each.
+    assert len({r[2] for r in rows.values()}) == 1 and None not in {r[2] for r in rows.values()}
+    assert rows["NORTH"][0] is None and rows["NORTH"][1] == 15

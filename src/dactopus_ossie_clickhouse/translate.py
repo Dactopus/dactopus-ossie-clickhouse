@@ -19,6 +19,8 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.parser import Parser
 
+from dactopus_ossie_clickhouse.model import DEFAULT_TIME_ZONE
+
 # Preference order when a field or metric carries several dialects.
 DIALECT_PREFERENCE = (OssieDialect.OSSIE_SQL_2026, OssieDialect.ANSI_SQL)
 
@@ -353,16 +355,23 @@ _ANONYMOUS = {
         if len(a) == 1
         else _f("toDate", _f("parseDateTime", a[0], _fmt_literal(a[1])))
     ),
-    "TO_TIMESTAMP": lambda a: (
-        _f("parseDateTimeBestEffort", a[0])
-        if len(a) == 1
-        else _f("parseDateTime", a[0], _fmt_literal(a[1]))
-    ),
     "IFF": lambda a: _f("if", *a),
     "ZEROIFNULL": lambda a: _f("ifNull", a[0], exp.Literal.number(0)),
     "NULLIFZERO": lambda a: _f("nullIf", a[0], exp.Literal.number(0)),
 }
 
+
+# The same, for those that read a date or time in the model's time zone: (args, zone).
+_ZONED = {
+    "TO_TIMESTAMP": lambda a, z: (
+        _f("parseDateTimeBestEffort", a[0], z)
+        if len(a) == 1
+        else _f("parseDateTime", a[0], _fmt_literal(a[1]), z)
+    ),
+}
+
+_TIMESTAMPS = (exp.DType.TIMESTAMP, exp.DType.TIMESTAMPNTZ, exp.DType.DATETIME)
+_FRACTION = re.compile(r":\d\d\.(\d{1,9})")
 
 _ONE = exp.Literal.number("1.0")
 
@@ -394,10 +403,43 @@ def _percentile_cont(p: exp.Expression, arg: exp.Expression) -> exp.Expression:
     return _param_agg("quantileExactInclusiveOrNull", p, arg)
 
 
-def rewrite(node: exp.Expression) -> exp.Expression:
+def _timestamp_literal(node: exp.Cast, zone: exp.Literal) -> exp.Expression:
+    """A wall-clock timestamp written as a string, read in the model's zone.
+
+    ClickHouse reads CAST(s AS DateTime) in the server's zone, which a model's
+    answers must not depend on, and drops a fraction. An offset in the string
+    (``+00:00``, as values are shown) still names the instant."""
+    text = node.this.this
+    fraction = _FRACTION.search(text)
+    name = "toDateTime" if not fraction else "toDateTime64"
+    if isinstance(node, exp.TryCast):
+        name += "OrNull"
+    digits = exp.Literal.number(len(fraction[1])) if fraction else None
+    return _f(name, node.this, digits, zone)
+
+
+def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expression:
+    """``node`` for ClickHouse. ``zone`` is the model's time zone (model.time_zone())."""
     if isinstance(node, exp.Anonymous):
-        fn = _ANONYMOUS.get(node.name.upper())
+        name = node.name.upper()
+        if name in _ZONED:
+            return _ZONED[name](node.expressions, exp.Literal.string(zone))
+        fn = _ANONYMOUS.get(name)
         return fn(node.expressions) if fn else node
+    # The current date and a wall-clock time are those of the model's zone; now(zone)
+    # is the same instant as now(), so comparisons and differences do not change.
+    if isinstance(node, exp.CurrentTimestamp):
+        return _f("now", exp.Literal.string(zone))
+    if isinstance(node, exp.CurrentDate):
+        return _f("toDate", _f("now", exp.Literal.string(zone)))
+    if isinstance(node, exp.CurrentTime):
+        return _f("toTime", _f("now", exp.Literal.string(zone)))
+    if (
+        isinstance(node, exp.Cast)  # TryCast too
+        and node.this.is_string
+        and node.to.this in _TIMESTAMPS
+    ):
+        return _timestamp_literal(node, exp.Literal.string(zone))
     if isinstance(node, exp.Median):
         return _percentile_cont(exp.Literal.number(0.5), node.this)
     if isinstance(node, exp.WithinGroup) and isinstance(
@@ -454,8 +496,6 @@ def rewrite(node: exp.Expression) -> exp.Expression:
         if not floated and not isinstance(this, exp.Div):
             node.set("this", _to_float(node.this))
         return node
-    if isinstance(node, exp.CurrentTime):
-        return _f("toTime", _f("now"))
     if isinstance(node, exp.Extract) and node.name.upper() in _EXTRACT_PARTS:
         return _f(_EXTRACT_PARTS[node.name.upper()], node.expression)
     if isinstance(node, exp.ToChar):
@@ -490,7 +530,7 @@ def _operator(node: exp.Expression | None) -> bool:
     return isinstance(node, _OPERATOR) and not isinstance(node, exp.Func | exp.Paren)
 
 
-def rewrite_tree(tree: exp.Expression) -> exp.Expression:
+def rewrite_tree(tree: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expression:
     """A copy of ``tree`` with every node rewritten for ClickHouse.
 
     SQLGlot prints a tree as it stands, without parentheses for precedence, so an
@@ -506,7 +546,7 @@ def rewrite_tree(tree: exp.Expression) -> exp.Expression:
     # Expression.transform does not descend into a replaced node.
     for node in reversed(list(tree.dfs())):
         parent, arg_key, index = node.parent, node.arg_key, node.index
-        new = rewrite(node)
+        new = rewrite(node, zone)
         if new is node:
             continue
         if parent is None:
@@ -527,10 +567,10 @@ def rewrite_tree(tree: exp.Expression) -> exp.Expression:
     return tree
 
 
-def to_clickhouse(expression: str | exp.Expression) -> str:
+def to_clickhouse(expression: str | exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> str:
     """ClickHouse SQL for an Ossie expression."""
     tree = parse(expression) if isinstance(expression, str) else expression
-    return rewrite_tree(tree).sql(dialect="clickhouse")
+    return rewrite_tree(tree, zone).sql(dialect="clickhouse")
 
 
 def translate(expression: OssieExpression) -> str:

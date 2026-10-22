@@ -7,6 +7,40 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- A model names the zone of its dates in its own `CLICKHOUSE` entry,
+  `{"time_zone": "America/New_York"}`, UTC without one (#52).
+  `CURRENT_DATE` is the date there, so `order_date = CURRENT_DATE`
+  counts a store's orders of today at any hour, and `CURRENT_TIMESTAMP`
+  and `CURRENT_TIME` show its wall clock. `validate --url` checks that
+  the server knows the zone.
+- A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is
+  answered without a dimension, without `FROM`, where it failed
+  although `validate` accepted it (#52).
+
+### Changed
+
+- `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, timestamp literals
+  without an offset and `TO_TIMESTAMP` of a string use the model's zone,
+  UTC by default, not the server's. On a server outside UTC, answers that
+  used them change.
+- The CLI and the MCP server show a `DateTime` with its offset from UTC,
+  `2024-03-15 10:30:45+00:00`: without it a column in the server's zone
+  could not be told from one in UTC. It still works as a filter literal.
+
+### Fixed
+
+- A value shown for a `DateTime` column in another zone than the
+  server's, filtered back as `TIMESTAMP '...'`, matched no row: the
+  literal was read in the server's zone. A literal's fraction of a
+  second was dropped.
+- `COUNT(*)` in a model of one dataset failed in every question, though
+  `validate` accepted it.
+- The refusal of an aggregate that reads no column, such as
+  `MAX(CURRENT_TIMESTAMP)`, no longer says it counts rows, and says to
+  leave out the aggregate for a value that reads no dataset.
+
 ## [0.9.1] - 2026-10-21
 
 ### Added

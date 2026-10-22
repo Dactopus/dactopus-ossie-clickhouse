@@ -96,8 +96,10 @@ Python library with a CLI entry point. The parts that constrain code:
   added. Single-key dictionaries with `dictGetOrNull` instead of a join.
   Overrides go in a dataset's `custom_extensions` under
   `vendor_name: CLICKHOUSE` as JSON, currently `{"dedup": "none"}` or
-  `{"dedup": "final"}`. `check_model` refuses any other key or value and
-  the entry anywhere but a dataset; `model.overrides` is the one parser.
+  `{"dedup": "final"}`; the model's own entry takes `{"time_zone": ...}`.
+  `check_model` refuses any other key or value and the entry anywhere but
+  a dataset or the model; `model._extension` is the one parser, behind
+  `overrides` and `time_zone`.
 - The planner never talks to the database; it takes an optional `Catalog`
   the executor built. Keep that boundary.
 - Query planning is deterministic: datasets from `source`, joins from
@@ -146,6 +148,12 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 
 - Float division by zero and single-row `STDDEV`/`VARIANCE` yield `inf` or
   `nan`, not `NULL`; the executor maps both to `None`.
+- A `DateTime` without a zone, `now()`, `today()` and `CAST('...' AS
+  DateTime)` take the server's zone. Answers must not: `CURRENT_*` and
+  timestamp literals use the model's zone (`model.time_zone`, UTC by
+  default), passed to `rewrite_tree`. Not `session_timezone`: calendar
+  functions of a column without a zone ignore it. Values are shown with
+  their offset from UTC.
 - Table names are `database.table`; Ossie `source` may have three parts,
   or one: a bare table reads `currentDatabase()` (the URL's database, else
   the user's default), and introspection asks the server for it. Parts

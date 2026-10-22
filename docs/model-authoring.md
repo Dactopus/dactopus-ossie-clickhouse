@@ -201,6 +201,43 @@ what you need as fields:
 A calendar table with year, month and day columns, as in TPC-DS, works
 just as well.
 
+## Time zone
+
+A model whose dates are a store's days names the store's zone, so that
+`CURRENT_DATE` is the store's today and `orders.order_date = CURRENT_DATE`
+counts today's orders at any hour:
+
+```yaml
+version: "0.2.0.dev0"
+name: shop
+custom_extensions:
+  - vendor_name: CLICKHOUSE
+    data: '{"time_zone": "America/New_York"}'
+datasets: ...
+```
+
+Without it the zone is UTC, whatever the server's. In that zone:
+
+- `CURRENT_DATE` is the date, and `CURRENT_TIMESTAMP` and `CURRENT_TIME`
+  show its wall clock. `CURRENT_TIMESTAMP` is the same instant in any
+  zone, so comparisons and differences with it do not change.
+- A timestamp literal without an offset (`TIMESTAMP '2026-10-21 16:00:00'`,
+  `CAST('...' AS TIMESTAMP)`) and a string `TO_TIMESTAMP` parses are read
+  there. One with an offset (`'2026-10-21 20:00:00+00:00'`) names its
+  instant in any zone.
+
+A column keeps its own zone: `CAST(placed_at AS DATE)`, `DATE_TRUNC` and
+`HOUR` of a `DateTime('UTC')` column are UTC dates and hours whatever the
+model's zone, so store days computed at load time (as dactopus-data-models
+builds `order_date`) are the ones that match `CURRENT_DATE`. A string
+compared directly with a column (`placed_at > '2026-10-21 16:00:00'`) is
+read by ClickHouse in the column's zone; write `TIMESTAMP '...'` for the
+model's. Ossie has no time zone of its own yet.
+
+The zone is an IANA name spelled exactly (`UTC`, `Europe/Berlin`;
+not `utc` or `+03:00`), in one file of a model that spans several.
+`validate --url` checks that the server knows it.
+
 ## Deduplication
 
 Tables with an engine in the
@@ -259,13 +296,14 @@ versions), turn it off per dataset:
 
 `custom_extensions`, the spec's escape hatch for vendor settings, with
 `vendor_name: CLICKHOUSE` (in any case) is the namespace this project
-owns. The entry is read on a dataset only, once per dataset, and its
-`data` is a JSON object. `dedup` (`"final"` or `"none"`) is the only key
-today. Loading the model refuses anything else: an unknown key, another
-value (`"None"`, `null`), a key written twice, text that is not a JSON
-object, a second entry on the dataset, an entry on the model, a field, a
-metric or a relationship. A typo would otherwise change how the dataset
-is read without an error.
+owns. The entry is read on a dataset and on the model, once on each, and
+its `data` is a JSON object. A dataset's only key is `dedup` (`"final"`
+or `"none"`); the model's is `time_zone` ([Time zone](#time-zone)).
+Loading the model refuses anything else: an unknown key, another value
+(`"None"`, `null`), a key written twice, text that is not a JSON object,
+a second entry on the dataset or the model, an entry on a field, a metric
+or a relationship. A typo would otherwise change how the dataset is read
+without an error.
 
 `FINAL` drops deleted rows only when the engine declares its delete
 column, as in `ReplacingMergeTree(version, is_deleted)`. CDC tools that
@@ -347,6 +385,6 @@ relationships that resolve, expressions in a translatable dialect,
 joins the planner accepts, and metrics no question can answer (such as
 one naming an unknown field or a bare `COUNT(*)`). With
 `--url`: every source exists, every column a field, key or relationship
-uses exists. Run it as a user who can read everything the model names;
+uses exists, and the server knows the model's time zone. Run it as a user who can read everything the model names;
 run as a restricted user it reports that user's view, not the model's
 correctness.

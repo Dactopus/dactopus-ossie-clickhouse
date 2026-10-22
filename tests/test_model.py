@@ -1,4 +1,5 @@
 import copy
+import json
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse import SUPPORTED_VERSION, ModelError, load_model
 from dactopus_ossie_clickhouse.cli import main
-from dactopus_ossie_clickhouse.model import overrides
+from dactopus_ossie_clickhouse.model import overrides, time_zone
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tpcds.yaml"
@@ -168,20 +169,60 @@ def test_clickhouse_extension_twice(tmp_path, tpcds):
     ]
 
 
-def test_clickhouse_extension_read_on_datasets_only(tmp_path, tpcds):
+def test_clickhouse_extension_read_on_the_model_and_datasets_only(tmp_path, tpcds):
     entry = _clickhouse('{"dedup": "none"}')
     ds, metric, rel = tpcds["datasets"][0], tpcds["metrics"][0], tpcds["relationships"][0]
-    tpcds["custom_extensions"].append(entry)  # beside other vendors' entries, which stay
     ds["fields"][0]["custom_extensions"] = [entry]
     metric["custom_extensions"] = [entry]
     rel["custom_extensions"] = [entry]
-    tail = "a CLICKHOUSE entry in custom_extensions is read on datasets only"
+    tail = "a CLICKHOUSE entry in custom_extensions is read on the model and datasets only"
     assert problems_of(tmp_path, tpcds) == [
-        f"model: {tail}",
         f"field {ds['name']}.{ds['fields'][0]['name']}: {tail}",
         f"metric {metric['name']!r}: {tail}",
         f"relationship {rel['name']!r}: {tail}",
     ]
+
+
+@pytest.mark.parametrize("zone", ["UTC", "America/New_York", "Asia/Makassar"])
+def test_model_time_zone(tmp_path, tpcds, zone):
+    assert time_zone(load_model(write(tmp_path, tpcds))) == "UTC"  # without an entry
+    # beside other vendors' entries, which stay
+    tpcds["custom_extensions"].append(_clickhouse(json.dumps({"time_zone": zone})))
+    assert time_zone(load_model(write(tmp_path, tpcds))) == zone
+
+
+@pytest.mark.parametrize(
+    ("data", "problem"),
+    [
+        ('{"time_zone": "Moscow"}', '"Moscow"'),
+        # ClickHouse matches zone names case-sensitively
+        ('{"time_zone": "utc"}', '"utc"'),
+        ('{"time_zone": "+03:00"}', '"+03:00"'),
+        ('{"time_zone": null}', "null"),
+    ],
+)
+def test_model_time_zone_refused(tmp_path, tpcds, data, problem):
+    tpcds["custom_extensions"] = [_clickhouse(data)]
+    assert problems_of(tmp_path, tpcds) == [
+        "model: CLICKHOUSE entry: 'time_zone' must be a time zone name such as \"UTC\" "
+        f'or "America/New_York", got {problem}'
+    ]
+
+
+def test_model_and_dataset_keys_stay_apart(tmp_path, tpcds):
+    ds = tpcds["datasets"][0]
+    tpcds["custom_extensions"] = [_clickhouse('{"dedup": "none"}')]
+    ds["custom_extensions"] = [_clickhouse('{"time_zone": "UTC"}')]
+    assert problems_of(tmp_path, tpcds) == [
+        "model: CLICKHOUSE entry: unknown key 'dedup'; known: time_zone",
+        f"dataset {ds['name']!r}: CLICKHOUSE entry: unknown key 'time_zone'; known: dedup",
+    ]
+
+
+def test_time_zone_checks_a_document_built_in_python(tpcds):
+    tpcds["custom_extensions"] = [_clickhouse('{"time_zone": "Mars/Olympus"}')]
+    with pytest.raises(ModelError, match="'time_zone' must be"):
+        time_zone(OssieDocument.model_validate(tpcds))
 
 
 def test_overrides_checks_a_document_built_in_python(tpcds):
@@ -291,7 +332,7 @@ def test_file_problems_reported_with_the_clashes(tmp_path, tpcds):
         load_model(a, b)
     assert e.value.problems == [
         f"{b}: duplicate metric name {rest['metrics'][0]['name']!r}",
-        f"{b}: model: a CLICKHOUSE entry in custom_extensions is read on datasets only",
+        f"{b}: model: CLICKHOUSE entry: unknown key 'dedup'; known: time_zone",
         f"metric 'total_sales' is defined in both {a} and {b}",
     ]
     # Without a clash, the whole is checked in the same run as the files.
@@ -303,7 +344,7 @@ def test_file_problems_reported_with_the_clashes(tmp_path, tpcds):
         load_model(a, b)
     assert e.value.problems == [
         f"{b}: duplicate metric name {rest['metrics'][0]['name']!r}",
-        f"{b}: model: a CLICKHOUSE entry in custom_extensions is read on datasets only",
+        f"{b}: model: CLICKHOUSE entry: unknown key 'dedup'; known: time_zone",
         f"relationship {rel['name']!r}: to dataset 'nowhere' does not exist",
     ]
 
@@ -319,6 +360,19 @@ def test_name_defined_in_two_files(tmp_path, tpcds):
         f"dataset 'date_dim' is defined in both {a} and {b}",
         f"metric 'total_sales' is defined in both {a} and {b}",
     ]
+
+
+def test_model_time_zone_in_one_file_of_several(tmp_path, tpcds):
+    sales, rest = split(tpcds)
+    rest["custom_extensions"] = [_clickhouse('{"time_zone": "America/New_York"}')]
+    a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
+    assert time_zone(load_model(a, b)) == "America/New_York"
+    # In two files, even the same zone: one of them would be edited and not the other.
+    sales["custom_extensions"] = [_clickhouse('{"time_zone": "America/New_York"}')]
+    write(tmp_path, sales, "a.yaml")
+    with pytest.raises(ModelError) as e:
+        load_model(a, b)
+    assert e.value.problems == [f"the model's CLICKHOUSE entry is in both {a} and {b}; keep one"]
 
 
 def test_each_file_checked_against_the_schema(tmp_path, tpcds):

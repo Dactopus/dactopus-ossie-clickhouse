@@ -80,8 +80,9 @@ select it and filter the rows. `order_by` names metrics or dimensions,
 `"name desc"` for descending; empty means the first metric descending.
 Ties are broken by the dimensions, ascending. Rows without a value come
 last either way, so `limit` may cut them off. A `Time` or `DateTime` value
-reads as ClickHouse prints it (`-01:02:03`, `2024-03-15 10:30:45`), as in
-the CLI's output, and works as a filter literal.
+reads as ClickHouse prints it, a `DateTime` with its offset from UTC
+(`-01:02:03`, `2024-03-15 10:30:45+00:00`), as in the CLI's output, and
+works as a filter literal.
 The server's `instructions` tell the agent to start with `list_model`,
 never to write SQL, never to add up or rank rows itself, and to state only
 numbers a query returned. They end with the model's own

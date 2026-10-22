@@ -306,7 +306,9 @@ def _one_of(*values: str):
 
 def _zone(v) -> str | None:
     # Exact spelling: ClickHouse matches zone names case-sensitively.
-    return None if v in _zones() else 'a time zone name such as "UTC" or "America/New_York"'
+    if isinstance(v, str) and v in _zones():
+        return None
+    return 'a time zone name such as "UTC" or "America/New_York"'
 
 
 # Keys of the entry on a dataset and on the model; each check returns None for a

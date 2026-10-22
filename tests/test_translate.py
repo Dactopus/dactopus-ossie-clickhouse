@@ -114,7 +114,16 @@ def test_translate_uses_picked_dialect():
         ),
         (
             "TRY_CAST('2024-01-15 10:30:00' AS TIMESTAMP_NTZ)",
-            "toDateTimeOrNull('2024-01-15 10:30:00', 'UTC')",
+            "accurateCastOrNull('2024-01-15 10:30:00', 'DateTime(''UTC'')')",
+        ),
+        (
+            "TRY_CAST('2024-01-15 10:30:00.5+05:30' AS TIMESTAMP)",
+            "accurateCastOrNull('2024-01-15 10:30:00.5+05:30', 'DateTime64(1, ''UTC'')')",
+        ),
+        # a type with a zone reads a string without an offset in the model's zone too
+        (
+            "CAST('2024-01-15 10:30:00' AS TIMESTAMP WITH TIME ZONE)",
+            "toDateTime('2024-01-15 10:30:00', 'UTC')",
         ),
         ("CAST(c AS TIMESTAMP)", "CAST(c AS Nullable(DateTime))"),
         ("DATE '2024-01-15'", "CAST('2024-01-15' AS Nullable(DATE))"),

@@ -370,7 +370,14 @@ _ZONED = {
     ),
 }
 
-_TIMESTAMPS = (exp.DType.TIMESTAMP, exp.DType.TIMESTAMPNTZ, exp.DType.DATETIME)
+# With a zone too: a string without an offset is read in the model's, not the server's.
+_TIMESTAMPS = (
+    exp.DType.TIMESTAMP,
+    exp.DType.TIMESTAMPNTZ,
+    exp.DType.TIMESTAMPTZ,
+    exp.DType.TIMESTAMPLTZ,
+    exp.DType.DATETIME,
+)
 _FRACTION = re.compile(r":\d\d\.(\d{1,9})")
 
 _ONE = exp.Literal.number("1.0")
@@ -408,14 +415,17 @@ def _timestamp_literal(node: exp.Cast, zone: exp.Literal) -> exp.Expression:
 
     ClickHouse reads CAST(s AS DateTime) in the server's zone, which a model's
     answers must not depend on, and drops a fraction. An offset in the string
-    (``+00:00``, as values are shown) still names the instant."""
+    (``+00:00``, as values are shown) still names the instant. TRY_CAST is
+    accurateCastOrNull to the zoned type: toDateTimeOrNull returns NULL for a
+    string with an offset."""
     text = node.this.this
     fraction = _FRACTION.search(text)
-    name = "toDateTime" if not fraction else "toDateTime64"
-    if isinstance(node, exp.TryCast):
-        name += "OrNull"
     digits = exp.Literal.number(len(fraction[1])) if fraction else None
-    return _f(name, node.this, digits, zone)
+    if isinstance(node, exp.TryCast):
+        args = ", ".join(a.sql("clickhouse") for a in (digits, zone) if a is not None)
+        to = exp.Literal.string(f"{'DateTime64' if fraction else 'DateTime'}({args})")
+        return _f("accurateCastOrNull", node.this, to)
+    return _f("toDateTime64" if fraction else "toDateTime", node.this, digits, zone)
 
 
 def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expression:

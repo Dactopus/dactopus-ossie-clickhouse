@@ -118,6 +118,9 @@ def test_timestamp_literal_is_read_in_the_model_zone(
     ex = executor(clickhouse, tmp_path, zone)
     res = ex.execute(Query(("events",), filters=(f"e.at = TIMESTAMP '{literal}'",)))
     assert res.rows == [(1 if matches else 0,)]
+    # TRY_CAST reads it the same, the offset included (toDateTimeOrNull returns NULL).
+    res = ex.execute(Query(("events",), filters=(f"e.at = TRY_CAST('{literal}' AS TIMESTAMP)",)))
+    assert res.rows == [(1 if matches else 0,)]
 
 
 def test_shown_time_carries_the_column_zone(clickhouse, table, tmp_path):

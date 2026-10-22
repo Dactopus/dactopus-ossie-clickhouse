@@ -20,6 +20,10 @@ METRICS = {
     "events": "COUNT(e.id)",
     "now_here": "CURRENT_TIMESTAMP",
     "today_here": "CURRENT_DATE",
+    # ClickHouse's own clock, as an agent may write it (#56).
+    "today_clickhouse": "today()",
+    "yesterday_clickhouse": "yesterday()",
+    "now_clickhouse": "now()",
     # 7 hours after the reading: 23:00 on the 21st in New York, the 22nd in UTC.
     "hours_after": "DATEDIFF(hour, MAX(e.at), TIMESTAMP '2026-10-22 03:00:00+00:00')",
     "days_after": "DATEDIFF(day, MAX(e.at), TIMESTAMP '2026-10-22 03:00:00+00:00')",
@@ -87,6 +91,15 @@ def test_current_date_and_time_are_the_model_zone(clickhouse, table, tmp_path, z
     shown = dt.datetime.fromisoformat(now)
     assert shown.utcoffset() == before.utcoffset()  # the zone's wall clock, with its offset
     assert before - dt.timedelta(seconds=1) <= shown <= after + dt.timedelta(seconds=1)
+
+
+def test_clickhouse_clock_is_the_model_zone(clickhouse, table, tmp_path):
+    """today(), yesterday() and now() as CURRENT_DATE is, not the server's (#56)."""
+    ex = executor(clickhouse, tmp_path, "Pacific/Kiritimati")
+    names = ("today_here", "today_clickhouse", "yesterday_clickhouse", "now_clickhouse")
+    [(today, today_ch, yesterday, now)] = ex.execute(Query(names)).shown_rows()
+    assert today_ch == today and yesterday == today - dt.timedelta(days=1)
+    assert now.endswith("+14:00") and now.startswith(today.isoformat())
 
 
 def test_current_date_is_in_the_zone_given_over_the_model_s(clickhouse, table, tmp_path):

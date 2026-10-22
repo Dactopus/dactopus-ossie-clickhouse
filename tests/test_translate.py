@@ -189,6 +189,27 @@ def test_to_clickhouse_in_the_model_zone():
     )
 
 
+@pytest.mark.parametrize(
+    ("clickhouse", "expected"),
+    [
+        ("today()", "toDate(now('America/New_York'))"),
+        ("yesterday()", "subtractDays(toDate(now('America/New_York')), 1)"),
+        ("now()", "now('America/New_York')"),
+        ("now64()", "now64(3, 'America/New_York')"),
+        ("now64(6)", "now64(6, 'America/New_York')"),
+        # A zone written is kept.
+        ("now('UTC')", "now('UTC')"),
+        ("now64(6, 'UTC')", "now64(6, 'UTC')"),
+    ],
+)
+def test_clickhouse_clock_is_in_the_model_zone(clickhouse, expected):
+    """today() and now() are the server's zone; answers are the model's (#56)."""
+    zone = "America/New_York"
+    assert to_clickhouse(clickhouse, zone) == expected
+    # rewritten twice, as a metric inlined into a filter is: the same
+    assert rewrite_tree(rewrite_tree(parse(clickhouse), zone), zone).sql("clickhouse") == expected
+
+
 def test_passthrough_functions_are_the_names_outside_the_catalog():
     tree = parse("DAYOFWEEK(TO_DATE(s)) + sumIf(x, ZEROIFNULL(y) > 0) + NVL(x, 0)")
     assert passthrough_functions(tree) == {"DAYOFWEEK", "sumIf"}

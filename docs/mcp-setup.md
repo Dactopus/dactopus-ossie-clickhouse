@@ -72,7 +72,7 @@ mean" hint reaches the agent.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_model` | none | `name`, `description`, AI hints, `datasets` (name, description, synonyms, field count), `metrics` (name, description, synonyms), `relationships` (`from -> to`), `time_zone` (the one in effect: `--time-zone`, `OSSIE_CLICKHOUSE_TIME_ZONE`, the model's, UTC; today, the current time and times without an offset are there), `usage`. |
+| `list_model` | none | `name`, `description`, AI hints, `datasets` (name, description, synonyms, field count), `metrics` (name, description, synonyms), `relationships` (`from -> to`), `time_zone` (the one in effect: `--time-zone`, `OSSIE_CLICKHOUSE_TIME_ZONE`, the model's, UTC; today, the current time and times without an offset are there), `today` and `now` (the date and time there by the server's clock, what `CURRENT_DATE` and `CURRENT_TIMESTAMP` are; `error` instead when the server cannot tell), `usage`. |
 | `search_model` | `text` | Up to 20 objects whose name, description or synonyms contain every word of `text`: `kind` (`dataset`, `field`, `metric`), `name`, `description`, `synonyms`. |
 | `describe_object` | `name`: dataset, `dataset.field` or metric, case-insensitive | The object with `instructions` and `examples` from `ai_context`. A dataset lists `fields` (with `datatype`, `is_time`) and `relationships`; a field or metric carries its `expression` and `datatype`. Unknown name: `error` with similar names. |
 | `query` | `metrics`, `dimensions` (`dataset.field`), `filters`, `order_by` (all lists of strings, default empty), `limit` (default 100) | `columns`, `rows`, `row_count`, `sql`. |
@@ -88,9 +88,12 @@ reads as ClickHouse prints it, a `DateTime` with its offset from UTC
 (`-01:02:03`, `2024-03-15 10:30:45+00:00`), as in the CLI's output, and
 works as a filter literal.
 The server's `instructions` tell the agent to start with `list_model`,
-never to write SQL, never to add up or rank rows itself, to state only
-numbers a query returned, and which time zone today and times without an
-offset are in. They end with the model's own
+to write SQL only in filters, never to add up or rank rows itself, to
+state only numbers a query returned, and which time zone today and times
+without an offset are in. Today, yesterday and other periods counted from
+now go in a filter as `CURRENT_DATE` or `CURRENT_TIMESTAMP`, never as a
+date the agent knows: its user's date may differ from the deployment's.
+They end with the model's own
 `ai_context.instructions`, so an agent that starts with `search_model`
 still gets them; `list_model` repeats them for clients that ignore server
 instructions.

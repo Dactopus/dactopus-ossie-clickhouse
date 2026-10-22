@@ -7,6 +7,24 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- `list_model` returns `today` and `now`, the date and time in the zone
+  in effect by the server's clock, so an agent can name the day it
+  answered for (#56).
+
+### Fixed
+
+- Agents asked about today wrote the date they knew, their user's, as a
+  literal, and where the deployment's date differed, answered for the
+  wrong day (#56). The MCP server's instructions and the `query` tool's
+  description now say to write today and periods counted from it with
+  `CURRENT_DATE` or `CURRENT_TIMESTAMP`, never a known date or
+  ClickHouse's `today()`, and that SQL goes in filters, where they said
+  never to write SQL. In fresh sessions with Haiku 5.5 and Sonnet 5.5 on
+  a store a day behind the agent, none of six wrote `CURRENT_DATE`
+  before and all six did after, answering right.
+
 ## [0.9.3] - 2026-10-22
 
 ### Added

@@ -476,6 +476,7 @@ class Planner:
         is known to be one: the datatype says so, before inlining replaces the name."""
 
         def is_time(node: exp.Expression) -> bool:
+            node = node.unnest()
             if not isinstance(node, exp.Column):
                 return False
             if node.table:
@@ -485,17 +486,24 @@ class Planner:
                 obj = self._metrics.get(node.name.upper()) if metrics else None
             return getattr(obj, "datatype", None) in _TIMES
 
+        def to_timestamp(nodes: list[exp.Expression]) -> None:
+            for node in nodes:
+                node = node.unnest()
+                if isinstance(node, exp.Literal) and node.is_string:
+                    node.replace(exp.cast(node.copy(), exp.DType.TIMESTAMP))
+
         for node in list(tree.find_all(*_COMPARISONS, exp.Between, exp.In)):
+            # Each side against the other: '2026-09-15' BETWEEN p.start_at AND p.end_at too.
             if isinstance(node, exp.Between):
-                others = [node.args["low"], node.args["high"]] if is_time(node.this) else []
+                one, others = node.this, [node.args["low"], node.args["high"]]
             elif isinstance(node, exp.In):
-                others = node.expressions if is_time(node.this) else []
+                one, others = node.this, node.expressions
             else:
-                a, b = node.this, node.expression
-                others = ([b] if is_time(a) else []) + ([a] if is_time(b) else [])
-            for other in others:
-                if isinstance(other, exp.Literal) and other.is_string:
-                    other.replace(exp.cast(other.copy(), exp.DType.TIMESTAMP))
+                one, others = node.this, [node.expression]
+            if any(is_time(other) for other in others):
+                to_timestamp([one])
+            if is_time(one):
+                to_timestamp(others)
 
     def _metric_tree(self, m, used: set[str]) -> exp.Expression:
         """A metric's expression, resolved and rewritten for ClickHouse.

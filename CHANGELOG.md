@@ -39,7 +39,9 @@ a minor release may change the Python API.
   with `=`, `<`, `BETWEEN`, `IN` and the like, in a filter or a model's
   metric, is now read as a `TIMESTAMP` literal; one with an offset still
   names its instant. A field without `datatype` keeps ClickHouse's
-  reading.
+  reading. A field declared `DateTime` over a `String` column, which
+  compared as text before, now fails in such a comparison: parse the
+  column in the field's expression (`parseDateTimeBestEffort(created_at)`).
 
 ## [0.9.3] - 2026-10-22
 

@@ -87,7 +87,10 @@ def _names(args: argparse.Namespace) -> str:
 
 def _load(args: argparse.Namespace) -> OssieDocument:
     # The deployment's zone: its data was built there, whatever a shared model names.
-    zone = args.time_zone or os.environ.get("OSSIE_CLICKHOUSE_TIME_ZONE") or None
+    # An empty variable is unset; an empty --time-zone is a wrong name, refused.
+    zone = args.time_zone
+    if zone is None:
+        zone = os.environ.get("OSSIE_CLICKHOUSE_TIME_ZONE") or None
     return load_model(*args.model, time_zone=zone)
 
 

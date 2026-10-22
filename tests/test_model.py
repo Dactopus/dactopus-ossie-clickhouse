@@ -278,8 +278,9 @@ def test_cli_time_zone(tmp_path, tpcds, capsys, monkeypatch):
     monkeypatch.setenv("OSSIE_CLICKHOUSE_TIME_ZONE", "")
     assert today_in() == "Pacific/Kiritimati"  # empty is unset
     for cmd in (["validate", p], q):
-        assert main([*cmd, "--time-zone", "Moscow"]) == 1
-        assert 'got "Moscow"' in capsys.readouterr().err
+        for zone in ("Moscow", ""):
+            assert main([*cmd, "--time-zone", zone]) == 1
+            assert f"got {json.dumps(zone)}" in capsys.readouterr().err
 
 
 def test_overrides_checks_a_document_built_in_python(tpcds):

@@ -199,6 +199,7 @@ def test_model_time_zone(tmp_path, tpcds, zone):
         ('{"time_zone": "utc"}', '"utc"'),
         ('{"time_zone": "+03:00"}', '"+03:00"'),
         ('{"time_zone": null}', "null"),
+        ('{"time_zone": ["UTC"]}', '["UTC"]'),
     ],
 )
 def test_model_time_zone_refused(tmp_path, tpcds, data, problem):

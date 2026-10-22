@@ -509,7 +509,13 @@ dates in the store's zone and keeps times in UTC. So the model names it
 Malloy, Power BI and Superset default to UTC. `CURRENT_DATE` is
 `toDate(now(zone))`, `CURRENT_TIMESTAMP` is `now(zone)`, and a timestamp
 literal is `toDateTime('...', zone)` (`toDateTime64` with its fraction,
-which the cast dropped). Ossie has no such field;
+which the cast dropped). `DATEDIFF` is `dateDiff(unit, a, b, zone)`:
+without a zone argument ClickHouse counts in its arguments' zone, and when
+they have two it miscounts hours and longer. A reading at 20:00 UTC in a
+`DateTime('Asia/Makassar')` column and `03:00+00:00` the next day came out
+20 hours and -1 day apart; with the zone, 7 hours and 0 days in New York.
+`CURRENT_TIMESTAMP` against a column in UTC on a server outside UTC was
+such a pair before this change too. Ossie has no such field;
 apache/ossie may get one, and this entry would then read it.
 
 Not chosen:
@@ -524,7 +530,7 @@ Not chosen:
   a literal inside `DATEDIFF`, `GREATEST` or on its own has no column.
   Values are shown with their offset instead (`2026-10-21 20:00:00+00:00`),
   which ClickHouse reads back as that instant in a comparison and a cast.
-- Calendar functions of columns in the model's zone. A `Date` column
+- Other calendar functions of columns in the model's zone. A `Date` column
   refuses a zone argument in `dateTrunc('month', ...)` and `toStartOfMonth`,
   and the planner does not know column types. It can be done without
   them (`toStartOfMonth(toDate(x, zone))`), when the standard's field asks

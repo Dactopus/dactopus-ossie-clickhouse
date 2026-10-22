@@ -20,6 +20,7 @@ from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
+from dactopus_ossie_clickhouse.model import time_zone
 from dactopus_ossie_clickhouse.planner import PlanError, Query
 from dactopus_ossie_clickhouse.translate import pick_expression
 
@@ -53,6 +54,7 @@ def summary(model: OssieDocument) -> dict[str, Any]:
         "datasets": [_brief(d, fields=len(d.fields or [])) for d in model.datasets],
         "metrics": [_brief(m) for m in model.metrics or []],
         "relationships": [f"{r.from_dataset} -> {r.to}" for r in model.relationships or []],
+        "time_zone": time_zone(model),
         "usage": (
             "Call describe_object(name) for a dataset's fields or a metric's definition, "
             "search_model(text) to find objects by name or synonym, then query(...)."
@@ -76,7 +78,10 @@ def instructions(model: OssieDocument) -> str:
         "NOT inside it means a row with a non-matching one, so ask for absence through a "
         "field or metric of the model, such as a last activity date. Every number "
         "you state must come from a query result: rounding and formatting are fine, but do "
-        "not derive, estimate or recall other numbers, such as the counts behind a rate."
+        "not derive, estimate or recall other numbers, such as the counts behind a rate. "
+        f"Today and the current time are those of {time_zone(model)}, and so is a time "
+        "you write without an offset (TIMESTAMP '2026-10-21 16:00:00'); times in results "
+        "carry their offset from UTC, and a field's description may say whose dates it holds."
     )
     if model_text := _ai(model).get("instructions"):
         text += f"\n\nInstructions of this model:\n{model_text}"

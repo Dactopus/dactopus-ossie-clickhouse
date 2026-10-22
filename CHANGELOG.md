@@ -13,8 +13,9 @@ a minor release may change the Python API.
   `{"time_zone": "America/New_York"}`, UTC without one (#52).
   `CURRENT_DATE` is the date there, so `order_date = CURRENT_DATE`
   counts a store's orders of today at any hour, and `CURRENT_TIMESTAMP`
-  and `CURRENT_TIME` show its wall clock. `validate --url` checks that
-  the server knows the zone.
+  and `CURRENT_TIME` show its wall clock. `list_model` and the MCP
+  server's instructions name the zone, and `validate --url` checks that
+  the server knows it.
 - A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is
   answered without a dimension, without `FROM`, where it failed
   although `validate` accepted it (#52).
@@ -23,7 +24,8 @@ a minor release may change the Python API.
 
 - `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, timestamp literals
   without an offset and `TO_TIMESTAMP` of a string use the model's zone,
-  UTC by default, not the server's. On a server outside UTC, answers that
+  UTC by default, not the server's, and `DATEDIFF` counts days and hours
+  there. On a server outside UTC, answers that
   used them change.
 - The CLI and the MCP server show a `DateTime` with its offset from UTC,
   `2024-03-15 10:30:45+00:00`: without it a column in the server's zone
@@ -35,6 +37,9 @@ a minor release may change the Python API.
   server's, filtered back as `TIMESTAMP '...'`, matched no row: the
   literal was read in the server's zone. A literal's fraction of a
   second was dropped.
+- `DATEDIFF` in hours or longer between values in two zones, such as a
+  `DateTime('UTC')` column and `CURRENT_TIMESTAMP` on a server outside
+  UTC, gave a wrong count: 20 hours for 7.
 - `COUNT(*)` in a model of one dataset failed in every question, though
   `validate` accepted it.
 - The refusal of an aggregate that reads no column, such as

@@ -20,6 +20,9 @@ METRICS = {
     "events": "COUNT(e.id)",
     "now_here": "CURRENT_TIMESTAMP",
     "today_here": "CURRENT_DATE",
+    # 7 hours after the reading: 23:00 on the 21st in New York, the 22nd in UTC.
+    "hours_after": "DATEDIFF(hour, MAX(e.at), TIMESTAMP '2026-10-22 03:00:00+00:00')",
+    "days_after": "DATEDIFF(day, MAX(e.at), TIMESTAMP '2026-10-22 03:00:00+00:00')",
 }
 # 2026-10-21 20:00 UTC: 04:00 on the 22nd in Makassar, 16:00 on the 21st in New York.
 INSTANT = dt.datetime(2026, 10, 21, 20, tzinfo=dt.UTC)
@@ -122,3 +125,11 @@ def test_shown_time_carries_the_column_zone(clickhouse, table, tmp_path):
     [(_, at)] = ex.execute(Query((), ("e.id", "e.at"))).shown_rows()
     assert at == "2026-10-22 04:00:00+08:00"
     assert dt.datetime.fromisoformat(at) == INSTANT
+
+
+@pytest.mark.parametrize(("zone", "days"), [("America/New_York", 0), (None, 1)])
+def test_datediff_counts_in_the_model_zone(clickhouse, table, tmp_path, zone, days):
+    """The column is in Asia/Makassar and the literal in the model's zone: ClickHouse
+    miscounts hours across two zones unless dateDiff is given one."""
+    ex = executor(clickhouse, tmp_path, zone)
+    assert ex.execute(Query(("hours_after", "days_after"))).rows == [(7, days)]

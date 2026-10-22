@@ -30,6 +30,7 @@ def test_summary_is_compact():
     assert total_sales["synonyms"] == ["total revenue", "gross sales", "sales amount"]
     assert "store_sales -> item" in s["relationships"]
     assert "instructions" in s
+    assert s["time_zone"] == "UTC"
 
 
 def test_search_by_synonym_and_name():
@@ -74,6 +75,7 @@ def test_instructions_carry_the_model_instructions():
     assert "Every number you state must come from a query result" in text
     # A filter on the many side is a semi-join: it cannot find rows without a match.
     assert "it cannot find rows without a match" in text
+    assert "Today and the current time are those of UTC" in text
     assert text.endswith(f"Instructions of this model:\n{summary(MODEL)['instructions']}")
     bare = MODEL.model_copy(update={"ai_context": None})
     assert "Instructions of this model" not in instructions(bare)

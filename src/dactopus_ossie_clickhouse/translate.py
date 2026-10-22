@@ -381,6 +381,8 @@ _CLOCKS = {
         None if a else _f("subtractDays", _f("toDate", _f("now", z)), exp.Literal.number(1))
     ),
 }
+# ClickHouse's aliases of the same functions (system.functions alias_to).
+_CLOCKS |= {"CURDATE": _CLOCKS["TODAY"], "LOCALTIMESTAMP": _CLOCKS["NOW"]}
 
 # With a zone too: a string without an offset is read in the model's, not the server's.
 _TIMESTAMPS = (

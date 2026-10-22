@@ -550,7 +550,8 @@ filter, has a `CURRENT_DATE` example. After that all six sessions wrote
 for. They come from the server's clock, as `CURRENT_DATE` does, not from
 Python's, which may differ from it, and are read on every call, since a
 session may outlast midnight. `today()`, `yesterday()`, `now()` and
-`now64()` without a zone are rewritten into the zone too: they are
+`now64()` without a zone, and the aliases `curdate()` and
+`localtimestamp()`, are rewritten into the zone too: they are
 ClickHouse's own functions, but an answer in the server's zone is the
 failure this entry is about, and a zone written in the call is kept.
 A metric of the current time in each model was not chosen: every model

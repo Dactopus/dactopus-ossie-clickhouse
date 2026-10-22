@@ -88,9 +88,8 @@ def instructions(model: OssieDocument) -> str:
         "CURRENT_DATE for today, d.day >= CURRENT_DATE - INTERVAL '6' DAY for the last 7 "
         "days, d.day >= DATE_TRUNC('MONTH', CURRENT_DATE) for this month. list_model gives "
         "today and now there; name the date in your answer. A time you write without an "
-        "offset "
-        "(TIMESTAMP '2026-10-21 16:00:00') is there too; times in results "
-        "carry their offset from UTC, and a field's description may say whose dates it holds."
+        "offset (TIMESTAMP '2026-10-21 16:00:00') is there too; times in results carry "
+        "their offset from UTC, and a field's description may say whose dates it holds."
     )
     if model_text := _ai(model).get("instructions"):
         text += f"\n\nInstructions of this model:\n{model_text}"
@@ -207,10 +206,10 @@ def build_server(
     ) -> dict[str, Any]:
         """Run a semantic query. metrics and dimensions are names from the model
         (dimensions as dataset.field); filters are SQL-like conditions over
-        dataset.field, e.g. "date_dim.d_year = 1998", today and periods counted
+        dataset.field, e.g. "date_dim.d_year = 1998" (today and periods counted
         from it with CURRENT_DATE, e.g. "date_dim.d_date = CURRENT_DATE", never a
-        date you know, or over a metric name,
-        e.g. "total_sales > 1000000", which filters the aggregated rows
+        date you know), or over a metric name, e.g. "total_sales > 1000000",
+        which filters the aggregated rows
         (a window metric such as a rank cannot be filtered: select it instead);
         order_by lists metric or dimension names, "name desc" for descending,
         default: first metric descending, ties broken by the dimensions; rows

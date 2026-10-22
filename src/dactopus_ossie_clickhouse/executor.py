@@ -14,6 +14,7 @@ import os
 import re
 from dataclasses import dataclass
 from functools import partial
+from urllib.parse import urlsplit
 
 import clickhouse_connect
 from ossie import OssieDataset, OssieDocument
@@ -47,12 +48,16 @@ _MERGE = re.compile(rf"Merge\((REGEXP\()?{_STRING}\)?, {_STRING}")
 
 
 def connect(url: str | None = None):
+    url = url or os.environ.get("OSSIE_CLICKHOUSE_URL", DEFAULT_URL)
+    # clickhouse-connect ignores a DSN's scheme and turns TLS on by the port (443
+    # or 8443), so https on any other port went out in the clear (#60). The scheme
+    # passed as `interface` decides it on every port, both ways.
+    scheme = urlsplit(url).scheme
+    if scheme not in ("http", "https"):
+        raise ValueError(f"ClickHouse URL must start with http:// or https://, not {scheme!r}")
     # No session: nothing here needs one, and a session serializes queries, so
     # concurrent MCP tool calls on one client would fail.
-    return clickhouse_connect.get_client(
-        dsn=url or os.environ.get("OSSIE_CLICKHOUSE_URL", DEFAULT_URL),
-        autogenerate_session_id=False,
-    )
+    return clickhouse_connect.get_client(dsn=url, interface=scheme, autogenerate_session_id=False)
 
 
 @dataclass

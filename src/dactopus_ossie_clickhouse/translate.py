@@ -370,6 +370,18 @@ _ZONED = {
     ),
 }
 
+# ClickHouse's own clock, written in a filter or a model, is the server's zone without
+# a zone argument; the answer must not be, as with CURRENT_DATE. Agents write today()
+# for today (#56). None keeps the call as written: a zone is already there.
+_CLOCKS = {
+    "NOW": lambda a, z: None if a else _f("now", z),
+    "NOW64": lambda a, z: None if len(a) > 1 else _f("now64", *a or [exp.Literal.number(3)], z),
+    "TODAY": lambda a, z: None if a else _f("toDate", _f("now", z)),
+    "YESTERDAY": lambda a, z: (
+        None if a else _f("subtractDays", _f("toDate", _f("now", z)), exp.Literal.number(1))
+    ),
+}
+
 # With a zone too: a string without an offset is read in the model's, not the server's.
 _TIMESTAMPS = (
     exp.DType.TIMESTAMP,
@@ -434,6 +446,8 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
         name = node.name.upper()
         if name in _ZONED:
             return _ZONED[name](node.expressions, exp.Literal.string(zone))
+        if name in _CLOCKS:
+            return _CLOCKS[name](node.expressions, exp.Literal.string(zone)) or node
         fn = _ANONYMOUS.get(name)
         return fn(node.expressions) if fn else node
     # The current date and a wall-clock time are those of the model's zone; now(zone)

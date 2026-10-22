@@ -64,7 +64,9 @@ def clickhouse():
 
     url = os.environ.get("OSSIE_CLICKHOUSE_URL", "http://127.0.0.1:8123")
     try:
-        client = clickhouse_connect.get_client(dsn=url, connect_timeout=2)
+        # The scheme decides TLS, as in `executor.connect` (#60).
+        interface = url.split("://", 1)[0]
+        client = clickhouse_connect.get_client(dsn=url, interface=interface, connect_timeout=2)
         client.command("SELECT 1")
     except Exception as e:
         unavailable(f"no ClickHouse at {url}: {e}")

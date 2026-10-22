@@ -3,7 +3,8 @@
 The server speaks [MCP](https://modelcontextprotocol.io) over stdio: the
 agent launches it as a subprocess.
 ClickHouse credentials come from the environment (`OSSIE_CLICKHOUSE_URL`,
-default `http://127.0.0.1:8123`) or `--url`. Everything the agent sees and
+default `http://127.0.0.1:8123`) or `--url`; `https://` connects with TLS
+on any port. Everything the agent sees and
 runs is limited to that ClickHouse user. The zone of today and of times
 without an offset comes from `OSSIE_CLICKHOUSE_TIME_ZONE` or
 `--time-zone` when the deployment's differs from the model's

@@ -6,8 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from clickhouse_connect.driver.exceptions import OperationalError
 
-from dactopus_ossie_clickhouse import load_model
+from dactopus_ossie_clickhouse import executor, load_model
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor, ServerFunctions
 from dactopus_ossie_clickhouse.model import overrides
@@ -554,3 +555,36 @@ def test_clock_is_current_date_and_time_in_the_model_zone(tpcds):
     # Shown as times in results are, with the offset; the date is the same instant's.
     assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\+14:00", clock["now"])
     assert clock["now"].startswith(clock["today"])
+
+
+@pytest.mark.parametrize(
+    "url, interface",
+    [
+        ("https://u:pw@h:9443/db", "https"),
+        ("https://h", "https"),  # port 8443
+        ("http://h:8443", "http"),
+        ("http://h", "http"),
+    ],
+)
+def test_connect_takes_tls_from_the_scheme(monkeypatch, url, interface):
+    """clickhouse-connect reads TLS from the port, so the scheme goes as `interface` (#60)."""
+    asked = {}
+    monkeypatch.setattr(executor.clickhouse_connect, "get_client", lambda **kw: asked.update(kw))
+    executor.connect(url)
+    assert asked["dsn"] == url and asked["interface"] == interface
+
+
+@pytest.mark.parametrize("url", ["ftp://h", "h:8123", "clickhouse://u:pw@h:9000"])
+def test_connect_refuses_other_schemes(monkeypatch, url):
+    monkeypatch.setattr(executor.clickhouse_connect, "get_client", lambda **kw: pytest.fail())
+    with pytest.raises(ValueError, match="http:// or https://") as e:
+        executor.connect(url)
+    assert "pw" not in str(e.value)
+
+
+def test_https_to_a_plain_server_fails(clickhouse):
+    """https on a port other than 443 or 8443 used to connect in the clear (#60)."""
+    if not clickhouse.url.startswith("http://"):
+        pytest.skip("the test server is not plain HTTP")
+    with pytest.raises(OperationalError):
+        executor.connect("https://" + clickhouse.url.removeprefix("http://"))

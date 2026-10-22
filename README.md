@@ -51,7 +51,8 @@ Point it at a model and a ClickHouse. The
 [TPC-DS reference model](https://github.com/apache/ossie/blob/main/examples/tpcds_semantic_model.yaml)
 from the Ossie repository is in [tests/fixtures/tpcds.yaml](tests/fixtures/tpcds.yaml).
 ClickHouse credentials go in the URL or in `OSSIE_CLICKHOUSE_URL`
-(default `http://127.0.0.1:8123`). A database in the URL path
+(default `http://127.0.0.1:8123`). `https://` connects with TLS on any
+port, `http://` without it; no other scheme is accepted. A database in the URL path
 (`.../analytics`) is where a model's sources without a database are read.
 `--time-zone` or `OSSIE_CLICKHOUSE_TIME_ZONE` names the zone of today and
 of times without an offset when the deployment's differs from the model's

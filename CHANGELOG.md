@@ -7,6 +7,16 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Fixed
+
+- An `https://` URL connected without TLS unless its port was 443 or
+  8443, sending the user and password in the clear (#60).
+  clickhouse-connect, checked on 1.9.0 and 1.11.0, ignores a URL's
+  scheme and turns TLS on by the port; the scheme now decides it on
+  every port, both ways, for `--url` and `OSSIE_CLICKHOUSE_URL` alike.
+  A URL with any other scheme, or none, is refused before anything
+  connects.
+
 ## [0.9.4] - 2026-10-22
 
 ### Added

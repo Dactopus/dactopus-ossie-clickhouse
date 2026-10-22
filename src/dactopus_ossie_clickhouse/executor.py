@@ -34,6 +34,7 @@ from dactopus_ossie_clickhouse.translate import (
     parse,
     passthrough_functions,
     pick_expression,
+    to_clickhouse,
     untranslatable,
 )
 
@@ -374,6 +375,16 @@ class Executor:
         return problems
 
     # --- execution ----------------------------------------------------------
+
+    def clock(self) -> dict[str, str]:
+        """Today and the current time in the model's zone by the server's clock: what
+        CURRENT_DATE and CURRENT_TIMESTAMP are in a question asked now. The time is
+        shown as in results, with its offset from UTC."""
+        zone = time_zone(self.model)
+        today, now = (to_clickhouse(e, zone) for e in ("CURRENT_DATE", "CURRENT_TIMESTAMP"))
+        res = self.client.query(f"SELECT {today}, {now}")  # now() is one instant per query
+        day, at = res.result_rows[0]
+        return {"today": day.isoformat(), "now": _as_printed(at, res.column_types[1].name)}
 
     def execute(self, q: Query) -> Result:
         sql = self.planner.sql(q)

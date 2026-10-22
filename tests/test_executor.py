@@ -539,3 +539,18 @@ def test_check_reports_a_time_zone_the_server_lacks(tmp_path):
     problems = Executor(client, load_model(p, time_zone="Europe/Berlin")).check()
     assert client.asked == "Europe/Berlin"
     assert "model: time zone 'Europe/Berlin' is not in system.time_zones" in problems
+
+
+def test_clock_is_current_date_and_time_in_the_model_zone(tpcds):
+    """What list_model shows as today is what CURRENT_DATE is (#56)."""
+    from tests.test_model import FIXTURE as TPCDS
+
+    ex = Executor(tpcds, load_model(TPCDS, time_zone="Pacific/Kiritimati"))
+    today = "SELECT toString(toDate(now('Pacific/Kiritimati')))"
+    before = tpcds.query(today).result_rows[0][0]
+    clock = ex.clock()
+    after = tpcds.query(today).result_rows[0][0]
+    assert clock["today"] in {before, after}
+    # Shown as times in results are, with the offset; the date is the same instant's.
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\+14:00", clock["now"])
+    assert clock["now"].startswith(clock["today"])

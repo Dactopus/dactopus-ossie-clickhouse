@@ -45,8 +45,9 @@ def _brief(obj, **extra) -> dict[str, Any]:
     return d | extra
 
 
-def summary(model: OssieDocument) -> dict[str, Any]:
-    """The whole model in one screen: names, descriptions, synonyms, no fields."""
+def summary(model: OssieDocument, clock: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The whole model in one screen: names, descriptions, synonyms, no fields.
+    ``clock`` is ``Executor.clock()``: today and now in the model's zone."""
     return {
         "name": model.name,
         "description": model.description,
@@ -55,6 +56,7 @@ def summary(model: OssieDocument) -> dict[str, Any]:
         "metrics": [_brief(m) for m in model.metrics or []],
         "relationships": [f"{r.from_dataset} -> {r.to}" for r in model.relationships or []],
         "time_zone": time_zone(model),
+        **(clock or {}),
         "usage": (
             "Call describe_object(name) for a dataset's fields or a metric's definition, "
             "search_model(text) to find objects by name or synonym, then query(...)."
@@ -69,7 +71,8 @@ def instructions(model: OssieDocument) -> str:
     the model's part for clients that ignore server instructions."""
     text = (
         f"Semantic model '{model.name}' over ClickHouse. Ask in business terms: pick metrics "
-        "and dimensions by name, never write SQL. Start with list_model. Never add up or "
+        "and dimensions by name and never write a query; SQL goes only in filters, as "
+        "conditions on fields and metrics. Start with list_model. Never add up or "
         "rank rows yourself: for a total, run query without dimensions; for a comparison, "
         "query the exact dimensions you need. If the model has no metric or field for what "
         "is asked, say so; do not approximate it with filters on other fields. A filter on "
@@ -79,8 +82,14 @@ def instructions(model: OssieDocument) -> str:
         "field or metric of the model, such as a last activity date. Every number "
         "you state must come from a query result: rounding and formatting are fine, but do "
         "not derive, estimate or recall other numbers, such as the counts behind a rate. "
-        f"Today and the current time are those of {time_zone(model)}, and so is a time "
-        "you write without an offset (TIMESTAMP '2026-10-21 16:00:00'); times in results "
+        f"Today and the current time are those of {time_zone(model)}, which may not be "
+        "your user's: write today, yesterday, this week and any other period counted from "
+        "now with CURRENT_DATE or CURRENT_TIMESTAMP, never with a date you know or "
+        "ClickHouse's today() and now(), which are the server's: d.day = CURRENT_DATE for "
+        "today, d.day >= CURRENT_DATE - INTERVAL '6' DAY for the last 7 days, d.day >= "
+        "DATE_TRUNC('MONTH', CURRENT_DATE) for this month. list_model gives today and now "
+        "there; name the date in your answer. A time you write without an offset "
+        "(TIMESTAMP '2026-10-21 16:00:00') is there too; times in results "
         "carry their offset from UTC, and a field's description may say whose dates it holds."
     )
     if model_text := _ai(model).get("instructions"):
@@ -169,8 +178,13 @@ def build_server(
 
     @server.tool()
     def list_model() -> dict[str, Any]:
-        """The semantic model: datasets, metrics, relationships, with descriptions and synonyms."""
-        return summary(m)
+        """The semantic model: datasets, metrics, relationships, with descriptions and
+        synonyms; today and now in the model's time zone, where CURRENT_DATE is."""
+        try:
+            clock = executor.clock()  # on every call: a session may outlast midnight
+        except Exception as e:
+            clock = {"error": _clickhouse_error(e)}
+        return summary(m, clock)
 
     @server.tool()
     def search_model(text: str) -> list[dict[str, Any]]:
@@ -193,7 +207,9 @@ def build_server(
     ) -> dict[str, Any]:
         """Run a semantic query. metrics and dimensions are names from the model
         (dimensions as dataset.field); filters are SQL-like conditions over
-        dataset.field, e.g. "date_dim.d_year = 1998", or over a metric name,
+        dataset.field, e.g. "date_dim.d_year = 1998", today and periods counted
+        from it with CURRENT_DATE, e.g. "date_dim.d_date = CURRENT_DATE", never a
+        date you know, or over a metric name,
         e.g. "total_sales > 1000000", which filters the aggregated rows
         (a window metric such as a rank cannot be filtered: select it instead);
         order_by lists metric or dimension names, "name desc" for descending,
@@ -207,7 +223,7 @@ def build_server(
         except PlanError as e:
             return {"error": str(e)}
         except Exception as e:  # ClickHouse errors are useful to the agent too
-            return {"error": f"ClickHouse: {str(e).splitlines()[0][:400]}"}
+            return {"error": _clickhouse_error(e)}
         return {
             "columns": r.columns,
             "rows": r.shown_rows(),
@@ -216,3 +232,7 @@ def build_server(
         }
 
     return server
+
+
+def _clickhouse_error(e: Exception) -> str:
+    return f"ClickHouse: {str(e).splitlines()[0][:400]}"

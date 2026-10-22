@@ -33,6 +33,15 @@ def test_summary_is_compact():
     assert s["time_zone"] == "UTC"
 
 
+def test_summary_carries_the_clock_after_the_zone():
+    clock = {"today": "2026-10-21", "now": "2026-10-21 22:16:00-10:00"}
+    s = summary(MODEL, clock)
+    keys = list(s)
+    assert keys[keys.index("time_zone") + 1 :][:2] == ["today", "now"]
+    assert s["today"] == "2026-10-21" and s["now"] == "2026-10-21 22:16:00-10:00"
+    assert "today" not in summary(MODEL)
+
+
 def test_zone_given_at_load_time_is_named():
     model = load_model(FIXTURE, time_zone="America/New_York")
     assert summary(model)["time_zone"] == "America/New_York"
@@ -82,6 +91,10 @@ def test_instructions_carry_the_model_instructions():
     # A filter on the many side is a semi-join: it cannot find rows without a match.
     assert "it cannot find rows without a match" in text
     assert "Today and the current time are those of UTC" in text
+    # Filters are where SQL goes; relative dates are CURRENT_DATE, never a known date (#56).
+    assert "never write a query; SQL goes only in filters" in text
+    assert "never with a date you know or ClickHouse's today() and now()" in text
+    assert "d.day = CURRENT_DATE for today" in text
     assert text.endswith(f"Instructions of this model:\n{summary(MODEL)['instructions']}")
     bare = MODEL.model_copy(update={"ai_context": None})
     assert "Instructions of this model" not in instructions(bare)
@@ -163,7 +176,10 @@ async def test_tools_match_library(client):
     seen = MODEL.model_copy(
         update={"metrics": [m for m in MODEL.metrics if m.name != "store_productivity"]}
     )
-    assert r.structured_content == summary(seen)
+    out = r.structured_content
+    clock = {k: out[k] for k in ("today", "now")}  # Executor.clock(), tested there
+    assert out == summary(seen, clock)
+    assert out["now"].startswith(out["today"]) and out["now"].endswith("+00:00")
     r = await client.call_tool("describe_object", {"name": "total_sales"})
     assert r.structured_content == describe(MODEL, "total_sales")
     r = await client.call_tool("search_model", {"text": "profit"})
@@ -190,6 +206,27 @@ async def test_query_and_error(client):
     )
     assert not r.is_error and r.structured_content["error"].startswith("ClickHouse: ")
     assert "\n" not in r.structured_content["error"]
+
+
+@pytest.mark.anyio
+async def test_list_model_reports_an_unreadable_clock(tpcds):
+    """The model still comes back when the clock cannot be read, with the reason."""
+    from mcp import Client
+
+    from dactopus_ossie_clickhouse.mcp_server import build_server
+
+    class NoClock:
+        url = tpcds.url
+
+        def query(self, sql, parameters=None):
+            if sql.startswith("SELECT toDate(now("):
+                raise RuntimeError("Code: 159. Timeout exceeded\nstack")
+            return tpcds.query(sql, parameters=parameters)
+
+    async with Client(build_server(MODEL, NoClock), raise_exceptions=True) as c:
+        out = (await c.call_tool("list_model", {})).structured_content
+    assert out["error"] == "ClickHouse: Code: 159. Timeout exceeded" and "today" not in out
+    assert out["name"] == "tpcds_retail_model" and out["time_zone"] == "UTC"
 
 
 @pytest.mark.anyio

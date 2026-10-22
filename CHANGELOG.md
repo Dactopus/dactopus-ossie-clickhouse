@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-22
+
 ### Added
 
 - A model names the zone of its dates in its own `CLICKHOUSE` entry,

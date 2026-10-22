@@ -93,7 +93,7 @@ def test_instructions_carry_the_model_instructions():
     assert "Today and the current time are those of UTC" in text
     # Filters are where SQL goes; relative dates are CURRENT_DATE, never a known date (#56).
     assert "never write a query; SQL goes only in filters" in text
-    assert "never with a date you know or ClickHouse's today() and now()" in text
+    assert "never with a date you know" in text
     assert "d.day = CURRENT_DATE for today" in text
     assert text.endswith(f"Instructions of this model:\n{summary(MODEL)['instructions']}")
     bare = MODEL.model_copy(update={"ai_context": None})

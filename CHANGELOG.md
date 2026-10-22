@@ -19,11 +19,16 @@ a minor release may change the Python API.
   literal, and where the deployment's date differed, answered for the
   wrong day (#56). The MCP server's instructions and the `query` tool's
   description now say to write today and periods counted from it with
-  `CURRENT_DATE` or `CURRENT_TIMESTAMP`, never a known date or
-  ClickHouse's `today()`, and that SQL goes in filters, where they said
-  never to write SQL. In fresh sessions with Haiku 5.5 and Sonnet 5.5 on
-  a store a day behind the agent, none of six wrote `CURRENT_DATE`
-  before and all six did after, answering right.
+  `CURRENT_DATE` or `CURRENT_TIMESTAMP`, never a known date, and that
+  SQL goes in filters, where they said never to write SQL. In fresh
+  sessions with Haiku 5.5 and Sonnet 5.5 on a store a day behind the
+  agent, none of six wrote `CURRENT_DATE` before and all six did after,
+  answering right.
+- ClickHouse's own `today()`, `yesterday()`, `now()` and `now64()`
+  without a zone, in a filter or a model, were the server's date and
+  time; they are now the model's zone, as `CURRENT_DATE` is (#56). An
+  agent that wrote `today()` on a server a day ahead of the store
+  answered that no order was placed today.
 
 ## [0.9.3] - 2026-10-22
 

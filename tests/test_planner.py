@@ -1094,6 +1094,13 @@ def _time_planner() -> Planner:
         ("date_dim.d_date NOT IN ('2026-09-01 10:00:00.5', '2026-09-02')",
          "WHERE NOT (date_dim.d_date IN (toDateTime64('2026-09-01 10:00:00.5', 1, 'UTC'), "
          "toDateTime('2026-09-02', 'UTC')))"),
+        # The string on either side of BETWEEN and IN, parentheses around either.
+        ("'2026-09-01' BETWEEN date_dim.d_date AND date_dim.d_date",
+         "WHERE toDateTime('2026-09-01', 'UTC') BETWEEN date_dim.d_date AND date_dim.d_date"),
+        ("'2026-09-01' IN (date_dim.d_date)",
+         "WHERE toDateTime('2026-09-01', 'UTC') IN (date_dim.d_date)"),
+        ("(date_dim.d_date) < ('2026-09-01')",
+         "WHERE (date_dim.d_date) < (toDateTime('2026-09-01', 'UTC'))"),
         # An offset still names the instant, as in TIMESTAMP '...'.
         ("date_dim.d_date = '2026-09-01 00:00:00-04:00'",
          "WHERE date_dim.d_date = toDateTime('2026-09-01 00:00:00-04:00', 'UTC')"),

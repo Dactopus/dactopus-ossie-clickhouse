@@ -230,7 +230,10 @@ Without it the zone is UTC, whatever the server's. In that zone:
   `BETWEEN`, `IN`) is read as such a literal. Without `datatype`, or
   compared with an expression of the field (`toDate(placed_at)`), it is
   read in the column's zone, as ClickHouse reads it: declare `datatype`
-  on time fields.
+  on time fields. Such a field must hold a time: over a `String` column,
+  parse it in the field's expression
+  (`parseDateTimeBestEffort(created_at)`), or ClickHouse refuses the
+  comparison.
 - `DATEDIFF` counts day, hour and longer boundaries there, so
   `DATEDIFF(day, MAX(placed_at), CURRENT_TIMESTAMP)` counts the store's
   midnights. ClickHouse miscounts hours and longer between two values in
@@ -240,8 +243,8 @@ Otherwise a column keeps its own zone: `CAST(placed_at AS DATE)`,
 `DATE_TRUNC` and `HOUR` of a `DateTime('UTC')` column are UTC dates and hours whatever the
 model's zone, so store days computed at load time (as dactopus-data-models
 builds `order_date`) are the ones that match `CURRENT_DATE`. A string
-compared directly with a column (`placed_at > '2026-10-21 16:00:00'`) is
-read by ClickHouse in the column's zone; write `TIMESTAMP '...'` for the
+compared with a field without `datatype` (`placed_at > '2026-10-21 16:00:00'`)
+is read by ClickHouse in the column's zone; write `TIMESTAMP '...'` for the
 model's. Ossie has no time zone of its own yet.
 
 A model shared by deployments whose data is built in different zones

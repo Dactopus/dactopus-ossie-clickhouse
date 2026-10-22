@@ -533,6 +533,30 @@ two files is refused, since one would be edited and not the other. One
 zone per deployment is still one zone for every store a deployment
 holds.
 
+Agents still answered "today" for the wrong day (#56). Asked how many
+orders were placed today, with the store in `Pacific/Honolulu` and the
+agent's clock in `Pacific/Kiritimati` (always a day apart), fresh
+`claude -p` sessions on 0.9.3 wrote the date they knew as a literal or
+ClickHouse's `today()`: none of three Haiku 5.5 and three Sonnet 5.5
+sessions wrote `CURRENT_DATE`, and one answered right, by converting
+the date itself. The instructions said only whose today it was, and
+"never write SQL" read as a ban on `CURRENT_DATE` in a filter. They now
+say to write periods counted from now with `CURRENT_DATE` or
+`CURRENT_TIMESTAMP`, never a known date, and that SQL goes in filters;
+the `query` tool's description, which an agent reads as it writes the
+filter, has a `CURRENT_DATE` example. After that all six sessions wrote
+`CURRENT_DATE` and answered 1 order, 137. `list_model` also returns
+`today` and `now` in the zone, so an agent names the day it answered
+for. They come from the server's clock, as `CURRENT_DATE` does, not from
+Python's, which may differ from it, and are read on every call, since a
+session may outlast midnight. `today()`, `yesterday()`, `now()` and
+`now64()` without a zone are rewritten into the zone too: they are
+ClickHouse's own functions, but an answer in the server's zone is the
+failure this entry is about, and a zone written in the call is kept.
+A metric of the current time in each model was not chosen: every model
+would have to carry it, and agents would still have to be told to use
+it.
+
 Not chosen:
 
 - `session_timezone` on every query. A column without a zone then printed

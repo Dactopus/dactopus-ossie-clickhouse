@@ -33,6 +33,12 @@ def test_summary_is_compact():
     assert s["time_zone"] == "UTC"
 
 
+def test_zone_given_at_load_time_is_named():
+    model = load_model(FIXTURE, time_zone="America/New_York")
+    assert summary(model)["time_zone"] == "America/New_York"
+    assert "Today and the current time are those of America/New_York" in instructions(model)
+
+
 def test_search_by_synonym_and_name():
     names = {h["name"] for h in search(MODEL, "revenue")}
     assert {"total_sales", "customer_lifetime_value", "store_productivity"} <= names

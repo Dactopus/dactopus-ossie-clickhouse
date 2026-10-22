@@ -4,7 +4,10 @@ The server speaks [MCP](https://modelcontextprotocol.io) over stdio: the
 agent launches it as a subprocess.
 ClickHouse credentials come from the environment (`OSSIE_CLICKHOUSE_URL`,
 default `http://127.0.0.1:8123`) or `--url`. Everything the agent sees and
-runs is limited to that ClickHouse user.
+runs is limited to that ClickHouse user. The zone of today and of times
+without an offset comes from `OSSIE_CLICKHOUSE_TIME_ZONE` or
+`--time-zone` when the deployment's differs from the model's
+([Time zone](model-authoring.md#time-zone)).
 
 ## Claude Desktop
 
@@ -14,7 +17,8 @@ Install with the `[mcp]` extra (see the README), then add to
 the placeholders: the absolute path of the command (`which
 dactopus-ossie-clickhouse`; desktop apps run with a minimal `PATH`), the absolute
 path of the model, and the ClickHouse URL with the credentials of the
-user the agent should act as.
+user the agent should act as. For a store in another zone than the
+model's, add `"OSSIE_CLICKHOUSE_TIME_ZONE": "America/New_York"` to `env`.
 
 ```json
 {
@@ -68,7 +72,7 @@ mean" hint reaches the agent.
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |
-| `list_model` | none | `name`, `description`, AI hints, `datasets` (name, description, synonyms, field count), `metrics` (name, description, synonyms), `relationships` (`from -> to`), `time_zone` (the model's, UTC by default: today, the current time and times without an offset), `usage`. |
+| `list_model` | none | `name`, `description`, AI hints, `datasets` (name, description, synonyms, field count), `metrics` (name, description, synonyms), `relationships` (`from -> to`), `time_zone` (the one in effect: `--time-zone`, `OSSIE_CLICKHOUSE_TIME_ZONE`, the model's, UTC; today, the current time and times without an offset are there), `usage`. |
 | `search_model` | `text` | Up to 20 objects whose name, description or synonyms contain every word of `text`: `kind` (`dataset`, `field`, `metric`), `name`, `description`, `synonyms`. |
 | `describe_object` | `name`: dataset, `dataset.field` or metric, case-insensitive | The object with `instructions` and `examples` from `ai_context`. A dataset lists `fields` (with `datatype`, `is_time`) and `relationships`; a field or metric carries its `expression` and `datatype`. Unknown name: `error` with similar names. |
 | `query` | `metrics`, `dimensions` (`dataset.field`), `filters`, `order_by` (all lists of strings, default empty), `limit` (default 100) | `columns`, `rows`, `row_count`, `sql`. |

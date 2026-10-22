@@ -535,3 +535,7 @@ def test_check_reports_a_time_zone_the_server_lacks(tmp_path):
     problems = Executor(client, load_model(p)).check()
     assert client.asked == "Asia/Makassar"
     assert "model: time zone 'Asia/Makassar' is not in system.time_zones" in problems
+    # The zone in effect: one given at load time replaces the model's (#54).
+    problems = Executor(client, load_model(p, time_zone="Europe/Berlin")).check()
+    assert client.asked == "Europe/Berlin"
+    assert "model: time zone 'Europe/Berlin' is not in system.time_zones" in problems

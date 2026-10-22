@@ -53,6 +53,9 @@ from the Ossie repository is in [tests/fixtures/tpcds.yaml](tests/fixtures/tpcds
 ClickHouse credentials go in the URL or in `OSSIE_CLICKHOUSE_URL`
 (default `http://127.0.0.1:8123`). A database in the URL path
 (`.../analytics`) is where a model's sources without a database are read.
+`--time-zone` or `OSSIE_CLICKHOUSE_TIME_ZONE` names the zone of today and
+of times without an offset when the deployment's differs from the model's
+([Time zone](docs/model-authoring.md#time-zone)).
 
 ```bash
 dactopus-ossie-clickhouse validate model.yaml --url http://user:password@host:8123
@@ -73,7 +76,8 @@ r = ex.execute(Query(metrics=("total_sales",), dimensions=("item.i_brand",)))
 print(r.sql, r.columns, r.rows[:3])
 ```
 
-That is the Python API: `load_model`, `executor.connect`,
+That is the Python API: `load_model` (its `time_zone` argument is the
+CLI's `--time-zone`), `executor.connect`,
 `executor.Executor` and `planner.Query`; a `PlanError` names the nearest
 known object. The other modules are internal.
 

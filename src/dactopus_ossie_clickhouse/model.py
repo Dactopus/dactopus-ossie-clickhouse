@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 from ossie import (
     OssieAIContextObject,
+    OssieCustomExtension,
     OssieDataset,
     OssieDialect,
     OssieDocument,
@@ -40,7 +41,7 @@ class ModelError(ValueError):
         super().__init__("\n".join(problems))
 
 
-def load_model(*paths: str | Path) -> OssieDocument:
+def load_model(*paths: str | Path, time_zone: str | None = None) -> OssieDocument:
     """Read one or more YAML or JSON Ossie files as one model and validate it.
 
     Ossie has no way to split a model across files, so several are combined
@@ -49,6 +50,10 @@ def load_model(*paths: str | Path) -> OssieDocument:
     two files. A name defined in two files is an error. The root's name and
     description come from the first file; every file's root ``ai_context`` is
     kept: instructions joined in file order, synonyms and examples united.
+
+    ``time_zone``, when given, replaces the zone the model names (see
+    ``time_zone()``): a model shared by deployments whose data was built in
+    different zones names none, or a default, and each deployment gives its own.
     Raises ``ModelError``.
     """
     if not paths:
@@ -56,6 +61,8 @@ def load_model(*paths: str | Path) -> OssieDocument:
     paths = tuple(dict.fromkeys(map(Path, paths)))  # a path given twice is read once
     read: list[tuple[Path, OssieDocument]] = []
     problems: list[str] = []
+    if time_zone is not None and (must := _zone(time_zone)):
+        problems.append(f"time zone must be {must}, got {json.dumps(time_zone)}")
     for path in paths:
         label = f"{path}: " if len(paths) > 1 else ""
         try:
@@ -73,7 +80,15 @@ def load_model(*paths: str | Path) -> OssieDocument:
     problems += _check_whole(doc)
     if problems:
         raise ModelError(problems)
-    return doc
+    return doc if time_zone is None else _with_zone(doc, time_zone)
+
+
+def _with_zone(doc: OssieDocument, zone: str) -> OssieDocument:
+    """``doc`` with ``zone`` in its CLICKHOUSE entry, whatever zone that entry names."""
+    data, _ = _extension(doc)  # load_model() checked it
+    entry = OssieCustomExtension(vendor_name=VENDOR, data=json.dumps(data | {"time_zone": zone}))
+    others = [e for e in doc.custom_extensions or [] if e.vendor_name.upper() != VENDOR]
+    return doc.model_copy(update={"custom_extensions": [*others, entry]})
 
 
 def _read(path: Path, label: str) -> OssieDocument:

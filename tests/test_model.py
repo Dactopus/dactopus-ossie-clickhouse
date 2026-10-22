@@ -226,6 +226,62 @@ def test_time_zone_checks_a_document_built_in_python(tpcds):
         time_zone(OssieDocument.model_validate(tpcds))
 
 
+def test_time_zone_given_replaces_the_model_s(tmp_path, tpcds):
+    """A deployment's zone, from --time-zone, over the zone a shared model names (#54)."""
+    others = list(tpcds["custom_extensions"])
+    doc = load_model(write(tmp_path, tpcds), time_zone="America/New_York")
+    assert time_zone(doc) == "America/New_York"
+    tpcds["custom_extensions"].append(_clickhouse('{"time_zone": "Pacific/Kiritimati"}'))
+    doc = load_model(write(tmp_path, tpcds), time_zone="America/New_York")
+    assert time_zone(doc) == "America/New_York"  # one entry: time_zone() refuses two
+    kept = [e.model_dump() for e in doc.custom_extensions if e.vendor_name != "CLICKHOUSE"]
+    assert kept == others  # other vendors' entries stay
+    assert time_zone(load_model(write(tmp_path, tpcds))) == "Pacific/Kiritimati"
+
+
+def test_time_zone_given_replaces_it_in_a_model_of_several_files(tmp_path, tpcds):
+    sales, rest = split(tpcds)
+    rest["custom_extensions"] = [_clickhouse('{"time_zone": "Pacific/Kiritimati"}')]
+    a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
+    assert time_zone(load_model(a, b, time_zone="Europe/Berlin")) == "Europe/Berlin"
+
+
+@pytest.mark.parametrize("zone", ["Moscow", "utc", "+03:00", ""])
+def test_time_zone_given_refused(tmp_path, tpcds, zone):
+    tpcds["version"] = "0.1"
+    with pytest.raises(ModelError) as e:
+        load_model(write(tmp_path, tpcds), time_zone=zone)
+    # Reported with the model's own problems.
+    assert e.value.problems == [
+        'time zone must be a time zone name such as "UTC" or "America/New_York", '
+        f"got {json.dumps(zone)}",
+        "unsupported version '0.1'; this build supports '0.2.0.dev0'",
+    ]
+
+
+def test_cli_time_zone(tmp_path, tpcds, capsys, monkeypatch):
+    monkeypatch.delenv("OSSIE_CLICKHOUSE_TIME_ZONE", raising=False)
+    tpcds["custom_extensions"].append(_clickhouse('{"time_zone": "Pacific/Kiritimati"}'))
+    p = str(write(tmp_path, tpcds))
+    q = ["sql", p, "-m", "total_sales", "-f", "date_dim.d_date = CURRENT_DATE"]
+
+    def today_in(*extra: str) -> str:
+        assert main([*q, *extra]) == 0
+        out = capsys.readouterr().out
+        return out.split("toDate(now('")[1].split("'")[0]
+
+    assert today_in() == "Pacific/Kiritimati"
+    assert today_in("--time-zone", "America/New_York") == "America/New_York"
+    monkeypatch.setenv("OSSIE_CLICKHOUSE_TIME_ZONE", "Europe/Berlin")
+    assert today_in() == "Europe/Berlin"
+    assert today_in("--time-zone", "America/New_York") == "America/New_York"
+    monkeypatch.setenv("OSSIE_CLICKHOUSE_TIME_ZONE", "")
+    assert today_in() == "Pacific/Kiritimati"  # empty is unset
+    for cmd in (["validate", p], q):
+        assert main([*cmd, "--time-zone", "Moscow"]) == 1
+        assert 'got "Moscow"' in capsys.readouterr().err
+
+
 def test_overrides_checks_a_document_built_in_python(tpcds):
     # Executor accepts an OssieDocument that never went through load_model.
     tpcds["datasets"][0]["custom_extensions"] = [_clickhouse('{"dedup": "None"}')]

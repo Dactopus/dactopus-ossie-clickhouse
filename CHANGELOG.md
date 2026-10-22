@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.9.5] - 2026-10-22
+
 ### Fixed
 
 - An `https://` URL connected without TLS unless its port was 443 or

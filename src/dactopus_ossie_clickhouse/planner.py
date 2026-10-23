@@ -474,7 +474,8 @@ class Planner:
         (filters may say ``total_sales > 1000`` or ``store_sales.total_quantity > 5``).
         With ``scope``, the expression is a metric of that dataset: a bare name is
         one of its fields, and nothing else may be named (spec, "Metric Scoping").
-        Records the datasets touched in ``used`` (by model name).
+        Records the datasets touched in ``used`` (by model name); with ``scope``,
+        _metric_tree records it, since COUNT(*) reads no field.
         """
         try:
             tree = self._parse(expression)
@@ -486,7 +487,7 @@ class Planner:
             if not isinstance(node, exp.Column):
                 return node
             if scope is not None:
-                return self._own_field(scope, node, expression, used)
+                return self._own_field(scope, node, expression)
             if metrics and (m := self._named_metric(node)):
                 return self._metric_tree(m, used)
             if not node.table:
@@ -503,9 +504,7 @@ class Planner:
 
         return tree.transform(inline)
 
-    def _own_field(
-        self, ds: OssieDataset, node: exp.Column, expression: str, used: set[str]
-    ) -> exp.Expression:
+    def _own_field(self, ds: OssieDataset, node: exp.Column, expression: str) -> exp.Expression:
         """A column of a metric of ``ds``: one of its fields by bare name, as
         apache/ossie's validator requires (rule 1 of "Metric Scoping")."""
         if node.table:
@@ -525,7 +524,6 @@ class Planner:
                 f"{node.name!r} in {expression!r} is not a field of {ds.name!r}"
                 f"{suggest(node.name, names)}"
             )
-        used.add(ds.name)
         return self._field_expr(ds, f)
 
     def _time_strings(

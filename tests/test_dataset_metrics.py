@@ -141,6 +141,28 @@ def test_filters_name_a_dataset_metric(planner):
     assert "HAVING COUNT(*) > 1" in sql
 
 
+def test_time_strings_in_and_on_a_dataset_metric(tmp_path):
+    # A string compared with a DateTime is read in the model's zone, not the column's.
+    data = model_data()
+    orders = data["datasets"][1]
+    orders["fields"].append(
+        {
+            "name": "placed_at",
+            "datatype": "DateTime",
+            "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": "placed_at"}]},
+        }
+    )
+    orders["metrics"] += [
+        metric("late", "SUM(CASE WHEN placed_at > '2026-01-01 00:00:00' THEN 1 ELSE 0 END)"),
+        metric("last_order", "MAX(placed_at)") | {"datatype": "DateTime"},
+    ]
+    planner = Planner(load_model(write(tmp_path, data)))
+    stamp = "toDateTime('2026-01-01 00:00:00', 'UTC')"
+    assert f"orders.placed_at > {stamp}" in planner.sql(Query(("orders.late",)))
+    q = Query(("orders.revenue",), ("customers.region",), ("orders.last_order > '2026-01-01'",))
+    assert "HAVING MAX(orders.placed_at) > toDateTime('2026-01-01'" in planner.sql(q)
+
+
 def test_order_by_a_dataset_metric(planner):
     q = Query(("orders.revenue",), ("customers.region",), order_by=("orders.revenue asc",))
     assert 'ORDER BY "orders.revenue" ASC' in planner.sql(q)

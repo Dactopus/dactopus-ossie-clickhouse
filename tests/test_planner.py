@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from dactopus_ossie_clickhouse import load_model
@@ -1028,6 +1030,21 @@ def test_an_aggregate_of_aggregates_is_refused_outside_a_window():
     q = Query(("total_sales",), ("item.i_brand",), ("AVG(total_sales) > 1",))
     with pytest.raises(PlanError, match=r"filter 'AVG\(total_sales\) > 1' applies AVG to SUM"):
         planner.sql(q)
+
+
+def test_truncated_when_the_limit_cuts_rows(tpcds):
+    from dactopus_ossie_clickhouse.executor import Executor
+
+    ex = Executor(tpcds, MODEL)
+    q = Query(("total_sales",), ("item.i_category",))
+    every = ex.execute(q)
+    assert not every.truncated and len(every.rows) > 1
+    n = len(every.rows)
+    exact = ex.execute(replace(q, limit=n))
+    assert not exact.truncated and exact.rows == every.rows
+    cut = ex.execute(replace(q, limit=n - 1))
+    assert cut.truncated and cut.rows == every.rows[:-1]
+    assert cut.sql == ex.planner.sql(replace(q, limit=n - 1))  # the question's, not n
 
 
 def test_unanswerable_metrics_are_hidden(tpcds):

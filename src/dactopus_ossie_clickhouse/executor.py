@@ -12,7 +12,7 @@ import difflib
 import math
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from urllib.parse import SplitResult, unquote, urlsplit
 
@@ -127,6 +127,7 @@ class Result:
     rows: list[tuple]
     sql: str
     types: list[str]  # ClickHouse type of each column
+    truncated: bool = False  # the question's limit cut off further rows
 
     def shown_rows(self) -> list[list]:
         """Rows as the CLI and the MCP server show them: a Time or DateTime as
@@ -439,10 +440,17 @@ class Executor:
         return {"today": day.isoformat(), "now": _as_printed(at, res.column_types[1].name)}
 
     def execute(self, q: Query) -> Result:
+        """The question's rows. With a limit, one row more is read to tell whether
+        the limit cut any off; ``sql`` is still the question's, with its own limit."""
         sql = self.planner.sql(q)
-        res = self.client.query(sql)
+        read = sql if q.limit is None else self.planner.sql(replace(q, limit=q.limit + 1))
+        res = self.client.query(read)
         rows = [tuple(_non_finite_to_none(v) for v in row) for row in res.result_rows]
-        return Result(list(res.column_names), rows, sql, [t.name for t in res.column_types])
+        truncated = q.limit is not None and len(rows) > q.limit
+        if truncated:
+            rows = rows[: q.limit]
+        types = [t.name for t in res.column_types]
+        return Result(list(res.column_names), rows, sql, types, truncated)
 
 
 def _unquote(s: str) -> str:

@@ -135,6 +135,8 @@ def _run(args: argparse.Namespace) -> int:
             print("\t".join(r.columns))
             for row in r.shown_rows():
                 print("\t".join("" if v is None else str(v) for v in row))
+        if r.truncated:
+            print(f"note: more rows than --limit {q.limit}", file=sys.stderr)
         return 0
 
     # validate

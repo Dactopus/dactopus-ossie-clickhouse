@@ -20,6 +20,13 @@ a minor release may change the Python API.
   load. `list_model`, `search_model` and `describe_object` list both
   levels, and a dataset's description lists its metrics. The TPC-DS
   fixture carries the example's `store_sales.total_quantity`.
+- The MCP `query` tool says whether `limit` cut off rows: `truncated`
+  is true when there were more, and its description tells the agent to
+  draw no conclusion about the whole set then. Without a `limit` the
+  tool still returns 100 rows; before, nothing told the agent they might
+  not be all. The executor reads one row past the limit to tell;
+  `Result.truncated` carries it, and `query` in the CLI notes it on
+  stderr.
 
 ### Changed
 

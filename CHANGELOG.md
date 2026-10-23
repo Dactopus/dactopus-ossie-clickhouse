@@ -49,6 +49,8 @@ a minor release may change the Python API.
   user, or lacks the URL's database (#62). Before, the driver's retry
   trace or the server's advice on resetting a password came as it was.
   The error is `executor.ConnectError`, an `OperationalError`.
+- A negative `limit` is refused. ClickHouse read `LIMIT -n` as the
+  last n rows, which no question means.
 
 ### Fixed
 

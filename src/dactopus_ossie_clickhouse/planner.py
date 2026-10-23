@@ -748,6 +748,9 @@ class Planner:
     def plan(self, q: Query) -> exp.Select:
         if not q.metrics and not q.dimensions:
             raise PlanError("a query needs at least one metric or dimension")
+        if q.limit is not None and q.limit < 0:
+            # ClickHouse reads LIMIT -n as the last n rows, which no question means.
+            raise PlanError(f"limit {q.limit} is negative; use 0 or more")
         # Query item ("metric 'x'") -> datasets it reads: picks the root, explains it.
         touched: dict[str, set[str]] = {}
         checked: list[tuple[str, Inputs]] = []  # aggregate expressions

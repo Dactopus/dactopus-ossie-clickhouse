@@ -70,6 +70,19 @@ def test_describe_dataset_metric_field_and_unknown():
     assert "similar" in describe(MODEL, "sales")["error"]
 
 
+def test_a_datasets_metric_is_named_as_a_question_asks_for_it():
+    name = "store_sales.total_quantity"
+    assert {"name": name, "description": "Total quantity sold across all store sales"} in (
+        summary(MODEL)["metrics"]
+    )
+    assert describe(MODEL, "store_sales")["metrics"] == [
+        {"name": name, "description": "Total quantity sold across all store sales"}
+    ]
+    m = describe(MODEL, name.upper())
+    assert (m["kind"], m["name"], m["expression"]) == ("metric", name, "SUM(ss_quantity)")
+    assert name in [h["name"] for h in search(MODEL, "total_quantity")]
+
+
 def test_ai_context_forms():
     from ossie import OssieDocument
 

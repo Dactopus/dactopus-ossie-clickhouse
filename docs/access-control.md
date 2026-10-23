@@ -59,10 +59,11 @@ does that:
 analyst:                       # user or role, matched case-insensitively
   hidden_datasets: [customer]
   hidden_fields: [customer.c_email_address]
-  hidden_metrics: [customer_lifetime_value]
+  hidden_metrics: [customer_lifetime_value, store_sales.total_quantity]
 ```
 
-Pass it with `--policy policy.yaml`. Entries for the connected user and for
+A metric declared on a dataset is named `dataset.metric`, as a question
+names it. Pass the file with `--policy policy.yaml`. Entries for the connected user and for
 each of its enabled roles are combined. The file only hides; it can never
 grant anything the database refuses. A hidden field takes with it what reads
 it: the metrics, the keys and the relationships that name it, so hiding a key

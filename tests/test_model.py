@@ -125,14 +125,36 @@ def test_keys_and_relationship_columns_name_fields(tmp_path, tpcds):
     assert len(ps) == 3
 
 
-def test_metrics_on_a_dataset_are_refused_until_supported(tmp_path, tpcds):
-    # The SDK reads them (apache/ossie#591); ignoring them would drop metrics silently.
+def test_metrics_on_a_dataset_load(tpcds):
+    doc = load_model(FIXTURE)
+    sales = next(d for d in doc.datasets if d.name == "store_sales")
+    assert [m.name for m in sales.metrics] == ["total_quantity"]
+
+
+def test_a_datasets_fields_and_metrics_share_one_namespace(tmp_path, tpcds):
     sales = next(d for d in tpcds["datasets"] if d["name"] == "store_sales")
-    sales["metrics"] = [copy.deepcopy(tpcds["metrics"][0])]
-    assert any(
-        "dataset 'store_sales': metrics declared on a dataset are not supported yet" in p
-        for p in problems_of(tmp_path, tpcds)
-    )
+    sales["metrics"].append(copy.deepcopy(sales["metrics"][0]))
+    sales["metrics"].append(copy.deepcopy(sales["metrics"][0]) | {"name": "SS_QUANTITY"})
+    assert problems_of(tmp_path, tpcds) == [
+        "duplicate field or metric in dataset 'store_sales' name 'total_quantity'",
+        "duplicate field or metric in dataset 'store_sales' name 'SS_QUANTITY'",
+    ]
+
+
+def test_a_datasets_metric_needs_a_supported_dialect(tmp_path, tpcds):
+    sales = next(d for d in tpcds["datasets"] if d["name"] == "store_sales")
+    sales["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
+    assert problems_of(tmp_path, tpcds) == [
+        "metric 'store_sales.total_quantity': no expression in a supported dialect "
+        "(has DAX; need ANSI_SQL)"
+    ]
+
+
+def test_a_model_metric_may_not_take_a_datasets_metric_name(tmp_path, tpcds):
+    tpcds["metrics"][0]["name"] = "Store_Sales.total_quantity"
+    assert problems_of(tmp_path, tpcds) == [
+        "metric 'Store_Sales.total_quantity' has the name of a dataset's metric"
+    ]
 
 
 def test_unsupported_dialect_only(tmp_path, tpcds):
@@ -206,10 +228,12 @@ def test_clickhouse_extension_read_on_the_model_and_datasets_only(tmp_path, tpcd
     ds["fields"][0]["custom_extensions"] = [entry]
     metric["custom_extensions"] = [entry]
     rel["custom_extensions"] = [entry]
+    ds["metrics"][0]["custom_extensions"] = [entry]
     tail = "a CLICKHOUSE entry in custom_extensions is read on the model and datasets only"
     assert problems_of(tmp_path, tpcds) == [
         f"field {ds['name']}.{ds['fields'][0]['name']}: {tail}",
         f"metric {metric['name']!r}: {tail}",
+        f"metric '{ds['name']}.{ds['metrics'][0]['name']}': {tail}",
         f"relationship {rel['name']!r}: {tail}",
     ]
 

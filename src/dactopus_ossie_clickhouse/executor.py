@@ -21,7 +21,7 @@ from ossie import OssieDataset, OssieDocument
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse.access import Hidden, Policy, restrict
-from dactopus_ossie_clickhouse.model import overrides, time_zone
+from dactopus_ossie_clickhouse.model import all_metrics, overrides, time_zone
 from dactopus_ossie_clickhouse.planner import (
     Catalog,
     PlanError,
@@ -203,10 +203,10 @@ class Executor:
             for f, tree in list(self._parsed_fields(ds)):
                 if problem := self.functions.problem(tree):
                     self.untranslatable_fields[f"{ds.name}.{f.name}"] = problem
-        for m in self.full_model.metrics or []:
-            if m.name not in self.untranslatable_metrics:
+        for name, m, _ in all_metrics(self.full_model):
+            if name not in self.untranslatable_metrics:
                 if problem := self.functions.problem(parse(pick_expression(m.expression))):
-                    self.untranslatable_metrics[m.name] = problem
+                    self.untranslatable_metrics[name] = problem
 
     # --- introspection ------------------------------------------------------
 

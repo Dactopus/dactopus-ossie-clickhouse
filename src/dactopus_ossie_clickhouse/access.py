@@ -43,7 +43,7 @@ class Policy:
         analyst:                     # ClickHouse user or role name
           hidden_datasets: [customer]
           hidden_fields: [customer.c_email_address]
-          hidden_metrics: [customer_lifetime_value]
+          hidden_metrics: [customer_lifetime_value, store_sales.total_quantity]
     """
 
     rules: dict[str, Hidden] = field(default_factory=dict)
@@ -77,9 +77,16 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
     f_hidden = {f.upper() for f in hidden.fields}
     m_hidden = {m.upper() for m in hidden.metrics}
 
-    def refs(expression) -> set[str]:
+    def refs(expression, scope: str | None = None) -> set[str]:
+        """The fields an expression reads; a bare name is a field of ``scope``, the
+        dataset whose metric it is."""
         tree = parse(pick_expression(expression))
-        return {f"{c.table}.{c.name}".upper() for c in tree.find_all(exp.Column) if c.table}
+        cols = tree.find_all(exp.Column)
+        return {f"{c.table or scope}.{c.name}".upper() for c in cols if c.table or scope}
+
+    def kept(name: str, expression, scope: str | None = None) -> bool:
+        # By name first: a hidden metric may not parse (untranslatable).
+        return name.upper() not in m_hidden and refs(expression, scope) <= kept_fields
 
     data = model.model_dump(by_alias=True, exclude_none=True)
     data["datasets"] = [d for d in data["datasets"] if d["name"].upper() not in ds_hidden]
@@ -111,9 +118,18 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
         <= kept_fields
     ]
     data["metrics"] = [
-        m
+        m.model_dump(by_alias=True, exclude_none=True)
         for m in model.metrics or []
-        if m.name.upper() not in m_hidden and refs(m.expression) <= kept_fields
+        if kept(m.name, m.expression)
     ]
-    data["metrics"] = [m.model_dump(by_alias=True, exclude_none=True) for m in data["metrics"]]
+    declared = {d.name: d for d in model.datasets}
+    for d in data["datasets"]:
+        metrics = [
+            m.model_dump(by_alias=True, exclude_none=True)
+            for m in declared[d["name"]].metrics or []
+            if kept(f"{d['name']}.{m.name}", m.expression, d["name"])
+        ]
+        d.pop("metrics", None)
+        if metrics:
+            d["metrics"] = metrics
     return OssieDocument.model_validate(data)

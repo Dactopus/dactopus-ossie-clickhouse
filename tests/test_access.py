@@ -57,6 +57,22 @@ def test_restrict_field_and_metric():
     assert "store_productivity" not in names and "total_profit" not in names
 
 
+def test_a_datasets_metric_goes_with_its_fields_or_its_name():
+    def scoped(m):
+        return [x.name for d in m.datasets for x in d.metrics or []]
+
+    assert scoped(restrict(MODEL, Hidden())) == ["total_quantity"]
+    # Its bare names are fields of its own dataset.
+    assert scoped(restrict(MODEL, Hidden(fields=frozenset({"store_sales.ss_quantity"})))) == []
+    assert scoped(restrict(MODEL, Hidden(fields=frozenset({"item.ss_quantity"})))) == [
+        "total_quantity"
+    ]
+    assert scoped(restrict(MODEL, Hidden(metrics=frozenset({"STORE_SALES.total_quantity"})))) == []
+    assert scoped(restrict(MODEL, Hidden(metrics=frozenset({"total_quantity"})))) == [
+        "total_quantity"
+    ]
+
+
 def test_policy_matches_user_and_roles():
     p = Policy.load(POLICY)
     assert p.hidden_for("ossie_analyst", ["ossie_sales"]).metrics == {"spread"}

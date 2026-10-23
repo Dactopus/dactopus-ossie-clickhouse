@@ -351,6 +351,10 @@ The planner refuses both after it picks the root, on the rewritten tree
   by `store.s_state`, sales next to `total_sales`. In `SUM(sales.amount) /
   COUNT(*)` it counts sales, the only dataset the root can be. A model
   with one dataset is exempt, and so is a filter written in the question.
+  A metric declared on a dataset is exempt too: every aggregate in it,
+  `COUNT(*)` included, aggregates that dataset's rows (the planner marks
+  each one with it), so it is checked as an aggregate reading that
+  dataset.
 
 Only columns inside an aggregate's argument or its `FILTER (WHERE ...)`
 count. A window function reads
@@ -364,8 +368,9 @@ the root's references, such as distinct users per purchased item through
 `sessions.user_id`. The planner cannot tell that from users next to
 revenue, where it would be wrong. The spec does not say which rows a
 metric spanning datasets is computed over; apache/ossie#354 (open) asks
-every metric to be grain-safe, and #343 (open) gives metrics a home
-dataset, which would replace guessing the home from the expression.
+every metric to be grain-safe. A metric declared on a dataset
+(apache/ossie#591) has that dataset as its home; a model's metric still
+has its home read from the expression.
 A question whose metrics no one root answers together is stitched instead
 (next section); a single metric that reads two datasets is still refused.
 

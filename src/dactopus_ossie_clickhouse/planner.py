@@ -15,11 +15,24 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 
-from ossie import OssieDataset, OssieDataType, OssieDocument, OssieField, OssieRelationship
+from ossie import (
+    OssieDataset,
+    OssieDataType,
+    OssieDocument,
+    OssieField,
+    OssieMetric,
+    OssieRelationship,
+)
 from sqlglot import exp
 from sqlglot.dialects.clickhouse import ClickHouse
 
-from dactopus_ossie_clickhouse.model import covers_key, join_problem, suggest, time_zone
+from dactopus_ossie_clickhouse.model import (
+    all_metrics,
+    covers_key,
+    join_problem,
+    suggest,
+    time_zone,
+)
 from dactopus_ossie_clickhouse.translate import (
     outside_spec,
     parse,
@@ -85,7 +98,7 @@ def _known_clickhouse_aggregate(name: str) -> bool:
 
 @dataclass(frozen=True)
 class Query:
-    metrics: tuple[str, ...] = ()
+    metrics: tuple[str, ...] = ()  # a dataset's metric as "dataset.metric"
     dimensions: tuple[str, ...] = ()  # "dataset.field"
     # Ossie expressions over dataset.field (WHERE) or over metric names and
     # aggregates (HAVING); window metrics cannot be filtered in one SELECT.
@@ -200,13 +213,17 @@ def _repeat_safe(agg: exp.AggFunc) -> bool:
 
 def _aggregate_inputs(tree: exp.Expression) -> Inputs:
     """Each aggregate over joined rows, with the datasets of the columns it reads
-    (none for COUNT(*)).
+    (none for COUNT(*), except in a dataset's metric: its dataset, from meta).
 
     A column counts for its nearest aggregate only, so SUM(SUM(x)) OVER () reads x
     once, and a FILTER (WHERE ...) column for the aggregate it filters. The function
     of an OVER clause reads grouped rows, not joined ones, and PARTITION BY / ORDER BY
     columns are grouping keys: neither counts."""
-    found = {id(a): (a, set()) for a in tree.find_all(exp.AggFunc) if not _window_function(a)}
+    found = {
+        id(a): (a, {a.meta["dataset"]} if "dataset" in a.meta else set())
+        for a in tree.find_all(exp.AggFunc)
+        if not _window_function(a)
+    }
     for col in tree.find_all(exp.Column):
         node = col.parent
         while node is not None and id(node) not in found:
@@ -247,14 +264,14 @@ def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -
     planner = Planner(model, catalog)
     skip = set(untranslatable(model)[1])
     out = {}
-    for m in model.metrics or []:
-        if m.name in skip:
+    for name, _, _ in all_metrics(model):
+        if name in skip:
             continue
         try:
             # Through the planner, so names are the model's spelling, as in plan().
-            inputs = _aggregate_inputs(planner._metric_tree(m, set()))
+            inputs = _aggregate_inputs(planner._metric_tree(planner.metric(name), set()))
         except PlanError as e:
-            out[m.name] = str(e)
+            out[name] = str(e)
             continue
         except ValueError:
             continue  # reads an untranslatable field, reported as such
@@ -262,7 +279,7 @@ def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -
         refused = [_repeated(inputs, root, planner._one_to_one(root)) for root in homes]
         if homes and all(refused):
             aggs = ", ".join(r[0][0].sql("clickhouse") for r in refused)
-            out[m.name] = (
+            out[name] = (
                 f"aggregates columns of {' and '.join(homes)} separately with functions that "
                 f"count repeated rows ({aggs}); whichever "
                 "is the root of a question, the other's rows repeat, so every question "
@@ -363,7 +380,8 @@ class Planner:
     catalog: Catalog | None = None  # from Executor.introspect(); None means plain tables
     _datasets: dict[str, OssieDataset] = field(init=False)
     _fields: dict[str, dict[str, OssieField]] = field(init=False)
-    _metrics: dict[str, object] = field(init=False)
+    _metrics: dict[str, OssieMetric] = field(init=False)  # a dataset's as "dataset.metric"
+    _scopes: dict[str, OssieDataset] = field(init=False)  # a dataset's metric -> its dataset
     _zone: str = field(init=False)  # model.time_zone(): CURRENT_DATE and literals
 
     def __post_init__(self):
@@ -374,7 +392,11 @@ class Planner:
         self._fields = {
             d.name.upper(): {f.name.upper(): f for f in d.fields or []} for d in self.model.datasets
         }
-        self._metrics = {m.name.upper(): m for m in self.model.metrics or []}
+        self._metrics, self._scopes = {}, {}
+        for name, m, ds in all_metrics(self.model):
+            self._metrics[name.upper()] = m if ds is None else m.model_copy(update={"name": name})
+            if ds is not None:
+                self._scopes[name.upper()] = ds
         self._out: dict[str, list[OssieRelationship]] = {}
         for r in self.model.relationships or []:
             if r.to.upper() in self._datasets:
@@ -390,12 +412,23 @@ class Planner:
             )
         return ds
 
-    def metric(self, name: str):
+    def metric(self, name: str) -> OssieMetric:
+        """A metric by the name a question gives it; a dataset's metric comes
+        named ``dataset.metric``."""
         m = self._metrics.get(name.upper())
         if m is None:
-            names = (x.name for x in self.model.metrics or [])
+            names = (x.name for x in self._metrics.values())
             raise PlanError(f"unknown metric {name!r}{suggest(name, names)}")
         return m
+
+    def _named_metric(self, col: exp.Column) -> OssieMetric | None:
+        """The metric a filter's column names: a bare metric name, or dataset.metric
+        for a dataset's metric. None for a field."""
+        if not col.table:
+            return self._metrics.get(col.name.upper())
+        if self._fields.get(col.table.upper(), {}).get(col.name.upper()):
+            return None
+        return self._metrics.get(f"{col.table}.{col.name}".upper())
 
     def field_ref(self, ref: str) -> tuple[OssieDataset, OssieField]:
         if ref.count(".") != 1:
@@ -428,28 +461,38 @@ class Planner:
 
         return tree.transform(mark)
 
-    def resolve(self, expression: str, used: set[str], metrics: bool = False) -> exp.Expression:
+    def resolve(
+        self,
+        expression: str,
+        used: set[str],
+        metrics: bool = False,
+        scope: OssieDataset | None = None,
+    ) -> exp.Expression:
         """Parse an expression, inline `dataset.field` references, qualify columns.
 
-        With ``metrics``, a bare name that is a metric inlines that metric's
-        expression (filters may say ``total_sales > 1000``).
+        With ``metrics``, a metric's name inlines that metric's expression
+        (filters may say ``total_sales > 1000`` or ``store_sales.total_quantity > 5``).
+        With ``scope``, the expression is a metric of that dataset: a bare name is
+        one of its fields, and nothing else may be named (spec, "Metric Scoping").
         Records the datasets touched in ``used`` (by model name).
         """
         try:
             tree = self._parse(expression)
         except ValueError as e:
             raise PlanError(str(e)) from e
-        self._time_strings(tree, metrics)
+        self._time_strings(tree, metrics, scope)
 
         def inline(node: exp.Expression) -> exp.Expression:
             if not isinstance(node, exp.Column):
                 return node
+            if scope is not None:
+                return self._own_field(scope, node, expression, used)
+            if metrics and (m := self._named_metric(node)):
+                return self._metric_tree(m, used)
             if not node.table:
-                if metrics and node.name.upper() in self._metrics:
-                    return self._metric_tree(self.metric(node.name), used)
                 hint = ""
                 if metrics:
-                    names = [x.name for x in self.model.metrics or []] + [
+                    names = [x.name for x in self._metrics.values()] + [
                         f"{d.name}.{x.name}" for d in self.model.datasets for x in d.fields or []
                     ]
                     hint = f"; use dataset.field or a metric name{suggest(node.name, names)}"
@@ -460,7 +503,34 @@ class Planner:
 
         return tree.transform(inline)
 
-    def _time_strings(self, tree: exp.Expression, metrics: bool) -> None:
+    def _own_field(
+        self, ds: OssieDataset, node: exp.Column, expression: str, used: set[str]
+    ) -> exp.Expression:
+        """A column of a metric of ``ds``: one of its fields by bare name, as
+        apache/ossie's validator requires (rule 1 of "Metric Scoping")."""
+        if node.table:
+            why = (
+                f"names its own fields without the dataset, as {node.name}"
+                if node.table.upper() == ds.name.upper()
+                else "reads only its own fields; a metric over other datasets "
+                "belongs in the model's metrics"
+            )
+            raise PlanError(
+                f"{node.sql()} in {expression!r}: a metric of dataset {ds.name!r} {why}"
+            )
+        f = self._fields[ds.name.upper()].get(node.name.upper())
+        if f is None:
+            names = (x.name for x in ds.fields or [])
+            raise PlanError(
+                f"{node.name!r} in {expression!r} is not a field of {ds.name!r}"
+                f"{suggest(node.name, names)}"
+            )
+        used.add(ds.name)
+        return self._field_expr(ds, f)
+
+    def _time_strings(
+        self, tree: exp.Expression, metrics: bool, scope: OssieDataset | None = None
+    ) -> None:
         """Make a string compared with a DateTime or DateTimeTz field or metric a
         TIMESTAMP, which rewrite_tree reads in the model's zone, an offset kept.
 
@@ -472,11 +542,16 @@ class Planner:
             node = node.unnest()
             if not isinstance(node, exp.Column):
                 return False
-            if node.table:
+            if scope is not None:
+                own = self._fields[scope.name.upper()]
+                obj = None if node.table else own.get(node.name.upper())
+            elif metrics and (m := self._named_metric(node)):
+                obj = m
+            elif node.table:
                 ds = self._datasets.get(node.table.upper())
                 obj = ds and self._fields[ds.name.upper()].get(node.name.upper())
             else:
-                obj = self._metrics.get(node.name.upper()) if metrics else None
+                obj = None
             return getattr(obj, "datatype", None) in _TIMES
 
         def to_timestamp(nodes: list[exp.Expression]) -> None:
@@ -498,15 +573,24 @@ class Planner:
             if is_time(one):
                 to_timestamp(others)
 
-    def _metric_tree(self, m, used: set[str]) -> exp.Expression:
+    def _metric_tree(self, m: OssieMetric, used: set[str]) -> exp.Expression:
         """A metric's expression, resolved and rewritten for ClickHouse.
 
-        Refuses an aggregate that reads no column (COUNT(*), MAX(CURRENT_TIMESTAMP))
-        unless the metric's other aggregates name the one dataset whose rows it
-        aggregates: otherwise it would aggregate rows of whichever dataset a question
-        is answered over. A metric without aggregates that reads no column (the
-        current time) is answered over any rows, or none."""
-        tree = rewrite_tree(self.resolve(pick_expression(m.expression), used), self._zone)
+        A dataset's metric aggregates that dataset's rows, COUNT(*) too: each
+        aggregate says so in its meta, which _aggregate_inputs reads. For a model's
+        metric, refuses an aggregate that reads no column (COUNT(*),
+        MAX(CURRENT_TIMESTAMP)) unless the metric's other aggregates name the one
+        dataset whose rows it aggregates: otherwise it would aggregate rows of
+        whichever dataset a question is answered over. A metric without aggregates
+        that reads no column (the current time) is answered over any rows, or none."""
+        scope = self._scopes.get(m.name.upper())
+        resolved = self.resolve(pick_expression(m.expression), used, scope=scope)
+        tree = rewrite_tree(resolved, self._zone)
+        if scope is not None:
+            used.add(scope.name)
+            for agg in tree.find_all(exp.AggFunc):  # after rewrite_tree, which replaces some
+                agg.meta["dataset"] = scope.name
+            return tree
         if len(self.model.datasets) > 1:
             inputs = _aggregate_inputs(tree)
             unnamed = [agg for agg, ds in inputs if not ds]
@@ -927,8 +1011,9 @@ class Planner:
             tree = self._parse(f)
             self._time_strings(tree, metrics=True)
             for col in tree.find_all(exp.Column):
-                if not col.table and self.metric(col.name).name not in names:
-                    names.append(self.metric(col.name).name)  # filtered on, not selected
+                m = self._named_metric(col)
+                if m and m.name not in names:
+                    names.append(m.name)  # filtered on, not selected
             having_trees.append(tree)
 
         metric_trees = {n: self._metric_tree(self.metric(n), set()) for n in names}
@@ -1020,8 +1105,8 @@ class Planner:
             by_ref = {ref.upper(): name for ref, name in zip(q.dimensions, dims, strict=True)}
 
             def to_merged(node: exp.Expression) -> exp.Expression:
-                if isinstance(node, exp.Column) and not node.table:
-                    return values[self.metric(node.name).name].copy()
+                if isinstance(node, exp.Column) and (m := self._named_metric(node)):
+                    return values[m.name].copy()
                 if isinstance(node, exp.Column):
                     ref = f"{node.table}.{node.name}"
                     if ref.upper() not in by_ref:

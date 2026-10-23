@@ -15,7 +15,7 @@ from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
-from dactopus_ossie_clickhouse.model import ModelError, join_problems, load_model
+from dactopus_ossie_clickhouse.model import ModelError, all_metrics, join_problems, load_model
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
 from dactopus_ossie_clickhouse.translate import untranslatable
 
@@ -163,7 +163,7 @@ def _run(args: argparse.Namespace) -> int:
     print(
         f"{_names(args)}: ok ({doc.name}, version {doc.version}, "
         f"{len(doc.datasets)} datasets, {n_fields} fields, "
-        f"{len(doc.relationships or [])} relationships, {len(doc.metrics or [])} metrics){where}"
+        f"{len(doc.relationships or [])} relationships, {len(all_metrics(doc))} metrics){where}"
     )
     return 0
 

@@ -7,6 +7,20 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- Metrics declared on a dataset (`datasets[].metrics`, apache/ossie#591)
+  load and answer questions. Questions, filters, `order_by`, result
+  columns and the policy file name one `dataset.metric`. Its expression
+  names its dataset's fields without the dataset; one that names
+  anything else is refused in every question and reported by `validate`,
+  as apache/ossie's validator refuses it. It aggregates its own dataset's
+  rows, so its `COUNT(*)` needs no other aggregate to say whose rows it
+  counts. A field and a metric of one dataset with the same name fail to
+  load. `list_model`, `search_model` and `describe_object` list both
+  levels, and a dataset's description lists its metrics. The TPC-DS
+  fixture carries the example's `store_sales.total_quantity`.
+
 ### Changed
 
 - Breaking: `primary_key`, `unique_keys`, `from_columns` and `to_columns`
@@ -20,10 +34,8 @@ a minor release may change the Python API.
   cannot read one of its fields, as by grants or a policy file. The models of
   dactopus-data-models already name fields after their columns and load
   unchanged.
-- `apache-ossie` is pinned to apache/ossie commit `7205e15`. Its SDK reads
-  metrics declared on a dataset (apache/ossie#591); this version refuses
-  a model with one until it can answer them, rather than drop them
-  silently.
+- `apache-ossie` is pinned to apache/ossie commit `7205e15`, whose SDK
+  reads metrics declared on a dataset.
 
 ## [0.9.5] - 2026-10-22
 

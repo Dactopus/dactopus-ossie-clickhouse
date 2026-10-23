@@ -20,6 +20,8 @@ datasets:
       - vendor_name: CLICKHOUSE
         data: '{"dedup": "none"}'
     fields:
+      - name: order_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}
       - name: amount
         expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
   - name: country

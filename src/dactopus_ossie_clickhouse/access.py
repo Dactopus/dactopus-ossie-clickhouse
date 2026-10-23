@@ -25,14 +25,12 @@ class Hidden:
     datasets: frozenset[str] = frozenset()
     fields: frozenset[str] = frozenset()  # "dataset.field"
     metrics: frozenset[str] = frozenset()
-    relationships: frozenset[str] = frozenset()  # by name; grants only, not the policy file
 
     def __or__(self, other: Hidden) -> Hidden:
         return Hidden(
             self.datasets | other.datasets,
             self.fields | other.fields,
             self.metrics | other.metrics,
-            self.relationships | other.relationships,
         )
 
 
@@ -78,7 +76,6 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
     ds_hidden = {d.upper() for d in hidden.datasets}
     f_hidden = {f.upper() for f in hidden.fields}
     m_hidden = {m.upper() for m in hidden.metrics}
-    r_hidden = {r.upper() for r in hidden.relationships}
 
     def refs(expression) -> set[str]:
         tree = parse(pick_expression(expression))
@@ -95,15 +92,23 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
         d["fields"] = [
             f for f in d.get("fields", []) if f"{d['name']}.{f['name']}".upper() not in f_hidden
         ]
+        # Keys name fields too; a relationship that needs a dropped key goes below.
+        names = {f["name"].upper() for f in d["fields"]}
+        keys = [k for k in d.pop("unique_keys", []) if {c.upper() for c in k} <= names]
+        if keys:
+            d["unique_keys"] = keys
+        if not {c.upper() for c in d.get("primary_key", [])} <= names:
+            del d["primary_key"]
     kept_fields = {
         f"{d['name']}.{f['name']}".upper() for d in data["datasets"] for f in d.get("fields", [])
     }
+    # A relationship joins on fields (spec, "Name Resolution"): it goes with any of them.
     data["relationships"] = [
         r
         for r in data.get("relationships", [])
-        if r["from"].upper() not in ds_hidden
-        and r["to"].upper() not in ds_hidden
-        and r["name"].upper() not in r_hidden
+        if {f"{r['from']}.{c}".upper() for c in r["from_columns"]}
+        | {f"{r['to']}.{c}".upper() for c in r["to_columns"]}
+        <= kept_fields
     ]
     data["metrics"] = [
         m

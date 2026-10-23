@@ -107,7 +107,10 @@ Python library with a CLI entry point. The parts that constrain code:
   one root dataset, along the one path of relationships to each dataset
   the question touches (two paths are ambiguous, #246 §6.9), only along
   relationships whose `to_columns` cover a primary or unique key of the
-  target. Generated SQL carries
+  target. Keys and relationship columns name fields, not source columns
+  (apache/ossie#486): `load_model` checks them against the fields, and a
+  join or semi-join reads the fields' expressions (`Planner._keys`).
+  Generated SQL carries
   `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
   `aggregate_functions_null_for_empty = 1` so an aggregate over no
   rows is NULL, not 0 (counts stay 0), and `transform_null_in = 0` so a

@@ -9,6 +9,7 @@ filtering join; Semantic 2). orders is a ReplacingMergeTree with an order
 updated after it was paid, so a subquery read without FINAL counts it."""
 
 import copy
+import re
 from pathlib import Path
 
 import clickhouse_connect
@@ -204,6 +205,50 @@ def _key(row: tuple) -> tuple:
 def test_semi_joins_match_the_reference(ex, semi_duck, query, gold):
     got = ex.execute(query).rows
     assert sorted(got, key=_key) == sorted(semi_duck.sql(gold).fetchall(), key=_key)
+
+
+def _keys_renamed() -> OssieDocument:
+    """MODEL with every field a key or relationship names renamed (id to id_key), and
+    orders.customer_id read through an expression: keys and relationships name
+    fields, not columns (spec, "Name Resolution"), so the SQL reads the columns the
+    fields do."""
+    data = MODEL.model_dump(by_alias=True, exclude_none=True)
+    named = {(d["name"], c) for d in data["datasets"] for k in [d["primary_key"]] for c in k}
+    for r in data["relationships"]:
+        named |= {(r["from"], c) for c in r["from_columns"]} | {
+            (r["to"], c) for c in r["to_columns"]
+        }
+    for d in data["datasets"]:
+        for f in d["fields"]:
+            if (d["name"], f["name"]) in named:
+                f["name"] += "_key"
+        d["primary_key"] = [f"{c}_key" for c in d["primary_key"]]
+    for r in data["relationships"]:
+        r["from_columns"] = [f"{c}_key" for c in r["from_columns"]]
+        r["to_columns"] = [f"{c}_key" for c in r["to_columns"]]
+    for m in data["metrics"]:
+        for d in m["expression"]["dialects"]:
+            for ds, c in named:
+                d["expression"] = re.sub(rf"\b{ds}\.{c}\b", f"{ds}.{c}_key", d["expression"])
+    orders = next(d for d in data["datasets"] if d["name"] == "orders")
+    customer = next(f for f in orders["fields"] if f["name"] == "customer_id_key")
+    customer["expression"]["dialects"][0]["expression"] = "customer_id + 0"
+    return OssieDocument.model_validate(data)
+
+
+@pytest.mark.parametrize(("query", "gold"), CASES)
+def test_keys_named_unlike_their_columns_give_the_same_answers(ex, semi_duck, query, gold):
+    got = Executor(ex.client, _keys_renamed()).execute(query).rows
+    assert sorted(got, key=_key) == sorted(semi_duck.sql(gold).fetchall(), key=_key)
+
+
+def test_keys_named_unlike_their_columns_read_the_fields_columns():
+    sql = Planner(_keys_renamed()).sql(
+        Query(("customer_count", "order_count"), ("customers.region",), ("lines.qty > 1",))
+    )
+    assert "customers.id IN (SELECT (orders.customer_id + 0) FROM" in sql
+    assert "orders.id IN (SELECT lines.order_id FROM" in sql
+    assert "_key" not in sql
 
 
 def test_the_data_tells_the_semi_join_from_wrong_plans(semi_duck):

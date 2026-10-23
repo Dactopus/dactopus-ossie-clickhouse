@@ -21,7 +21,7 @@ from ossie import OssieDataset, OssieDocument
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse.access import Hidden, Policy, restrict
-from dactopus_ossie_clickhouse.model import declared_keys, overrides, time_zone
+from dactopus_ossie_clickhouse.model import overrides, time_zone
 from dactopus_ossie_clickhouse.planner import (
     Catalog,
     PlanError,
@@ -157,7 +157,7 @@ class Executor:
         """ClickHouse lists in system.tables and system.columns only what the
         connected user may read, so anything the model names and the catalog
         lacks is invisible to this user."""
-        datasets, fields, relationships = set(), set(), set()
+        datasets, fields = set(), set()
         for ds in self.full_model.datasets:
             info = self.catalog.get(ds.name)
             if info is None:
@@ -167,14 +167,8 @@ class Executor:
                 cols = {c.name for c in tree.find_all(exp.Column)}
                 if not cols <= info.columns:
                     fields.add(f"{ds.name}.{f.name}")
-        for r in self.full_model.relationships or []:
-            for ds_name, cols in ((r.from_dataset, r.from_columns), (r.to, r.to_columns)):
-                info = self.catalog.get(ds_name)
-                if info and not set(cols) <= info.columns:
-                    relationships.add(r.name)
-        return Hidden(
-            frozenset(datasets), frozenset(fields), relationships=frozenset(relationships)
-        )
+        # A relationship goes with the fields it joins on (restrict).
+        return Hidden(frozenset(datasets), frozenset(fields))
 
     def _parsed_fields(self, ds: OssieDataset):
         """Each field of ``ds`` that translates, with its parsed expression; the
@@ -345,9 +339,9 @@ class Executor:
                     "versions is unknown and it is read without "
                     'FINAL; set "dedup" to "final" or "none" (see docs/model-authoring.md)'
                 )
+            # Keys and relationships name fields (load_model checks), so their
+            # columns are the fields' own.
             needed: dict[str, str] = {}
-            for key in declared_keys(ds):
-                needed.update({c: "key" for c in key})
             for f, tree in self._parsed_fields(ds):
                 for c in tree.find_all(exp.Column):
                     if not c.table:
@@ -357,14 +351,6 @@ class Executor:
                     problems.append(
                         f"dataset {ds.name!r}: column {col!r} ({where}) not in {ds.source}"
                     )
-        for r in self.full_model.relationships or []:
-            for ds_name, cols in ((r.from_dataset, r.from_columns), (r.to, r.to_columns)):
-                info = self.catalog.get(ds_name)
-                for c in cols:
-                    if info and c not in info.columns:
-                        problems.append(
-                            f"relationship {r.name!r}: column {c!r} not in dataset {ds_name!r}"
-                        )
         zone = time_zone(self.full_model)
         try:
             known = self.client.query(

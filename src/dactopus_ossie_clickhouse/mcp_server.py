@@ -217,7 +217,9 @@ def build_server(
         order_by lists metric or dimension names, "name desc" for descending,
         default: first metric descending, ties broken by the dimensions; rows
         with a NULL come last either way, so limit may cut them off. Returns
-        rows and the SQL."""
+        rows and the SQL; truncated is true when limit cut off further rows: the
+        rows are not the whole answer, so draw no conclusion about all of them
+        (a count, a total, "every"): narrow the question or raise limit."""
         try:
             r = executor.execute(
                 Query(tuple(metrics), tuple(dimensions), tuple(filters), tuple(order_by), limit)
@@ -230,6 +232,7 @@ def build_server(
             "columns": r.columns,
             "rows": r.shown_rows(),
             "row_count": len(r.rows),
+            "truncated": r.truncated,
             "sql": r.sql,
         }
 

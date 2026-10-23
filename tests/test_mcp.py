@@ -211,8 +211,11 @@ async def test_query_and_error(client):
     out = r.structured_content
     assert out["columns"] == ["i_category", "total_sales"] and out["row_count"] == 3
     assert "LEFT JOIN tpcds.item" in out["sql"] and "ORDER BY total_sales DESC" in out["sql"]
+    assert out["truncated"] and "LIMIT 3 " in out["sql"]  # the question's limit, not 4
     values = [float(row[1]) for row in out["rows"]]
     assert values == sorted(values, reverse=True)
+    r = await client.call_tool("query", {"metrics": ["total_sales"]})
+    assert r.structured_content["truncated"] is False
     r = await client.call_tool("query", {"metrics": ["total_revenue"]})
     assert not r.is_error and "did you mean: total_sales" in r.structured_content["error"]
     # A query that plans but fails in ClickHouse is a result too, never an exception.

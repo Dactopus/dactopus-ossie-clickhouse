@@ -241,6 +241,29 @@ def _window_function(agg: exp.AggFunc) -> bool:
     return isinstance(parent, exp.Window)
 
 
+def _nested_aggregate(tree: exp.Expression) -> str | None:
+    """Why ``tree`` cannot run, when it has an aggregate inside another that is not
+    a window function: AVG(COUNT(x)), AVG(SUM(x) OVER ()), or an aggregate in
+    another's FILTER (WHERE ...). ClickHouse refuses them (ILLEGAL_AGGREGATION), and
+    the spec defers them (#246 §4.5, E_NESTED_AGGREGATION_DEFERRED). SUM(SUM(x))
+    OVER () is a window over grouped rows and passes."""
+    for inner in tree.find_all(exp.AggFunc):
+        prev, node = inner, inner.parent
+        while node is not None and not isinstance(node, exp.AggFunc):
+            if isinstance(node, exp.Filter) and prev is not node.this:
+                node = node.this  # its condition belongs to the aggregate it filters
+                break
+            prev, node = node, node.parent
+        if isinstance(node, exp.AggFunc) and not _window_function(node):
+            outer = node.sql("clickhouse").partition("(")[0]
+            shown = inner.find_ancestor(exp.Window) if _window_function(inner) else inner
+            return (
+                f"applies {outer} to {shown.sql('clickhouse')}, an aggregate; an aggregate "
+                "over aggregates is answered only as a window, such as SUM(SUM(x)) OVER ()"
+            )
+    return None
+
+
 def _homes(inputs: Inputs) -> list[str]:
     return sorted({d for _, ds in inputs for d in ds})
 
@@ -584,6 +607,8 @@ class Planner:
         scope = self._scopes.get(m.name.upper())
         resolved = self.resolve(pick_expression(m.expression), used, scope=scope)
         tree = rewrite_tree(resolved, self._zone)
+        if problem := _nested_aggregate(tree):
+            raise PlanError(f"metric {m.name!r} {problem}")
         if scope is not None:
             used.add(scope.name)
             for agg in tree.find_all(exp.AggFunc):  # after rewrite_tree, which replaces some
@@ -769,6 +794,8 @@ class Planner:
                     f"filter {f!r} uses a window function; a window metric cannot be "
                     "filtered in the same SELECT, select it and filter the rows instead"
                 )
+            if problem := _nested_aggregate(tree):
+                raise PlanError(f"filter {f!r} {problem}")
             if not tree.find(exp.AggFunc):
                 rows[label] = tree
                 row_filters.append(f)

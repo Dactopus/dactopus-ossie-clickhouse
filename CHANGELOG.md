@@ -43,6 +43,14 @@ a minor release may change the Python API.
   trace or the server's advice on resetting a password came as it was.
   The error is `executor.ConnectError`, an `OperationalError`.
 
+### Fixed
+
+- A metric with an aggregate over aggregates outside a window, such as
+  `AVG(COUNT(x))`, passed `validate` and reached agents, and every
+  question with it failed in ClickHouse (`ILLEGAL_AGGREGATION`). It is
+  refused in every question, reported by `validate` and hidden, and so
+  is such a filter. `SUM(SUM(x)) OVER ()` still passes.
+
 ## [0.9.5] - 2026-10-22
 
 ### Fixed

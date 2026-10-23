@@ -186,6 +186,11 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
   `translate.py`, on the SQLGlot AST, never on SQL text. Why each one
   differs is in a comment at its rewrite; the larger decisions, with
   evidence, are also in `docs/design.md`.
+- An aggregate over aggregates outside a window (`AVG(COUNT(x))`,
+  `AVG(SUM(x) OVER ())`, one in another's `FILTER`) is
+  `ILLEGAL_AGGREGATION` in ClickHouse, and #246 §4.5 defers it: the
+  planner refuses it (`_nested_aggregate`), so `validate` reports the
+  metric. `SUM(SUM(x)) OVER ()` passes.
 - ClickHouse's short aggregate names are approximate: `quantile`,
   `median`, `uniq`. A spec function that is exact translates to an exact
   one; only `APPROX_*` may use them.

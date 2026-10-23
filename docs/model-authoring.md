@@ -224,6 +224,11 @@ columns are grouping keys and may come from any joined dataset. The spec cannot 
 window metric needs, so the question has to supply the right dimensions.
 A window metric cannot be used in a filter (ClickHouse does not allow a
 window function in `HAVING`); the planner rejects it with a message.
+An aggregate over aggregates is a window or nothing: `SUM(SUM(x)) OVER ()`
+passes, while `AVG(COUNT(x))`, `AVG(SUM(x) OVER ())` and an aggregate in
+another's `FILTER (WHERE ...)` are refused in every question and reported
+by `validate` (ClickHouse refuses them; foundational semantics,
+apache/ossie#246, defers them).
 Frames are the spec's: `ROWS` frames that hold the current row and
 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`; others are
 rejected. A window's `ORDER BY` takes `NULLS FIRST` or `NULLS LAST`;
@@ -459,7 +464,8 @@ dactopus-ossie-clickhouse validate model.yaml --url http://user:password@host:81
 Without `--url`: schema, the pinned version (`0.2.0.dev0`), unique names,
 relationships that resolve, expressions in a translatable dialect,
 joins the planner accepts, and metrics no question can answer (such as
-one naming an unknown field, or a model's metric with a bare `COUNT(*)`). With
+one naming an unknown field, a model's metric with a bare `COUNT(*)`, or
+an aggregate over aggregates outside a window). With
 `--url`: every source exists, every column a field, key or relationship
 uses exists, and the server knows the model's time zone. Run it as a user who can read everything the model names;
 run as a restricted user it reports that user's view, not the model's

@@ -1008,6 +1008,28 @@ def test_unanswerable_metrics():
     assert "one_to_one" not in found
 
 
+def test_an_aggregate_of_aggregates_is_refused_outside_a_window():
+    """ClickHouse refuses it (ILLEGAL_AGGREGATION); #246 §4.5 defers it."""
+    planner = _with_metrics(
+        nested="AVG(COUNT(store_sales.ss_item_sk))",
+        over_window="AVG(SUM(store_sales.ss_quantity) OVER ())",
+        in_filter="SUM(store_sales.ss_quantity) FILTER (WHERE store_sales.ss_quantity > "
+        "AVG(store_sales.ss_quantity))",
+        window="SUM(SUM(store_sales.ss_quantity)) OVER ()",
+    )
+    found = unanswerable_metrics(planner.model)
+    assert found["nested"] == (
+        "metric 'nested' applies AVG to COUNT(store_sales.ss_item_sk), an aggregate; an "
+        "aggregate over aggregates is answered only as a window, such as SUM(SUM(x)) OVER ()"
+    )
+    assert "applies AVG to SUM(store_sales.ss_quantity) OVER ()" in found["over_window"]
+    assert "applies SUM to AVG(store_sales.ss_quantity)" in found["in_filter"]
+    assert "window" not in found
+    q = Query(("total_sales",), ("item.i_brand",), ("AVG(total_sales) > 1",))
+    with pytest.raises(PlanError, match=r"filter 'AVG\(total_sales\) > 1' applies AVG to SUM"):
+        planner.sql(q)
+
+
 def test_unanswerable_metrics_are_hidden(tpcds):
     from dactopus_ossie_clickhouse.executor import Executor
 

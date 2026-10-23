@@ -388,10 +388,10 @@ def test_join_requires_declared_key_on_target():
 
 
 def _superset_of_item_key(m):
-    """Join store_sales to item on (i_item_sk, i_manufact_id): wider than the key."""
+    """Join store_sales to item on (i_item_sk, i_brand): wider than the key."""
     r = next(r for r in m["relationships"] if r["name"] == "store_sales_to_item")
     r["from_columns"] = ["ss_item_sk", "ss_store_sk"]
-    r["to_columns"] = ["I_ITEM_SK", "i_manufact_id"]
+    r["to_columns"] = ["I_ITEM_SK", "i_brand"]
 
 
 def test_join_on_superset_of_key():
@@ -400,8 +400,8 @@ def test_join_on_superset_of_key():
         Query(metrics=("total_sales",), dimensions=("item.i_brand",))
     )
     assert (
-        "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.I_ITEM_SK "
-        "AND store_sales.ss_store_sk = item.i_manufact_id"
+        "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.i_item_sk "
+        "AND store_sales.ss_store_sk = item.i_brand"
     ) in sql
 
 

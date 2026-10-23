@@ -104,6 +104,37 @@ def test_dangling_relationship(tmp_path, tpcds):
     assert any("'store_sales_to_customer': from_columns and to_columns differ" in p for p in ps)
 
 
+def test_keys_and_relationship_columns_name_fields(tmp_path, tpcds):
+    # Spec, "Name Resolution": fields of their dataset, not columns of its source.
+    sales = next(d for d in tpcds["datasets"] if d["name"] == "store_sales")
+    sales["primary_key"] = ["ss_item_sk", "ss_ticket_numbr"]
+    sales["unique_keys"] = [["ss_wholesale_cost"]]  # a column of the source, not a field
+    tpcds["relationships"][0]["from_columns"] = ["SS_SOLD_DATE_SK"]  # case-insensitive
+    tpcds["relationships"][0]["to_columns"] = ["d_date_key"]
+    ps = problems_of(tmp_path, tpcds)
+    assert any(
+        p.startswith(
+            "dataset 'store_sales': primary_key 'ss_ticket_numbr' is not a field of "
+            "'store_sales' (did you mean: ss_ticket_number"
+        )
+        for p in ps
+    )
+    assert any("unique_keys 'ss_wholesale_cost' is not a field of 'store_sales'" in p for p in ps)
+    rel = tpcds["relationships"][0]["name"]
+    assert any(f"relationship {rel!r}: to_columns 'd_date_key' is not a field of" in p for p in ps)
+    assert len(ps) == 3
+
+
+def test_metrics_on_a_dataset_are_refused_until_supported(tmp_path, tpcds):
+    # The SDK reads them (apache/ossie#591); ignoring them would drop metrics silently.
+    sales = next(d for d in tpcds["datasets"] if d["name"] == "store_sales")
+    sales["metrics"] = [copy.deepcopy(tpcds["metrics"][0])]
+    assert any(
+        "dataset 'store_sales': metrics declared on a dataset are not supported yet" in p
+        for p in problems_of(tmp_path, tpcds)
+    )
+
+
 def test_unsupported_dialect_only(tmp_path, tpcds):
     tpcds["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
     ps = problems_of(tmp_path, tpcds)

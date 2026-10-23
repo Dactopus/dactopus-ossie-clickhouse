@@ -81,10 +81,23 @@ def test_restrict_with_nothing_left_is_a_readable_error():
         restrict(MODEL, Hidden(datasets=frozenset(d.name for d in MODEL.datasets)))
 
 
-def test_restrict_drops_relationship_by_name():
-    m = restrict(MODEL, Hidden(relationships=frozenset({"STORE_SALES_TO_ITEM"})))
+@pytest.mark.parametrize("hidden", ["STORE_SALES.SS_ITEM_SK", "item.i_item_sk"])
+def test_restrict_drops_a_relationship_with_a_hidden_field(hidden):
+    # It joins on fields; one hidden must not reach SQL through the join.
+    m = restrict(MODEL, Hidden(fields=frozenset({hidden})))
     assert "store_sales_to_item" not in {r.name for r in m.relationships}
     assert len(m.relationships) == len(MODEL.relationships) - 1
+    assert hidden.split(".")[1].upper() not in m.model_dump_json().upper()
+
+
+def test_restrict_drops_the_keys_a_hidden_field_is_in():
+    m = restrict(MODEL, Hidden(fields=frozenset({"customer.c_customer_id"})))
+    customer = next(d for d in m.datasets if d.name == "customer")
+    assert customer.primary_key == ["c_customer_sk"]
+    assert customer.unique_keys == [["c_customer_sk"]]  # [c_customer_id] dropped
+    m = restrict(MODEL, Hidden(fields=frozenset({"customer.c_customer_sk"})))
+    customer = next(d for d in m.datasets if d.name == "customer")
+    assert customer.primary_key is None and customer.unique_keys == [["c_customer_id"]]
 
 
 # --- against ClickHouse -------------------------------------------------------

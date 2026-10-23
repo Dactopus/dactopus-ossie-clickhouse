@@ -264,6 +264,24 @@ target with no declared key is refused too, where the validator skips the
 check: nothing then rules out fan-out. The model still loads; questions
 that need such a join fail, and `validate` reports the relationship.
 
+## Keys and relationships name fields
+
+apache/ossie#486 (`7205e15`) settled what `primary_key`, `unique_keys`,
+`from_columns` and `to_columns` name: fields of their dataset, never
+columns of its source. Before it this project read them as columns, which
+gave the same SQL only while each key field was named after its column
+and read it unchanged. They are now checked against the declared fields
+when a model loads, and the planner joins on the fields' expressions, so
+a key field may read a column of another name or an expression. A
+relationship goes with its fields when the model is trimmed for a user:
+a field hidden by grants or a policy file must not reach SQL through a
+join.
+
+The pin that brings this also brings dataset-scoped metrics
+(apache/ossie#591, `fae8f41`), which the SDK now reads. Until the planner
+answers them, a model that declares one is refused: loading it and
+answering without its metrics would drop them silently.
+
 ## Paths of several relationships
 
 A question may touch a dataset the root reaches only through others, such

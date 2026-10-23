@@ -222,6 +222,24 @@ def test_dictionary_with_special_name(ex, tmp_path, name):
     assert set(r.rows) == {(None, 30.0), ("France", 20.0), ("Germany", 15.0)}
 
 
+def test_dictionary_keyed_by_fields_named_unlike_their_columns(ex, tmp_path):
+    # Keys and relationships name fields (spec, "Name Resolution"); dictGet* takes
+    # the column the field reads, and the key field still reads as the join key.
+    text = FIXTURE.read_text().replace("- name: country_code\n", "- name: country\n")
+    text = text.replace("- name: code\n", "- name: iso\n").replace(
+        "primary_key: [code]", "primary_key: [iso]"
+    )
+    text = text.replace("from_columns: [country_code]", "from_columns: [country]")
+    p = tmp_path / "renamed.yaml"
+    p.write_text(text.replace("to_columns: [code]", "to_columns: [iso]"))
+    q = Executor(ex.client, load_model(p))
+    r = q.execute(Query(metrics=("revenue",), dimensions=("country.name",)))
+    assert "dictGetOrNull('ossie_test.country', 'name', orders.country_code)" in r.sql
+    assert set(r.rows) == {(None, 30.0), ("France", 20.0), ("Germany", 15.0)}
+    r = q.execute(Query(metrics=("revenue",), dimensions=("country.iso",)))
+    assert set(r.rows) == {(None, 30.0), ("FR", 20.0), ("DE", 15.0)}
+
+
 def test_dictionary_joined_on_superset_of_its_key(ex, tmp_path):
     # The extra column narrows the match: no order's code equals a country name,
     # so every row is unmatched. dictGet by the key alone would find DE and FR.
@@ -296,16 +314,11 @@ def test_check_reports_database_level_problems(ex, tmp_path):
     assert ex.check() == []
     text = FIXTURE.read_text().replace("expression: amount}", "expression: amnt}", 1)
     text = text.replace("source: ossie_test.country", "source: ossie_test.countries")
-    text = text.replace("from_columns: [country_code]", "from_columns: [country_cod]")
     p = tmp_path / "bad.yaml"
     p.write_text(text)
     problems = Executor(ex.client, load_model(p)).check()
     assert any("column 'amnt' (field 'amount') not in ossie_test.orders" in x for x in problems)
     assert any("source 'ossie_test.countries' not found" in x for x in problems)
-    assert any(
-        "relationship 'orders_to_country': column 'country_cod' not in dataset 'orders'" in x
-        for x in problems
-    )
     assert main(["validate", str(p), "--url", ex.client.url]) == 1
 
 
@@ -509,6 +522,22 @@ def test_untranslatable_expressions_are_hidden_and_reported(ex, tmp_path, capsys
         assert "field orders.e_count: cannot parse" in err
         assert "metric 'bad_total': cannot parse" in err
         assert err.count("expected REGEXP_COUNT(str, pattern), got 4") == 2
+
+
+def test_a_key_field_that_does_not_translate_hides_its_relationship(ex, tmp_path, capsys):
+    p = tmp_path / "bad_key.yaml"
+    bad = '"IFF(country_code, 1)"'  # IFF takes three arguments
+    p.write_text(
+        FIXTURE.read_text().replace("expression: country_code}", f"expression: {bad}}}", 1)
+    )
+    other = Executor(ex.client, load_model(p))
+    assert other.execute(Query(("revenue",))).rows == [(65.0,)]
+    with pytest.raises(PlanError, match="unknown field 'orders.country_code'"):
+        other.planner.sql(Query(("revenue",), ("orders.country_code",)))
+    with pytest.raises(PlanError, match="not joined"):
+        other.planner.sql(Query(("revenue",), ("country.name",)))
+    assert main(["validate", str(p), "--url", ex.client.url]) == 1
+    assert "field orders.country_code: cannot parse" in capsys.readouterr().err
 
 
 def test_check_reports_a_time_zone_the_server_lacks(tmp_path):

@@ -7,6 +7,24 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking: `primary_key`, `unique_keys`, `from_columns` and `to_columns`
+  name fields of their dataset, as the spec now says (apache/ossie#486),
+  not columns of its source. A model whose key or relationship names
+  something other than a declared field fails to load, naming the nearest
+  field; declare the field. Joins and semi-joins read the columns the
+  fields read, so a key field may be named unlike its column (`order_id`
+  over `o_orderkey`) or be an expression; before, the name went into the
+  SQL as a column. A relationship or a key is hidden from a user who
+  cannot read one of its fields, as by grants or a policy file. The models of
+  dactopus-data-models already name fields after their columns and load
+  unchanged.
+- `apache-ossie` is pinned to apache/ossie commit `7205e15`. Its SDK reads
+  metrics declared on a dataset (apache/ossie#591); this version refuses
+  a model with one until it can answer them, rather than drop them
+  silently.
+
 ## [0.9.5] - 2026-10-22
 
 ### Fixed

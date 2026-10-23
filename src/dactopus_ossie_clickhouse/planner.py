@@ -352,10 +352,9 @@ def _ambiguous(start: str, target: str, paths: list[tuple[OssieRelationship, ...
     )
 
 
-def _in(table: str, columns: list[str], sub: exp.Select) -> exp.In:
-    """table.columns IN (sub): a tuple for a key of several columns."""
-    cols = [exp.column(c, table=table) for c in columns]
-    this = cols[0] if len(cols) == 1 else exp.Tuple(expressions=cols)
+def _in(keys: list[exp.Expression], sub: exp.Select) -> exp.In:
+    """keys IN (sub): a tuple for a key of several fields."""
+    this = keys[0] if len(keys) == 1 else exp.Tuple(expressions=keys)
     return exp.In(this=this, query=sub.subquery())
 
 
@@ -548,6 +547,18 @@ class Planner:
             return node
 
         return tree.transform(qualify)
+
+    def _keys(self, ds: OssieDataset, names: list[str]) -> list[exp.Expression]:
+        """The expressions of the fields of ``ds`` that a key or a relationship's
+        columns name (spec, "Name Resolution"): o_orderkey for a field order_id that
+        reads it. Rewritten for ClickHouse, and in parentheses unless a column, since
+        they go under an operator after rewrite_tree."""
+        out = []
+        for name in names:
+            _, f = self.field_ref(f"{ds.name}.{name}")  # load_model checks; model_validate does not
+            e = rewrite_tree(self._field_expr(ds, f), self._zone)
+            out.append(e if isinstance(e, exp.Column) else exp.paren(e, copy=False))
+        return out
 
     # --- joins --------------------------------------------------------------
 
@@ -769,23 +780,18 @@ class Planner:
         for r in joins:
             source, target = self.dataset(r.from_dataset), self.dataset(r.to)
             info = (self.catalog or {}).get(target.name)
+            froms, tos = self._keys(source, r.from_columns), self._keys(target, r.to_columns)
             if (
                 info
                 and info.dictionary_key
-                and [c.upper() for c in r.to_columns] == [info.dictionary_key.upper()]
+                and len(tos) == 1
+                and isinstance(tos[0], exp.Column)
+                and tos[0].name.upper() == info.dictionary_key.upper()
                 and target.name.upper() not in joined_from  # nothing joins on from it
             ):
-                dict_keys[target.name] = exp.column(r.from_columns[0], table=source.name)
+                dict_keys[target.name] = froms[0]
                 continue
-            on = exp.and_(
-                *(
-                    exp.EQ(
-                        this=exp.column(a, table=source.name),
-                        expression=exp.column(b, table=target.name),
-                    )
-                    for a, b in zip(r.from_columns, r.to_columns, strict=True)
-                )
-            )
+            on = exp.and_(*(exp.EQ(this=a, expression=b) for a, b in zip(froms, tos, strict=True)))
             sel = sel.join(self._table(target), on=on, join_type="left")
         return sel, dict_keys
 
@@ -892,7 +898,7 @@ class Planner:
             if problem := join_problem(r, self.dataset(r.to)):
                 raise PlanError(problem)
         first = path[0]
-        sub = exp.select(*(exp.column(c, table=m.name) for c in first.from_columns))
+        sub = exp.select(*self._keys(m, first.from_columns))
         sub, dict_keys = self._from(sub, m, used)
         sub = sub.where(exp.and_(*filters))
         if dict_keys:
@@ -900,11 +906,11 @@ class Planner:
         for before, r in zip(path, path[1:], strict=False):
             at = self.dataset(r.from_dataset)
             sub = (
-                exp.select(*(exp.column(c, table=at.name) for c in r.from_columns))
+                exp.select(*self._keys(at, r.from_columns))
                 .from_(self._table(at))
-                .where(_in(at.name, before.to_columns, sub))
+                .where(_in(self._keys(at, before.to_columns), sub))
             )
-        return _in(root.name, path[-1].to_columns, sub)
+        return _in(self._keys(root, path[-1].to_columns), sub)
 
     def _stitch(self, q: Query, where: list[str], having: list[str]) -> exp.Select | None:
         """Metrics no one root answers together, each answered from its own root and

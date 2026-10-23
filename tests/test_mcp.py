@@ -24,7 +24,7 @@ def test_summary_is_compact():
         "name": "store_sales",
         "description": "Fact table containing all store sales transactions",
         "synonyms": ["sales transactions", "store purchases", "retail sales", "POS data"],
-        "fields": 8,
+        "fields": 9,
     }
     total_sales = next(m for m in s["metrics"] if m["name"] == "total_sales")
     assert total_sales["synonyms"] == ["total revenue", "gross sales", "sales amount"]

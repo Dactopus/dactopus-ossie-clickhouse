@@ -9,6 +9,7 @@ here, and all problems are reported at once rather than one per run.
 
 from __future__ import annotations
 
+import difflib
 import json
 import zoneinfo
 from functools import cache
@@ -205,13 +206,24 @@ def _check_whole(doc: OssieDocument) -> list[str]:
     problems: list[str] = []
     datasets = {d.name: d for d in doc.datasets}
 
-    # Keys and relationship columns are physical column names per the spec, not
-    # field names, so their existence can only be checked against the database.
+    # Keys and relationship columns name fields of their dataset, not columns of
+    # its source (spec, "Name Resolution"); a field says which column it reads.
     for d in doc.datasets:
         problems += _extension(d)[1]
         problems += _duplicates(f"field in dataset {d.name!r}", [f.name for f in d.fields or []])
         for f in d.fields or []:
             problems += _dialect_check(f"field {d.name}.{f.name}", f.expression.dialects)
+        keys = [
+            ("primary_key", d.primary_key or []),
+            *(("unique_keys", k) for k in d.unique_keys or []),
+        ]
+        for which, key in keys:
+            problems += [f"dataset {d.name!r}: {which} {p}" for p in _unknown_fields(key, d)]
+        if d.metrics:
+            problems.append(
+                f"dataset {d.name!r}: metrics declared on a dataset are not supported yet; "
+                "declare them in the model's metrics"
+            )
 
     for m in doc.metrics or []:
         problems += _dialect_check(f"metric {m.name!r}", m.expression.dialects)
@@ -221,11 +233,19 @@ def _check_whole(doc: OssieDocument) -> list[str]:
             problems.append(
                 f"relationship {r.name!r}: from_columns and to_columns differ in length"
             )
-        for side, ds_name in (("from", r.from_dataset), ("to", r.to)):
+        for side, ds_name, cols in (
+            ("from", r.from_dataset, r.from_columns),
+            ("to", r.to, r.to_columns),
+        ):
             if ds_name not in datasets:
                 problems.append(
                     f"relationship {r.name!r}: {side} dataset {ds_name!r} does not exist"
                 )
+                continue
+            problems += [
+                f"relationship {r.name!r}: {side}_columns {p}"
+                for p in _unknown_fields(cols, datasets[ds_name])
+            ]
 
     # Nothing reads an entry anywhere else; its author expects an effect that never comes.
     elsewhere = [
@@ -295,6 +315,20 @@ def join_problems(doc: OssieDocument) -> list[str]:
     datasets = {d.name: d for d in doc.datasets}
     found = (join_problem(r, datasets[r.to]) for r in doc.relationships or [] if r.to in datasets)
     return [p for p in found if p]
+
+
+def _unknown_fields(names: list[str], ds: OssieDataset) -> list[str]:
+    declared = {f.name.upper() for f in ds.fields or []}
+    return [
+        f"{n!r} is not a field of {ds.name!r}{_close(n, (f.name for f in ds.fields or []))}"
+        for n in names
+        if n.upper() not in declared
+    ]
+
+
+def _close(name: str, options) -> str:
+    close = difflib.get_close_matches(name, list(options), n=3, cutoff=0.5)
+    return f" (did you mean: {', '.join(close)}?)" if close else ""
 
 
 def _duplicates(kind: str, names: list[str]) -> list[str]:

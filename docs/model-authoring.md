@@ -32,13 +32,19 @@ supported.
 
 ## Keys decide which joins are allowed
 
-`primary_key` and `unique_keys` hold physical column names, as the spec
-says. They are not decoration: a relationship is used only when its
-`to_columns` cover (include all columns of) the primary key or a unique
+`primary_key`, `unique_keys`, `from_columns` and `to_columns` name fields
+of their dataset, not columns of its source (spec, "Name Resolution"); a
+name that is not a field is refused when the model loads. A join reads the
+columns the fields read: with a field `order_id` whose expression is
+`o_orderkey`, `to_columns: [order_id]` joins on `o_orderkey`.
+
+Keys are not decoration: a relationship is used only when its
+`to_columns` cover (include all fields of) the primary key or a unique
 key of the target dataset. That is how the planner knows the join is
-many-to-one and cannot multiply fact rows; extra columns, such as a
+many-to-one and cannot multiply fact rows; extra fields, such as a
 `tenant_id` next to the key, only narrow the match. A dimension dataset
-without a declared key is unreachable.
+without a declared key is unreachable. A relationship is hidden from a
+user who cannot read one of its fields, like a metric that reads one.
 
 The planner trusts the declared key; ClickHouse does not enforce
 uniqueness. In a multi-tenant schema an id is often unique only within a
@@ -349,7 +355,7 @@ A view (not a materialized one) holds no versions of its own, so it is read as i
 ## Dictionaries
 
 A dataset whose source is a ClickHouse [dictionary](https://clickhouse.com/docs/sql-reference/dictionaries)
-with a single key, joined on that key, is read with
+with a single key, joined on a field that reads that key, is read with
 [`dictGetOrNull`](https://clickhouse.com/docs/sql-reference/functions/ext-dict-functions) and the
 join disappears. The key column itself is not a dictionary attribute, so
 a field over it is read as the joining column, NULL when the dictionary

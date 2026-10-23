@@ -19,7 +19,7 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.parser import Parser
 
-from dactopus_ossie_clickhouse.model import DEFAULT_TIME_ZONE
+from dactopus_ossie_clickhouse.model import DEFAULT_TIME_ZONE, all_metrics
 
 # Preference order when a field or metric carries several dialects.
 DIALECT_PREFERENCE = (OssieDialect.OSSIE_SQL_2026, OssieDialect.ANSI_SQL)
@@ -611,7 +611,8 @@ def translate(expression: OssieExpression) -> str:
 
 
 def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]]:
-    """Fields ("dataset.field") and metrics whose expression does not translate, with why.
+    """Fields ("dataset.field") and metrics (a dataset's as "dataset.metric") whose
+    expression does not translate, with why.
 
     The executor hides them: an expression that does not parse cannot be shown
     to read only columns the user may see."""
@@ -629,5 +630,5 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
         for f in d.fields or []
         if (p := problem(f.expression))
     }
-    metrics = {m.name: p for m in model.metrics or [] if (p := problem(m.expression))}
+    metrics = {n: p for n, m, _ in all_metrics(model) if (p := problem(m.expression))}
     return fields, metrics

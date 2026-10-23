@@ -100,6 +100,14 @@ Python library with a CLI entry point. The parts that constrain code:
   `check_model` refuses any other key or value and the entry anywhere but
   a dataset or the model; `model._extension` is the one parser, behind
   `overrides` and `time_zone`.
+- Metrics come at two levels (spec, "Metric Scoping", apache/ossie#591):
+  the model's `metrics`, named as declared, and a dataset's `metrics`,
+  named `dataset.metric` in questions, results, errors and the policy
+  file. Every layer lists them through `model.all_metrics`. A dataset's
+  metric reads its own fields by bare name (`Planner._own_field`) and
+  aggregates its dataset's rows, `COUNT(*)` included: the planner marks
+  each of its aggregates with the dataset in `meta`, which
+  `_aggregate_inputs` reads.
 - The planner never talks to the database; it takes an optional `Catalog`
   the executor built. Keep that boundary.
 - Query planning is deterministic: datasets from `source`, joins from
@@ -125,8 +133,8 @@ Python library with a CLI entry point. The parts that constrain code:
   Metrics run over the root's rows, so the planner refuses an aggregate
   that reads only joined datasets unless repeats cannot change it or the
   join is on a key of the root, an aggregate expression that reads no root
-  column at all, and a metric whose `COUNT(*)` no other aggregate ties to
-  one dataset (`docs/design.md`). Metrics no one root answers together
+  column at all, and a model's metric whose `COUNT(*)` no other aggregate
+  ties to one dataset (`docs/design.md`). Metrics no one root answers together
   are stitched: each group of metrics planned from its own root, merged
   with `UNION ALL` and `GROUP BY` on the dimensions (#246 section 6.6); a
   metric missing from a group is its value over no rows.

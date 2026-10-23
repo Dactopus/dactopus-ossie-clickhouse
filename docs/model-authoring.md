@@ -95,10 +95,11 @@ does. The planner refuses what that would get wrong:
   repeat-safe aggregate. `COUNT(DISTINCT sessions.user_id)` in a question
   whose root is purchases (because of a purchases metric or dimension)
   counts only users with a purchase.
-- `COUNT(*)` on its own: it names no dataset, so it would count stores when
-  asked by store and sales when asked next to a sales metric. Count a key
-  instead, `COUNT(orders.order_id)`, or keep it next to an aggregate that
-  names the dataset, as in `SUM(orders.amount) / COUNT(*)`.
+- `COUNT(*)` on its own in a model's metric: it names no dataset, so it
+  would count stores when asked by store and sales when asked next to a
+  sales metric. Declare the metric on the dataset it counts (next
+  section), count a key, `COUNT(orders.order_id)`, or keep it next to an
+  aggregate that names the dataset, as in `SUM(orders.amount) / COUNT(*)`.
 
 `COUNT(DISTINCT customer.id)` next to a sales column, as in
 `SUM(sales.amount) / COUNT(DISTINCT customer.id)`, passes: it is about the
@@ -128,6 +129,49 @@ mixes columns of both sides in one expression (write two filters; an
 `OR` across the sides cannot be split), a filter on `items` alone with no
 filter on the order lines that link items to customers, and a dimension
 of the many side next to a metric of the one side.
+
+## Metrics on a dataset
+
+A metric that aggregates one dataset may be declared on it, in the
+dataset's `metrics` (spec, "Metric Scoping"). Its expression names the
+dataset's fields without the dataset, and a question asks for it as
+`dataset.metric`:
+
+```yaml
+datasets:
+  - name: orders
+    source: shop.orders
+    primary_key: [order_id]
+    fields:
+      - name: order_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}
+      - name: amount
+        expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
+    metrics:
+      - name: revenue
+        expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(amount)}]}
+      - name: order_count
+        expression: {dialects: [{dialect: ANSI_SQL, expression: COUNT(*)}]}
+```
+
+```bash
+dactopus-ossie-clickhouse query model.yaml -m orders.revenue -m orders.order_count \
+  -d customers.region -f "orders.order_count > 10" -o "orders.revenue desc"
+```
+
+It aggregates the rows of its dataset, `COUNT(*)` included, and the
+rules of the previous section apply as to any metric of that dataset:
+`orders.order_count` by a field of customers counts orders, and
+`customers.customer_count` by a field of orders is refused. Filters,
+`order_by` and the result's columns name it `orders.order_count` too.
+
+A dataset's fields and metrics share one set of names, so a metric named
+like a field of its dataset fails to load. A metric that names a field
+of another dataset, its own field as `orders.amount`, a source column no
+field declares, or another metric is refused in every question and
+reported by `validate`, as apache/ossie's validator refuses it. A metric
+over fields of several datasets goes in the model's `metrics`, which
+cannot name a dataset's metric either.
 
 ## Expressions
 
@@ -415,7 +459,7 @@ dactopus-ossie-clickhouse validate model.yaml --url http://user:password@host:81
 Without `--url`: schema, the pinned version (`0.2.0.dev0`), unique names,
 relationships that resolve, expressions in a translatable dialect,
 joins the planner accepts, and metrics no question can answer (such as
-one naming an unknown field or a bare `COUNT(*)`). With
+one naming an unknown field, or a model's metric with a bare `COUNT(*)`). With
 `--url`: every source exists, every column a field, key or relationship
 uses exists, and the server knows the model's time zone. Run it as a user who can read everything the model names;
 run as a restricted user it reports that user's view, not the model's

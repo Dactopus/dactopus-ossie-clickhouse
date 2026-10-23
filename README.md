@@ -109,6 +109,9 @@ questions it refuses.
   ([stitching](docs/design.md#stitch-metrics-of-several-facts)): every
   region of either fact appears, and a fact without rows in a region
   gives NULL for a sum and 0 for a count.
+- A metric declared on a dataset (`datasets[].metrics`) is asked for as
+  `dataset.metric` and computed over that dataset's rows, `COUNT(*)`
+  included ([model authoring](docs/model-authoring.md#metrics-on-a-dataset)).
 - Filters over fields go to `WHERE`; filters that name a metric or contain
   an aggregate (`total_sales > 1000000`) go to `HAVING`, and may only use
   the question's own dimensions besides aggregates. A window metric
@@ -147,7 +150,8 @@ questions it refuses.
 | `query <model>... ... [--json]` | Run it; TSV or JSON rows. |
 | `serve <model>...` | MCP server over stdio (needs the `[mcp]` extra). |
 
-Question options for `sql` and `query`: `-m metric` (repeatable),
+Question options for `sql` and `query`: `-m metric` (repeatable;
+`dataset.metric` for one declared on a dataset),
 `-d dataset.field` (repeatable), `-f condition` (repeatable; a metric
 name or an aggregate means `HAVING`), `-o "name [desc]"`, `-l limit`.
 `--url` and `--policy` apply to anything that talks to ClickHouse.

@@ -20,7 +20,7 @@ from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
-from dactopus_ossie_clickhouse.model import time_zone
+from dactopus_ossie_clickhouse.model import all_metrics, time_zone
 from dactopus_ossie_clickhouse.planner import PlanError, Query
 from dactopus_ossie_clickhouse.translate import pick_expression
 
@@ -53,7 +53,7 @@ def summary(model: OssieDocument, clock: dict[str, Any] | None = None) -> dict[s
         "description": model.description,
         **_ai(model),
         "datasets": [_brief(d, fields=len(d.fields or [])) for d in model.datasets],
-        "metrics": [_brief(m) for m in model.metrics or []],
+        "metrics": [_brief(m, name=name) for name, m, _ in all_metrics(model)],
         "relationships": [f"{r.from_dataset} -> {r.to}" for r in model.relationships or []],
         "time_zone": time_zone(model),
         **(clock or {}),
@@ -102,8 +102,8 @@ def _objects(model: OssieDocument):
         yield "dataset", d.name, d
         for f in d.fields or []:
             yield "field", f"{d.name}.{f.name}", f
-    for m in model.metrics or []:
-        yield "metric", m.name, m
+    for name, m, _ in all_metrics(model):
+        yield "metric", name, m
 
 
 def search(model: OssieDocument, text: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -141,6 +141,8 @@ def describe(model: OssieDocument, name: str) -> dict[str, Any]:
             out["relationships"] = [
                 _edge(r) for r in model.relationships or [] if obj_name in (r.from_dataset, r.to)
             ]
+            if obj.metrics:
+                out["metrics"] = [_brief(x, name=f"{obj_name}.{x.name}") for x in obj.metrics]
         else:
             out["expression"] = pick_expression(obj.expression)
             if obj.datatype:
@@ -206,7 +208,7 @@ def build_server(
         limit: int = 100,
     ) -> dict[str, Any]:
         """Run a semantic query. metrics and dimensions are names from the model
-        (dimensions as dataset.field); filters are SQL-like conditions over
+        as list_model gives them (dimensions as dataset.field); filters are SQL-like conditions over
         dataset.field, e.g. "date_dim.d_year = 1998" (today and periods counted
         from it with CURRENT_DATE, e.g. "date_dim.d_date = CURRENT_DATE", never a
         date you know), or over a metric name, e.g. "total_sales > 1000000",

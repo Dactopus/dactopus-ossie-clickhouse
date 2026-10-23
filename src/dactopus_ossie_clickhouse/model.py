@@ -22,6 +22,7 @@ from ossie import (
     OssieDataset,
     OssieDialect,
     OssieDocument,
+    OssieMetric,
     OssieRelationship,
 )
 from pydantic import ValidationError
@@ -210,23 +211,26 @@ def _check_whole(doc: OssieDocument) -> list[str]:
     # its source (spec, "Name Resolution"); a field says which column it reads.
     for d in doc.datasets:
         problems += _extension(d)[1]
-        problems += _duplicates(f"field in dataset {d.name!r}", [f.name for f in d.fields or []])
+        # Fields and the dataset's metrics share one namespace (spec, "Metric Scoping").
+        names = [f.name for f in d.fields or []] + [m.name for m in d.metrics or []]
+        problems += _duplicates(f"field or metric in dataset {d.name!r}", names)
         for f in d.fields or []:
             problems += _dialect_check(f"field {d.name}.{f.name}", f.expression.dialects)
+        for m in d.metrics or []:
+            name = f"{d.name}.{m.name}"
+            problems += _dialect_check(f"metric {name!r}", m.expression.dialects)
         keys = [
             ("primary_key", d.primary_key or []),
             *(("unique_keys", k) for k in d.unique_keys or []),
         ]
         for which, key in keys:
             problems += [f"dataset {d.name!r}: {which} {p}" for p in _unknown_fields(key, d)]
-        if d.metrics:
-            problems.append(
-                f"dataset {d.name!r}: metrics declared on a dataset are not supported yet; "
-                "declare them in the model's metrics"
-            )
 
+    scoped = {name.upper() for name, _, d in all_metrics(doc) if d}
     for m in doc.metrics or []:
         problems += _dialect_check(f"metric {m.name!r}", m.expression.dialects)
+        if m.name.upper() in scoped:
+            problems.append(f"metric {m.name!r} has the name of a dataset's metric")
 
     for r in doc.relationships or []:
         if len(r.from_columns) != len(r.to_columns):
@@ -250,7 +254,7 @@ def _check_whole(doc: OssieDocument) -> list[str]:
     # Nothing reads an entry anywhere else; its author expects an effect that never comes.
     elsewhere = [
         *((f"field {d.name}.{f.name}", f) for d in doc.datasets for f in d.fields or []),
-        *((f"metric {m.name!r}", m) for m in doc.metrics or []),
+        *((f"metric {name!r}", m) for name, m, _ in all_metrics(doc)),
         *((f"relationship {r.name!r}", r) for r in doc.relationships or []),
     ]
     for what, node in elsewhere:
@@ -260,6 +264,16 @@ def _check_whole(doc: OssieDocument) -> list[str]:
                 "datasets only"
             )
     return problems
+
+
+def all_metrics(doc: OssieDocument) -> list[tuple[str, OssieMetric, OssieDataset | None]]:
+    """Every metric with the name a question gives it and the dataset that declares
+    it: a model's metric by its own name with None, a dataset's as ``dataset.metric``
+    (spec, "Metric Scoping")."""
+    return [
+        *((m.name, m, None) for m in doc.metrics or []),
+        *((f"{d.name}.{m.name}", m, d) for d in doc.datasets for m in d.metrics or []),
+    ]
 
 
 def overrides(ds: OssieDataset) -> dict:

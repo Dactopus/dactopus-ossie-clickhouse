@@ -12,7 +12,7 @@ import difflib
 import math
 import os
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import partial
 from urllib.parse import SplitResult, unquote, urlsplit
 
@@ -442,8 +442,9 @@ class Executor:
     def execute(self, q: Query) -> Result:
         """The question's rows. With a limit, one row more is read to tell whether
         the limit cut any off; ``sql`` is still the question's, with its own limit."""
-        sql = self.planner.sql(q)
-        read = sql if q.limit is None else self.planner.sql(replace(q, limit=q.limit + 1))
+        sel = self.planner.plan(q)
+        sql = sel.sql(dialect="clickhouse")
+        read = sql if q.limit is None else sel.limit(q.limit + 1).sql(dialect="clickhouse")
         res = self.client.query(read)
         rows = [tuple(_non_finite_to_none(v) for v in row) for row in res.result_rows]
         truncated = q.limit is not None and len(rows) > q.limit

@@ -1047,6 +1047,12 @@ def test_truncated_when_the_limit_cuts_rows(tpcds):
     assert cut.sql == ex.planner.sql(replace(q, limit=n - 1))  # the question's, not n
 
 
+def test_a_negative_limit_is_refused():
+    # ClickHouse would answer LIMIT -2 with the last two rows.
+    with pytest.raises(PlanError, match="limit -2 is negative"):
+        P.sql(Query(("total_sales",), ("item.i_brand",), limit=-2))
+
+
 def test_unanswerable_metrics_are_hidden(tpcds):
     from dactopus_ossie_clickhouse.executor import Executor
 

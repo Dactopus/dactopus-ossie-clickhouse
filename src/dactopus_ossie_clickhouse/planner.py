@@ -10,7 +10,6 @@ names the nearest supported thing.
 
 from __future__ import annotations
 
-import difflib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,7 +19,7 @@ from ossie import OssieDataset, OssieDataType, OssieDocument, OssieField, OssieR
 from sqlglot import exp
 from sqlglot.dialects.clickhouse import ClickHouse
 
-from dactopus_ossie_clickhouse.model import covers_key, join_problem, time_zone
+from dactopus_ossie_clickhouse.model import covers_key, join_problem, suggest, time_zone
 from dactopus_ossie_clickhouse.translate import (
     outside_spec,
     parse,
@@ -358,11 +357,6 @@ def _in(keys: list[exp.Expression], sub: exp.Select) -> exp.In:
     return exp.In(this=this, query=sub.subquery())
 
 
-def _suggest(name: str, options) -> str:
-    close = difflib.get_close_matches(name, list(options), n=3, cutoff=0.5)
-    return f" (did you mean: {', '.join(close)}?)" if close else ""
-
-
 @dataclass
 class Planner:
     model: OssieDocument
@@ -392,7 +386,7 @@ class Planner:
         ds = self._datasets.get(name.upper())
         if ds is None:
             raise PlanError(
-                f"unknown dataset {name!r}{_suggest(name, (d.name for d in self.model.datasets))}"
+                f"unknown dataset {name!r}{suggest(name, (d.name for d in self.model.datasets))}"
             )
         return ds
 
@@ -400,7 +394,7 @@ class Planner:
         m = self._metrics.get(name.upper())
         if m is None:
             names = (x.name for x in self.model.metrics or [])
-            raise PlanError(f"unknown metric {name!r}{_suggest(name, names)}")
+            raise PlanError(f"unknown metric {name!r}{suggest(name, names)}")
         return m
 
     def field_ref(self, ref: str) -> tuple[OssieDataset, OssieField]:
@@ -411,7 +405,7 @@ class Planner:
         f = self._fields[ds.name.upper()].get(f_name.upper())
         if f is None:
             names = (f"{ds.name}.{x.name}" for x in ds.fields or [])
-            raise PlanError(f"unknown field {ref!r}{_suggest(ref, names)}")
+            raise PlanError(f"unknown field {ref!r}{suggest(ref, names)}")
         return ds, f
 
     def _parse(self, expression: str) -> exp.Expression:
@@ -458,7 +452,7 @@ class Planner:
                     names = [x.name for x in self.model.metrics or []] + [
                         f"{d.name}.{x.name}" for d in self.model.datasets for x in d.fields or []
                     ]
-                    hint = f"; use dataset.field or a metric name{_suggest(node.name, names)}"
+                    hint = f"; use dataset.field or a metric name{suggest(node.name, names)}"
                 raise PlanError(f"unqualified column {node.name!r} in {expression!r}{hint}")
             ds, f = self.field_ref(f"{node.table}.{node.name}")
             used.add(ds.name)
@@ -1064,7 +1058,7 @@ class Planner:
             if alias is None:
                 raise PlanError(
                     f"order_by {name!r} is not a selected metric or dimension"
-                    f"{_suggest(name, dict.fromkeys(aliases.values()))}"
+                    f"{suggest(name, dict.fromkeys(aliases.values()))}"
                 )
             out.append(exp.Ordered(this=exp.column(alias), desc=desc, nulls_first=False))
         ordered = {o.this.name.upper() for o in out}

@@ -36,6 +36,12 @@ a minor release may change the Python API.
   unchanged.
 - `apache-ossie` is pinned to apache/ossie commit `7205e15`, whose SDK
   reads metrics declared on a dataset.
+- A failure to connect is one line that names the step, the location
+  without credentials and what to check: the server cannot be reached
+  (refused, unknown host, timeout, TLS on a plain port), refuses the
+  user, or lacks the URL's database (#62). Before, the driver's retry
+  trace or the server's advice on resetting a password came as it was.
+  The error is `executor.ConnectError`, an `OperationalError`.
 
 ## [0.9.5] - 2026-10-22
 

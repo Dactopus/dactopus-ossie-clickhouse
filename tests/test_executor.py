@@ -1,9 +1,12 @@
 """Executor against a ClickHouse test database with a ReplacingMergeTree fact
 table and a dictionary dimension, created here."""
 
+import os
 import re
+import socket
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 from clickhouse_connect.driver.exceptions import OperationalError
@@ -631,3 +634,48 @@ def test_https_to_a_plain_server_fails(clickhouse):
         pytest.skip("the test server is not plain HTTP")
     with pytest.raises(OperationalError):
         executor.connect("https://" + clickhouse.url.removeprefix("http://"))
+
+
+# --- connecting (#62) --------------------------------------------------------------
+
+FIXTURE_MODEL = Path(__file__).parent / "fixtures" / "tpcds.yaml"
+
+
+def _connect_error(capsys, url: str) -> str:
+    assert main(["validate", str(FIXTURE_MODEL), "--url", url]) == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1, err  # one line: no retry trace or server advice
+    assert "query_id" not in err and "attempt" not in err
+    return err
+
+
+def test_refused_connection_is_one_line(capsys):
+    with socket.socket() as s:  # a port nothing listens on
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    err = _connect_error(capsys, f"http://u:secret@127.0.0.1:{port}/db")
+    assert err == (
+        f"error: cannot connect to ClickHouse at http://127.0.0.1:{port}: connection refused; "
+        "check the URL (--url or $OSSIE_CLICKHOUSE_URL) and that the server is running\n"
+    )
+
+
+def _server_url(clickhouse, user: str | None = None, path: str = "") -> str:
+    parts = urlsplit(os.environ.get("OSSIE_CLICKHOUSE_URL", clickhouse.url))
+    netloc = parts.netloc if user is None else f"{user}@{parts.netloc.rpartition('@')[2]}"
+    return f"{parts.scheme}://{netloc}/{path}"
+
+
+def test_unknown_user_is_named(clickhouse, capsys):
+    url = _server_url(clickhouse, user="ossie_no_such_user:secret")
+    err = _connect_error(capsys, url)
+    host = urlsplit(url).netloc.rpartition("@")[2]
+    assert err == (
+        f"error: ClickHouse at {urlsplit(url).scheme}://{host} refused user ossie_no_such_user: "
+        "authentication failed; check the user and password in the URL\n"
+    )
+
+
+def test_unknown_database_is_named(clickhouse, capsys):
+    err = _connect_error(capsys, _server_url(clickhouse, path="ossie_no_such_db"))
+    assert "has no database ossie_no_such_db; check the database in the URL's path" in err

@@ -14,9 +14,10 @@ import os
 import re
 from dataclasses import dataclass
 from functools import partial
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
 
 import clickhouse_connect
+from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
 from ossie import OssieDataset, OssieDocument
 from sqlglot import exp
 
@@ -62,7 +63,62 @@ def connect(url: str | None = None):
         )
     # No session: nothing here needs one, and a session serializes queries, so
     # concurrent MCP tool calls on one client would fail.
-    return clickhouse_connect.get_client(dsn=url, interface=scheme, autogenerate_session_id=False)
+    try:
+        return clickhouse_connect.get_client(
+            dsn=url, interface=scheme, autogenerate_session_id=False
+        )
+    except ClickHouseError as e:
+        raise ConnectError(_connect_problem(e, parts)) from e
+
+
+class ConnectError(OperationalError):
+    """ClickHouse could not be reached or refused the connection's user or database.
+
+    One line naming the step, the location without credentials and what to check
+    (#62): whoever set up an MCP client sees only this line in the client's log."""
+
+
+# Server error codes when connecting: the user (AUTHENTICATION_FAILED, and
+# REQUIRED_PASSWORD for a wrong password of `default`) and the URL's database.
+_AUTH_CODES = (516, 194)
+_UNKNOWN_DATABASE = 81
+
+
+def _connect_problem(e: ClickHouseError, parts: SplitResult) -> str:
+    where = f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"
+    user = unquote(parts.username or "default")
+    code = getattr(e, "code", None)
+    if code in _AUTH_CODES:
+        return (
+            f"ClickHouse at {where} refused user {user}: authentication failed; "
+            "check the user and password in the URL"
+        )
+    if code == _UNKNOWN_DATABASE:
+        database = unquote(parts.path.strip("/"))
+        return (
+            f"ClickHouse at {where} has no database {database}; "
+            "check the database in the URL's path"
+        )
+    if isinstance(e, OperationalError):  # the transport, before any answer
+        # urllib3's reason, by class name: urllib3 is the driver's dependency, not ours.
+        reason = getattr(e.__cause__, "reason", e.__cause__)
+        kinds = {c.__name__ for c in type(reason).__mro__}
+        check = "check the URL (--url or $OSSIE_CLICKHOUSE_URL) and that the server is running"
+        if "NameResolutionError" in kinds:
+            why = f"unknown host {parts.hostname}"
+        elif "NewConnectionError" in kinds:  # before TimeoutError, which it subclasses
+            why = re.sub(r"^\[Errno -?\d+\] ", "", str(reason).rpartition(": ")[2]).lower()
+        elif "TimeoutError" in kinds:
+            why = "timed out"
+        elif "SSLError" in kinds:
+            why = "TLS failed"
+            check = "check that the port serves https, or use http"
+        else:
+            why = str(e).splitlines()[0][:200]
+        return f"cannot connect to ClickHouse at {where}: {why}; {check}"
+    # ClickHouse's own message, without the driver's prefix or the server's advice.
+    message = str(e).splitlines()[0].partition("server response: ")
+    return f"cannot connect to ClickHouse at {where} as {user}: {message[2] or message[0]}"
 
 
 @dataclass

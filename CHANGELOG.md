@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-23
+
 ### Added
 
 - Metrics declared on a dataset (`datasets[].metrics`, apache/ossie#591)

@@ -64,7 +64,9 @@ analyst:                       # user or role, matched case-insensitively
 
 Pass it with `--policy policy.yaml`. Entries for the connected user and for
 each of its enabled roles are combined. The file only hides; it can never
-grant anything the database refuses.
+grant anything the database refuses. A hidden field takes with it what reads
+it: the metrics, the keys and the relationships that name it, so hiding a key
+field leaves its dataset unreachable by a join.
 
 ## Validation runs with full rights
 

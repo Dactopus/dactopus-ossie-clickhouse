@@ -142,7 +142,7 @@ questions it refuses.
 
 | Command | What it does |
 | --- | --- |
-| `validate <model>... [--url]` | Check the model; with `--url`, also that every source, column, relationship column and function outside the spec exists in ClickHouse. |
+| `validate <model>... [--url]` | Check the model; with `--url`, also that every source, column and function outside the spec exists in ClickHouse. |
 | `sql <model>... ...` | Print the SQL for a question without running it. |
 | `query <model>... ... [--json]` | Run it; TSV or JSON rows. |
 | `serve <model>...` | MCP server over stdio (needs the `[mcp]` extra). |

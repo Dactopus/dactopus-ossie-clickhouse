@@ -320,13 +320,14 @@ def join_problems(doc: OssieDocument) -> list[str]:
 def _unknown_fields(names: list[str], ds: OssieDataset) -> list[str]:
     declared = {f.name.upper() for f in ds.fields or []}
     return [
-        f"{n!r} is not a field of {ds.name!r}{_close(n, (f.name for f in ds.fields or []))}"
+        f"{n!r} is not a field of {ds.name!r}{suggest(n, (f.name for f in ds.fields or []))}"
         for n in names
         if n.upper() not in declared
     ]
 
 
-def _close(name: str, options) -> str:
+def suggest(name: str, options) -> str:
+    """The nearest known names, for an error about ``name``; empty when none is close."""
     close = difflib.get_close_matches(name, list(options), n=3, cutoff=0.5)
     return f" (did you mean: {', '.join(close)}?)" if close else ""
 

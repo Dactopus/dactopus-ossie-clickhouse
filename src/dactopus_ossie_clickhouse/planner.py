@@ -448,8 +448,10 @@ class Planner:
 
     def _fields_named(self, name: str) -> list[str]:
         """``dataset.field`` of the field ``name`` names: dataset.field, or a bare name
-        that is a field of one or more datasets (#66)."""
-        ds_name, _, f_name = name.rpartition(".")
+        that is a field of one or more datasets (#66). ".field" names none."""
+        ds_name, dot, f_name = name.rpartition(".")
+        if dot and not ds_name:
+            return []
         return [
             f"{d.name}.{self._fields[d.name.upper()][f_name.upper()].name}"
             for d in self.model.datasets

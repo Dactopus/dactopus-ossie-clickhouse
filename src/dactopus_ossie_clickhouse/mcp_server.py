@@ -111,12 +111,14 @@ def search(model: OssieDocument, text: str, limit: int = 20) -> list[dict[str, A
     to ``limit`` datasets and fields, then up to ``limit`` metrics. One limit for all
     let a broad word ("refund") fill it with fields before the metrics came (#66)."""
     words = text.lower().split()
-    hits: dict[bool, list[dict[str, Any]]] = {False: [], True: []}  # by: is a metric
+    objects: list[dict[str, Any]] = []
+    metrics: list[dict[str, Any]] = []
     for kind, name, obj in _objects(model):
         hay = " ".join([name, obj.description or "", *_ai(obj).get("synonyms", [])]).lower()
         if words and all(w in hay for w in words):
-            hits[kind == "metric"].append({"kind": kind} | _brief(obj) | {"name": name})
-    return hits[False][:limit] + hits[True][:limit]
+            hits = metrics if kind == "metric" else objects
+            hits.append({"kind": kind} | _brief(obj) | {"name": name})
+    return objects[:limit] + metrics[:limit]
 
 
 def _edge(r) -> str:

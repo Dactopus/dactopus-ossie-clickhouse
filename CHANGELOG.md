@@ -28,24 +28,28 @@ a minor release may change the Python API.
   SQLGlot's translation: `MOD(x, y, z)` ran as `x % y`, `LOG10()` as
   `LOG(10)`, and `LENGTH`, `LTRIM`, `RTRIM`, `FLOOR`, `CEIL`, `CEILING`,
   `DATE_TRUNC`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `POSITION` and
-  `CHARINDEX` dropped their extra arguments likewise. Each now takes its
-  spec signature only (see Changed).
+  `CHARINDEX` dropped their extra arguments likewise. Each now refuses
+  the arguments its translation would lose, and `validate` reports a
+  field or metric that passes them. Longer forms that reach ClickHouse
+  whole and mean there what they mean in DuckDB or Snowflake keep
+  working: `FLOOR(x, 1)`, `CEIL(x, 1)`, `LTRIM(s, 'ab')`, `RTRIM`,
+  `CHARINDEX(substr, str, start)`, `POSITION` likewise and `DATE_TRUNC`
+  with a zone.
 - `REGEXP_EXTRACT(s, 'a(b.)')` returned the capture group, `bc`, where
   the spec extracts the first match, `abc`: ClickHouse's `regexpExtract`
   returns the first group of a pattern that has one. It now returns the
-  whole match, as DuckDB does.
+  whole match, as DuckDB does; `REGEXP_EXTRACT(s, p, n)` still returns
+  group `n`.
 - `LOG(base, x)` with a base other than 2 or 10, `2.0` included, failed
   in ClickHouse, whose `log` takes one argument. It now runs as
   `LN(x) / LN(base)`.
 
 ### Changed
 
-- The catalog functions above refuse forms longer than the spec's,
-  including ones ClickHouse ran correctly, such as `FLOOR(x, 2)`,
-  `LTRIM(s, 'x')` and `POSITION('a', s, 3)`; `LOG(x)`, outside the spec,
-  is refused too, since ClickHouse reads it as the natural logarithm and
-  Postgres and DuckDB as base 10. A field or metric written so is hidden
-  from agents after the upgrade and reported by `validate`.
+- `LOG(x)`, outside the spec, is refused: ClickHouse reads it as the
+  natural logarithm, Postgres and DuckDB as base 10. A field or metric
+  that writes it is hidden from agents after the upgrade, and `validate`
+  reports it with the fix, `LN(x)` or `LOG(10, x)`.
 
 ## [0.10.0] - 2026-10-23
 

@@ -44,7 +44,9 @@ def pick_expression(expression: OssieExpression) -> str:
 # pattern, position, flags). They are not the spec's, and a rewrite may drop
 # the extra arguments and return a different value, so parse() rejects them:
 # SQLGlot prints REGEXP_LIKE(s, p, 'i') as match(s, p), MOD(a, b, c) as a % b,
-# LOG10() as LOG(10).
+# LOG10() as LOG(10). A longer form in brackets is not the spec's either, but
+# reaches ClickHouse whole and means there what it means in DuckDB, so it stays,
+# as a function outside the catalog would ("Dialect Extensions").
 _SIGNATURES = {
     "APPROX_PERCENTILE": ("APPROX_PERCENTILE(expr, p)", 2, 2),
     "TO_DATE": ("TO_DATE(string[, format])", 1, 2),
@@ -58,16 +60,16 @@ _SIGNATURES = {
     "CURRENT_DATE": ("CURRENT_DATE()", 0, 0),
     "CURRENT_TIME": ("CURRENT_TIME()", 0, 0),
     "CURRENT_TIMESTAMP": ("CURRENT_TIMESTAMP()", 0, 0),
-    "DATE_TRUNC": ("DATE_TRUNC(part, date_expr)", 2, 2),
+    "DATE_TRUNC": ("DATE_TRUNC(part, date_expr[, zone])", 2, 3),
     "LENGTH": ("LENGTH(str)", 1, 1),
-    "LTRIM": ("LTRIM(str)", 1, 1),
-    "RTRIM": ("RTRIM(str)", 1, 1),
-    "CHARINDEX": ("CHARINDEX(substr, str)", 2, 2),
+    "LTRIM": ("LTRIM(str[, characters])", 1, 2),
+    "RTRIM": ("RTRIM(str[, characters])", 1, 2),
+    "CHARINDEX": ("CHARINDEX(substr, str[, start])", 2, 3),
     "REGEXP_LIKE": ("REGEXP_LIKE(str, pattern)", 2, 2),
-    "REGEXP_EXTRACT": ("REGEXP_EXTRACT(str, pattern)", 2, 2),
-    "FLOOR": ("FLOOR(x)", 1, 1),
-    "CEIL": ("CEIL(x)", 1, 1),
-    "CEILING": ("CEILING(x)", 1, 1),
+    "REGEXP_EXTRACT": ("REGEXP_EXTRACT(str, pattern[, group])", 2, 3),
+    "FLOOR": ("FLOOR(x[, d])", 1, 2),
+    "CEIL": ("CEIL(x[, d])", 1, 2),
+    "CEILING": ("CEILING(x[, d])", 1, 2),
     "MOD": ("MOD(x, y)", 2, 2),
     "LOG": ("LOG(base, x)", 2, 2),
     "LOG10": ("LOG10(x)", 1, 1),
@@ -84,6 +86,11 @@ _SIGNATURES = {
     "NTH_VALUE": ("NTH_VALUE(expr, n)", 2, 2),
     "FIRST_VALUE": ("FIRST_VALUE(expr)", 1, 1),
     "LAST_VALUE": ("LAST_VALUE(expr)", 1, 1),
+}
+# Added to the refusal where engines read the shorter form differently.
+_HINTS = {
+    "LOG": "LOG(x) is the natural logarithm in ClickHouse and base 10 in Postgres and "
+    "DuckDB; write LN(x) or LOG(10, x)",
 }
 
 # Spec: supported date parts for EXTRACT and DATE_PART.
@@ -156,7 +163,10 @@ def _checked(name: str, build=None):
 
     def checked(args: Sequence[exp.Expression], **kwargs) -> exp.Expression:
         if not low <= len(args) <= high:
-            raise sqlglot.errors.ParseError(f"expected {signature}, got {len(args)} argument(s)")
+            hint = f"; {_HINTS[name]}" if name in _HINTS else ""
+            raise sqlglot.errors.ParseError(
+                f"expected {signature}, got {len(args)} argument(s){hint}"
+            )
         return build(args, **kwargs)  # SQLGlot retries with dialect= on TypeError
 
     return checked
@@ -189,6 +199,18 @@ class _OssieParser(Parser):
     NO_PAREN_FUNCTION_PARSERS = {
         name: parser for name, parser in Parser.NO_PAREN_FUNCTION_PARSERS.items() if name != "ANY"
     }
+
+    def _parse_position(self, haystack_first: bool = False) -> exp.StrPosition:
+        # POSITION(substr IN str) keeps its special syntax, which the signature check
+        # skips; SQLGlot keeps three arguments of POSITION(a, b, c, d) and drops the rest.
+        index = self._index
+        if len(args := self._parse_csv(self._parse_bitwise)) > 3:
+            self.raise_error(
+                "expected POSITION(substr IN str) or CHARINDEX(substr, str[, start]), "
+                f"got {len(args)} argument(s)"
+            )
+        self._retreat(index)
+        return super()._parse_position(haystack_first)
 
     def _parse_ordered(self, parse_method=None):
         ordered = super()._parse_ordered(parse_method)
@@ -281,12 +303,6 @@ def _shape_problem(node: exp.Expression) -> str | None:
     if isinstance(node, exp.Median) and isinstance(node.this, exp.Distinct):
         if (n := len(node.this.expressions)) != 1:
             return f"expected MEDIAN(expr), got {n} argument(s)"
-    # POSITION(substr IN str) has a special syntax, which the signature check skips;
-    # SQLGlot prints a fourth argument of POSITION(a, b, c, d) nowhere.
-    if isinstance(node, exp.StrPosition) and (
-        node.args.get("position") or node.args.get("occurrence")
-    ):
-        return "expected POSITION(substr IN str) or CHARINDEX(substr, str)"
     if isinstance(node, exp.Extract) and node.name.upper() not in _DATE_PARTS:
         return f"{node.name} is not a date part; expected one of " + ", ".join(sorted(_DATE_PARTS))
     if isinstance(node, exp.WindowSpec):
@@ -571,9 +587,11 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
     if isinstance(node, exp.ToChar):
         return _f("formatDateTime", node.this, _fmt_literal(node.args.get("format")))
     # Spec: the first match. ClickHouse's regexpExtract returns the first capture
-    # group when the pattern has one; group 0 is the whole match, as in DuckDB.
+    # group when the pattern has one; group 0 is the whole match, as in DuckDB. A
+    # third argument is the group in both, though SQLGlot reads it as a position.
     if isinstance(node, exp.RegexpExtract):
-        return _f("regexpExtract", node.this, node.expression, exp.Literal.number(0))
+        group = node.args.get("position") or exp.Literal.number(0)
+        return _f("regexpExtract", node.this, node.expression, group)
     if isinstance(node, exp.SplitPart):
         parts = _f("splitByString", node.args["delimiter"], node.this)
         return _f("arrayElement", parts, node.args["part_index"])

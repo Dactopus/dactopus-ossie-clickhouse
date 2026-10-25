@@ -98,20 +98,26 @@ CATALOG = [
     ("TO_CHAR(d, 'YYYY-MM-DD')", "2024-03-15"), ("TO_CHAR(ts, 'DD MON YYYY HH12:MI PM')", "15 Mar 2024 10:30 AM"),
     # --- strings
     ("CONCAT(s, s)", DUCK), ("s || s", DUCK), ("LENGTH(s)", DUCK), ("LOWER(s)", DUCK), ("UPPER(s)", DUCK),
-    ("TRIM(s)", DUCK), ("LTRIM(s)", DUCK), ("RTRIM(s)", DUCK), ("LEFT(s, 2)", DUCK), ("RIGHT(s, 2)", DUCK),
+    ("TRIM(s)", DUCK), ("LTRIM(s)", DUCK), ("RTRIM(s)", DUCK),
+    ("LTRIM(s, 'ab')", DUCK), ("RTRIM(s, 'fe')", DUCK), ("LEFT(s, 2)", DUCK), ("RIGHT(s, 2)", DUCK),
     ("SUBSTRING(s, 1, 2)", DUCK), ("REPLACE(s, 'a', 'b')", DUCK), ("SPLIT_PART(s, '-', 1)", DUCK),
     ("SPLIT_PART(s, '-', 5)", ""),  # out of range: empty string, as in Snowflake/Postgres
-    ("POSITION('c' IN s)", DUCK), ("CHARINDEX('c', s)", 3), ("CONTAINS(s, 'c')", DUCK),
+    ("POSITION('c' IN s)", DUCK), ("CHARINDEX('c', s)", 3),
+    # a start, as in Snowflake (DuckDB lacks CHARINDEX)
+    ("CHARINDEX('c', CONCAT(s, s), 4)", 10), ("CONTAINS(s, 'c')", DUCK),
     ("CONTAINS(s, 'a') = CONTAINS(s, 'c')", DUCK), ("NOT CONTAINS(s, 'z')", DUCK),
     ("STARTSWITH(s, 'ab')", 1), ("ENDSWITH(s, 'ab')", 0),
     ("s LIKE 'a%'", DUCK), ("s ILIKE 'A%'", DUCK), ("REGEXP_LIKE(s, 'a.*')", 1),
     ("(s LIKE 'a!%' ESCAPE '!') = 0", DUCK),
     ("REGEXP_EXTRACT(s, 'b.')", DUCK), ("REGEXP_EXTRACT(s, 'a(b.)')", DUCK),
+    ("REGEXP_EXTRACT(s, '(a)(b)', 2)", DUCK),
     ("REGEXP_EXTRACT(s, 'z')", DUCK), ("REGEXP_COUNT(s, '[a-c]')", 3),
     # Spec: "replace matches", plural, so all occurrences (Snowflake, BigQuery); DuckDB replaces the first only.
     ("REGEXP_REPLACE(s, '[ab]', 'x')", "xxc-def"),
     # --- math
     ("ABS(x)", DUCK), ("ROUND(x, 1)", DUCK), ("FLOOR(x)", DUCK), ("CEIL(x)", DUCK), ("CEILING(x)", DUCK),
+    # to d digits, as in Snowflake (DuckDB lacks the form)
+    ("FLOOR(x * 1.23, 1)", 3.0), ("CEIL(x * 1.23, 1)", 3.1), ("CEILING(x * 1.23, 1)", 3.1),
     ("TRUNC(x, 1)", DUCK), ("TRUNCATE(x, 1)", 2.5), ("MOD(x, 2)", DUCK), ("SIGN(x)", DUCK),
     ("POWER(x, 2)", DUCK), ("SQRT(x)", DUCK), ("EXP(x)", DUCK), ("LN(x)", DUCK), ("LOG(10, x)", DUCK),
     ("LOG(2, x)", DUCK), ("LOG(3, x)", DUCK), ("LOG(2.0, x)", DUCK), ("LOG(x, 8)", DUCK), ("LOG10(x)", DUCK),

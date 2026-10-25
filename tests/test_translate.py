@@ -166,7 +166,9 @@ def test_translate_uses_picked_dialect():
         ("LOG(2, x)", "LOG2(x)"),
         ("LOG(10, x)", "LOG10(x)"),
         ("LOG(3, x)", "(LN(x) * 1.0) / LN(3)"),
-        ("LOG(2.0, x)", "(LN(x) * 1.0) / LN(2.0)"),
+        ("LOG(2.0, x)", "LOG2(x)"),
+        ("LOG(1e1, x)", "LOG10(x)"),
+        ("LOG(-2, x)", "(LN(x) * 1.0) / LN(-2)"),
         # the whole first match, not ClickHouse's first capture group
         ("REGEXP_EXTRACT(s, 'a(b.)')", "regexpExtract(s, 'a(b.)', 0)"),
         ("REGEXP_EXTRACT(s, '(a)(b)', 2)", "regexpExtract(s, '(a)(b)', 2)"),
@@ -274,7 +276,10 @@ def test_format_must_be_literal():
         ("LTRIM(s, 'a', 'b')", r"expected LTRIM\(str\[, characters\]\), got 3"),
         ("RTRIM(s, 'a', 'b')", r"expected RTRIM\(str\[, characters\]\), got 3"),
         ("CHARINDEX('a', s, 1, 2)", r"expected CHARINDEX\(substr, str\[, start\]\), got 4"),
-        ("POSITION('a', s, 1, 2)", r"expected POSITION\(substr IN str\) or CHARINDEX.*got 4"),
+        (
+            "POSITION('a', s, 1, 2)",
+            r"expected POSITION\(substr IN str\) or POSITION\(substr, .*got 4",
+        ),
         ("FLOOR(x, 1, 2)", r"expected FLOOR\(x\[, d\]\), got 3"),
         ("CEIL(x, 1, 2)", r"expected CEIL\(x\[, d\]\), got 3"),
         ("CEILING(x, 1, 2)", r"expected CEILING\(x\[, d\]\), got 3"),
@@ -284,6 +289,7 @@ def test_format_must_be_literal():
         ("REGEXP_EXTRACT(s, 'a', 1, 'i')", r"expected REGEXP_EXTRACT\(str, pattern\[, group\]\)"),
         # LOG(x) is ln in ClickHouse, log10 in Postgres and DuckDB
         ("LOG(x)", r"expected LOG\(base, x\), got 1 .*; write LN\(x\) or LOG\(10, x\)"),
+        ("LOG(a, b, c)", r"expected LOG\(base, x\), got 3 argument\(s\)$"),
         ("LOG10()", r"expected LOG10\(x\), got 0"),
         (
             "LAG(v, 1, 0, 2) OVER (ORDER BY k)",

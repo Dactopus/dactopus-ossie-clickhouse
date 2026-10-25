@@ -42,7 +42,9 @@ def pick_expression(expression: OssieExpression) -> str:
 # generator, checked on the arguments as written. The default dialect also
 # parses other engines' longer forms, such as Snowflake's REGEXP_COUNT(str,
 # pattern, position, flags). They are not the spec's, and a rewrite may drop
-# the extra arguments and return a different value, so parse() rejects them.
+# the extra arguments and return a different value, so parse() rejects them:
+# SQLGlot prints REGEXP_LIKE(s, p, 'i') as match(s, p), MOD(a, b, c) as a % b,
+# LOG10() as LOG(10).
 _SIGNATURES = {
     "APPROX_PERCENTILE": ("APPROX_PERCENTILE(expr, p)", 2, 2),
     "TO_DATE": ("TO_DATE(string[, format])", 1, 2),
@@ -53,7 +55,22 @@ _SIGNATURES = {
     "MEDIAN": ("MEDIAN(expr)", 1, 1),
     "PERCENTILE_CONT": ("PERCENTILE_CONT(p) WITHIN GROUP (ORDER BY expr)", 1, 1),
     "PERCENTILE_DISC": ("PERCENTILE_DISC(p) WITHIN GROUP (ORDER BY expr)", 1, 1),
+    "CURRENT_DATE": ("CURRENT_DATE()", 0, 0),
     "CURRENT_TIME": ("CURRENT_TIME()", 0, 0),
+    "CURRENT_TIMESTAMP": ("CURRENT_TIMESTAMP()", 0, 0),
+    "DATE_TRUNC": ("DATE_TRUNC(part, date_expr)", 2, 2),
+    "LENGTH": ("LENGTH(str)", 1, 1),
+    "LTRIM": ("LTRIM(str)", 1, 1),
+    "RTRIM": ("RTRIM(str)", 1, 1),
+    "CHARINDEX": ("CHARINDEX(substr, str)", 2, 2),
+    "REGEXP_LIKE": ("REGEXP_LIKE(str, pattern)", 2, 2),
+    "REGEXP_EXTRACT": ("REGEXP_EXTRACT(str, pattern)", 2, 2),
+    "FLOOR": ("FLOOR(x)", 1, 1),
+    "CEIL": ("CEIL(x)", 1, 1),
+    "CEILING": ("CEILING(x)", 1, 1),
+    "MOD": ("MOD(x, y)", 2, 2),
+    "LOG": ("LOG(base, x)", 2, 2),
+    "LOG10": ("LOG10(x)", 1, 1),
     "TO_CHAR": ("TO_CHAR(date_expr, format)", 2, 2),
     "SPLIT_PART": ("SPLIT_PART(str, delimiter, part)", 3, 3),
     "REGEXP_COUNT": ("REGEXP_COUNT(str, pattern)", 2, 2),
@@ -156,12 +173,16 @@ class _OssieParser(Parser):
     # Only the catalog's functions get SQLGlot's typed nodes; any other name
     # parses as exp.Anonymous and prints as written. FUNCTION_PARSERS holds the
     # special syntaxes (CAST, EXTRACT, TRIM, SUBSTRING ... FROM, POSITION ... IN).
+    # One of a name with a signature would skip its check: CEIL(x TO DAY) and
+    # FLOOR(x, 2) are not the spec's, so those two parse as plain calls.
     FUNCTIONS = {
         **{name: Parser.FUNCTIONS[name] for name in _CATALOG if name in Parser.FUNCTIONS},
         **{name: _checked(name, _BUILDERS.get(name)) for name in _SIGNATURES},
     }
     FUNCTION_PARSERS = {
-        name: parser for name, parser in Parser.FUNCTION_PARSERS.items() if name in _CATALOG
+        name: parser
+        for name, parser in Parser.FUNCTION_PARSERS.items()
+        if name in _CATALOG and name not in _SIGNATURES
     }
     # ANY is x = ANY (subquery), which the spec has no use for; without this,
     # ClickHouse's any(x) printed as ANY(x), and ANY(x) + 1 parsed as ANY((x) + 1).
@@ -260,6 +281,12 @@ def _shape_problem(node: exp.Expression) -> str | None:
     if isinstance(node, exp.Median) and isinstance(node.this, exp.Distinct):
         if (n := len(node.this.expressions)) != 1:
             return f"expected MEDIAN(expr), got {n} argument(s)"
+    # POSITION(substr IN str) has a special syntax, which the signature check skips;
+    # SQLGlot prints a fourth argument of POSITION(a, b, c, d) nowhere.
+    if isinstance(node, exp.StrPosition) and (
+        node.args.get("position") or node.args.get("occurrence")
+    ):
+        return "expected POSITION(substr IN str) or CHARINDEX(substr, str)"
     if isinstance(node, exp.Extract) and node.name.upper() not in _DATE_PARTS:
         return f"{node.name} is not a date part; expected one of " + ", ".join(sorted(_DATE_PARTS))
     if isinstance(node, exp.WindowSpec):
@@ -528,10 +555,25 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
         if not floated and not isinstance(this, exp.Div):
             node.set("this", _to_float(node.this))
         return node
+    # ClickHouse's log takes one argument, the natural logarithm. SQLGlot prints LOG(2, x)
+    # and LOG(10, x) as log2 and log10, and any other base as written, which fails.
+    if isinstance(node, exp.Log) and node.expression:
+        base = node.this
+        # As SQLGlot's generator tells them: by the literal's text, so LOG(2.0, x) too.
+        if not (base.is_number and base.name in ("2", "10")):
+            # Floated as the Div rule floats it: rewritten twice, the same.
+            return exp.Div(
+                this=_to_float(exp.Ln(this=node.expression)), expression=exp.Ln(this=base)
+            )
+        return node
     if isinstance(node, exp.Extract) and node.name.upper() in _EXTRACT_PARTS:
         return _f(_EXTRACT_PARTS[node.name.upper()], node.expression)
     if isinstance(node, exp.ToChar):
         return _f("formatDateTime", node.this, _fmt_literal(node.args.get("format")))
+    # Spec: the first match. ClickHouse's regexpExtract returns the first capture
+    # group when the pattern has one; group 0 is the whole match, as in DuckDB.
+    if isinstance(node, exp.RegexpExtract):
+        return _f("regexpExtract", node.this, node.expression, exp.Literal.number(0))
     if isinstance(node, exp.SplitPart):
         parts = _f("splitByString", node.args["delimiter"], node.this)
         return _f("arrayElement", parts, node.args["part_index"])

@@ -213,7 +213,10 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
   (`exp.and_` does for `WHERE`, `HAVING` and `ON`).
 - A rewritten function, ours or SQLGlot's, gets its spec signature in
   `_SIGNATURES`; `parse()` rejects other argument counts, so a rewrite
-  never drops an argument.
+  never drops an argument. A name there parses as a plain call, never
+  through SQLGlot's special syntax (`CEIL(x TO DAY)`), which skips the
+  check; `POSITION(substr IN str)` keeps its own, checked in
+  `_shape_problem`.
 - `parse()` types only the spec's function catalog (`_CATALOG`); any
   other function is `exp.Anonymous` and reaches ClickHouse as written, so
   SQLGlot never renames it (`DAYOFWEEK` to `DAY_OF_WEEK`, which ClickHouse

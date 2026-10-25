@@ -4,6 +4,7 @@ from ossie import OssieDialect, OssieDialectExpression, OssieExpression
 from dactopus_ossie_clickhouse.translate import (
     _CATALOG,
     _SIGNATURES,
+    _OssieParser,
     convert_format,
     parse,
     passthrough_functions,
@@ -161,6 +162,13 @@ def test_translate_uses_picked_dialect():
         ("a - b - c + d", "(a - b - c) + d"),
         ("x LIKE 'a!%' ESCAPE '!' AND y", "(x LIKE 'a!%' ESCAPE '!') AND y"),
         ("REGEXP_COUNT(s, 'a')", "countMatches(s, 'a')"),
+        # ClickHouse's log has no base: log2 and log10, else LN(x) / LN(base)
+        ("LOG(2, x)", "LOG2(x)"),
+        ("LOG(10, x)", "LOG10(x)"),
+        ("LOG(3, x)", "(LN(x) * 1.0) / LN(3)"),
+        ("LOG(2.0, x)", "(LN(x) * 1.0) / LN(2.0)"),
+        # the whole first match, not ClickHouse's first capture group
+        ("REGEXP_EXTRACT(s, 'a(b.)')", "regexpExtract(s, 'a(b.)', 0)"),
         # conditionals
         ("IFF(x > 1, 1, 0)", "if(x > 1, 1, 0)"),
         ("ZEROIFNULL(x)", "ifNull(x, 0)"),
@@ -218,6 +226,8 @@ def test_passthrough_functions_are_the_names_outside_the_catalog():
     assert passthrough_functions(tree) == {"DAYOFWEEK", "sumIf"}
     assert passthrough_functions(parse("any(x) + ANY(y)")) == {"any", "ANY"}
     assert set(_SIGNATURES) <= _CATALOG
+    # a special syntax would skip the signature check
+    assert not set(_SIGNATURES) & set(_OssieParser.FUNCTION_PARSERS)
 
 
 def test_convert_format_tokens():
@@ -246,6 +256,24 @@ def test_format_must_be_literal():
         ("NULLIFZERO(x, 5)", r"expected NULLIFZERO\(expr\), got 2"),
         ("IFF(a, 1, 2, 3)", r"expected IFF\(condition, true_result, false_result\), got 4"),
         ("CURRENT_TIME(3)", r"expected CURRENT_TIME\(\), got 1"),
+        # SQLGlot's ClickHouse generator drops the extra arguments of these
+        ("REGEXP_LIKE(s, 'a.b', 'i')", r"expected REGEXP_LIKE\(str, pattern\), got 3"),
+        ("CURRENT_DATE(1)", r"expected CURRENT_DATE\(\), got 1"),
+        ("CURRENT_TIMESTAMP(6)", r"expected CURRENT_TIMESTAMP\(\), got 1"),
+        ("DATE_TRUNC('day', d, 'UTC', 1)", r"expected DATE_TRUNC\(part, date_expr\), got 4"),
+        ("LENGTH(s, 'UTF8')", r"expected LENGTH\(str\), got 2"),
+        ("LTRIM(s, 'a', 'b')", r"expected LTRIM\(str\), got 3"),
+        ("RTRIM(s, 'a', 'b')", r"expected RTRIM\(str\), got 3"),
+        ("CHARINDEX('a', s, 1, 2)", r"expected CHARINDEX\(substr, str\), got 4"),
+        ("POSITION('a', s, 1, 2)", r"expected POSITION\(substr IN str\) or CHARINDEX"),
+        ("FLOOR(x, 1, 2)", r"expected FLOOR\(x\), got 3"),
+        ("CEIL(x, 1, 2)", r"expected CEIL\(x\), got 3"),
+        ("CEILING(x, 1, 2)", r"expected CEILING\(x\), got 3"),
+        ("MOD(x, 2, 3)", r"expected MOD\(x, y\), got 3"),
+        ("REGEXP_EXTRACT(s, 'a', 1, 1, 'i')", r"expected REGEXP_EXTRACT\(str, pattern\), got 5"),
+        # LOG(x) is ln in ClickHouse, log10 in Postgres and DuckDB
+        ("LOG(x)", r"expected LOG\(base, x\), got 1"),
+        ("LOG10()", r"expected LOG10\(x\), got 0"),
         (
             "LAG(v, 1, 0, 2) OVER (ORDER BY k)",
             r"expected LAG\(expr\[, offset\[, default\]\]\), got 4",

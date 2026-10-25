@@ -172,6 +172,10 @@ def test_policy_file_hides_metric_for_role(admin):
     assert "spread" not in {m.name for m in ex.model.metrics}
     with pytest.raises(PlanError, match="unknown metric 'spread'"):
         ex.execute(Query(metrics=("spread",)))
+    # Nor is it named among the metrics over the field it reads (#66).
+    with pytest.raises(PlanError) as e:
+        ex.execute(Query(metrics=("orders.amount",)))
+    assert "metrics over it:" in str(e.value) and "spread" not in str(e.value)
     unrestricted = Executor(admin, load_model(FIXTURE), Policy.load(POLICY))
     assert "spread" in {m.name for m in unrestricted.model.metrics}
 

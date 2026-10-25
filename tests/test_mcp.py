@@ -56,6 +56,10 @@ def test_search_by_synonym_and_name():
     # words may be apart and in any order: "customer value" hits the CLV description
     assert [h["name"] for h in search(MODEL, "value customer")] == ["customer_lifetime_value"]
     assert search(MODEL, "return discount") == []
+    # Datasets and fields, then metrics, each up to the limit: "sales" matches 10 of
+    # them before its 9 metrics, which one limit for all cut off (#66).
+    kinds = [h["kind"] for h in search(MODEL, "sales", limit=3)]
+    assert kinds == ["dataset", "field", "field", "metric", "metric", "metric"]
 
 
 def test_describe_dataset_metric_field_and_unknown():

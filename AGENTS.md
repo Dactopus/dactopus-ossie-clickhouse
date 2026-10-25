@@ -141,6 +141,9 @@ Python library with a CLI entry point. The parts that constrain code:
 - Name resolution is case-insensitive (spec rule); emitted SQL uses physical
   names exactly as the model writes them (ClickHouse is case-sensitive).
 - Planner errors name the nearest known object; agents recover from that.
+  A field asked for as a metric is named as a field, with the metrics
+  that read it (`Planner._field_not_metric`): by spelling, `dataset.field`
+  gets metrics over other fields (#66).
 
 ## Testing
 

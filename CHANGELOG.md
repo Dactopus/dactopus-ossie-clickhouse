@@ -7,6 +7,22 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Fixed
+
+- A field asked for as a metric, such as `refunds.refunded_amount`, got
+  the metrics nearest in spelling, which add up other fields (#66).
+  Since 0.10.0 a dataset's metric is asked for as `dataset.metric`, so a
+  field reads like one. The error now says that the name is a field and
+  lists the metrics whose expressions read it, or says that none does;
+  a bare name that is a field gets the same answer, with any dataset's
+  metric of that name. A name that is neither keeps the suggestions by
+  spelling.
+- `search_model` returned the first 20 matches, datasets and fields
+  before metrics, so a broad word could leave every metric out: in the
+  commerce model of dactopus-data-models, "refund" matches 36 objects
+  and `refunds_total` came 36th. It now returns up to 20 datasets and
+  fields, then up to 20 metrics.
+
 ## [0.10.0] - 2026-10-23
 
 ### Added

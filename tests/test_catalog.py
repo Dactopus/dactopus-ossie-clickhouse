@@ -106,14 +106,15 @@ CATALOG = [
     ("STARTSWITH(s, 'ab')", 1), ("ENDSWITH(s, 'ab')", 0),
     ("s LIKE 'a%'", DUCK), ("s ILIKE 'A%'", DUCK), ("REGEXP_LIKE(s, 'a.*')", 1),
     ("(s LIKE 'a!%' ESCAPE '!') = 0", DUCK),
-    ("REGEXP_EXTRACT(s, 'b.')", DUCK), ("REGEXP_COUNT(s, '[a-c]')", 3),
+    ("REGEXP_EXTRACT(s, 'b.')", DUCK), ("REGEXP_EXTRACT(s, 'a(b.)')", DUCK),
+    ("REGEXP_EXTRACT(s, 'z')", DUCK), ("REGEXP_COUNT(s, '[a-c]')", 3),
     # Spec: "replace matches", plural, so all occurrences (Snowflake, BigQuery); DuckDB replaces the first only.
     ("REGEXP_REPLACE(s, '[ab]', 'x')", "xxc-def"),
     # --- math
     ("ABS(x)", DUCK), ("ROUND(x, 1)", DUCK), ("FLOOR(x)", DUCK), ("CEIL(x)", DUCK), ("CEILING(x)", DUCK),
     ("TRUNC(x, 1)", DUCK), ("TRUNCATE(x, 1)", 2.5), ("MOD(x, 2)", DUCK), ("SIGN(x)", DUCK),
     ("POWER(x, 2)", DUCK), ("SQRT(x)", DUCK), ("EXP(x)", DUCK), ("LN(x)", DUCK), ("LOG(10, x)", DUCK),
-    ("LOG(2, x)", DUCK), ("LOG10(x)", DUCK),
+    ("LOG(2, x)", DUCK), ("LOG(3, x)", DUCK), ("LOG(2.0, x)", DUCK), ("LOG(x, 8)", DUCK), ("LOG10(x)", DUCK),
     ("SIN(x)", DUCK), ("COS(x)", DUCK), ("TAN(x)", DUCK), ("ASIN(0.5)", DUCK), ("ACOS(0.5)", DUCK),
     ("ATAN(x)", DUCK), ("ATAN2(x, x)", DUCK), ("RADIANS(x)", DUCK), ("DEGREES(x)", DUCK), ("PI()", DUCK),
     ("GREATEST(x, 1, 2)", DUCK), ("LEAST(x, 1, 2)", DUCK),

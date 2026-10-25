@@ -184,6 +184,8 @@ def test_a_field_asked_for_as_a_metric_names_the_metrics_over_it(planner, tmp_pa
         "a metric; metrics over them: total_revenue, revenue_or_zero, total_returns, "
         "return_rate, orders.revenue, returns.revenue"
     )
+    # A leading dot names no dataset: suggestions by spelling, not a field of one.
+    assert "it is a field" not in refusal(planner, Query((".amount",)))
     assert refusal(planner, Query(("customers.segment",))).endswith(
         "it is a field of customers, not a metric; no metric reads it"
     )

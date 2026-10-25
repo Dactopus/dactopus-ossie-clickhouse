@@ -85,6 +85,8 @@ CATALOG = [
     ("DATE_TRUNC('year', d)", DUCK), ("DATE_TRUNC('quarter', d)", DUCK), ("DATE_TRUNC('month', d)", DUCK),
     ("DATE_TRUNC('week', d)", DUCK), ("DATE_TRUNC('day', d)", DUCK), ("DATE_TRUNC('hour', ts)", DUCK),
     ("DATE_TRUNC('minute', ts)", DUCK), ("DATE_TRUNC('second', ts)", DUCK),
+    # Postgres's form (DuckDB lacks it): truncated in the zone, midnight there
+    ("DATE_TRUNC('day', CAST('2024-03-15 02:00:00+00:00' AS TIMESTAMP), 'America/Los_Angeles')", D(2024, 3, 14)),
     ("DATEADD(day, 7, d)", D(2024, 3, 22)), ("DATEADD(month, -1, d)", D(2024, 2, 15)),  # DuckDB lacks DATEADD
     ("DATEADD(year, 1, d)", D(2025, 3, 15)),
     ("DATEDIFF(day, d, d2)", 66), ("DATEDIFF(month, d, d2)", 2), ("DATEDIFF(year, d, d2)", 0),
@@ -99,12 +101,13 @@ CATALOG = [
     # --- strings
     ("CONCAT(s, s)", DUCK), ("s || s", DUCK), ("LENGTH(s)", DUCK), ("LOWER(s)", DUCK), ("UPPER(s)", DUCK),
     ("TRIM(s)", DUCK), ("LTRIM(s)", DUCK), ("RTRIM(s)", DUCK),
-    ("LTRIM(s, 'ab')", DUCK), ("RTRIM(s, 'fe')", DUCK), ("LEFT(s, 2)", DUCK), ("RIGHT(s, 2)", DUCK),
+    ("LTRIM(s, 'ba')", DUCK), ("RTRIM(s, 'fe')", DUCK), ("LEFT(s, 2)", DUCK), ("RIGHT(s, 2)", DUCK),
     ("SUBSTRING(s, 1, 2)", DUCK), ("REPLACE(s, 'a', 'b')", DUCK), ("SPLIT_PART(s, '-', 1)", DUCK),
     ("SPLIT_PART(s, '-', 5)", ""),  # out of range: empty string, as in Snowflake/Postgres
     ("POSITION('c' IN s)", DUCK), ("CHARINDEX('c', s)", 3),
     # a start, as in Snowflake (DuckDB lacks CHARINDEX)
-    ("CHARINDEX('c', CONCAT(s, s), 4)", 10), ("CONTAINS(s, 'c')", DUCK),
+    ("CHARINDEX('c', CONCAT(s, s), 4)", 10), ("POSITION('c', CONCAT(s, s), 4)", 10),
+    ("CONTAINS(s, 'c')", DUCK),
     ("CONTAINS(s, 'a') = CONTAINS(s, 'c')", DUCK), ("NOT CONTAINS(s, 'z')", DUCK),
     ("STARTSWITH(s, 'ab')", 1), ("ENDSWITH(s, 'ab')", 0),
     ("s LIKE 'a%'", DUCK), ("s ILIKE 'A%'", DUCK), ("REGEXP_LIKE(s, 'a.*')", 1),
@@ -121,6 +124,10 @@ CATALOG = [
     ("TRUNC(x, 1)", DUCK), ("TRUNCATE(x, 1)", 2.5), ("MOD(x, 2)", DUCK), ("SIGN(x)", DUCK),
     ("POWER(x, 2)", DUCK), ("SQRT(x)", DUCK), ("EXP(x)", DUCK), ("LN(x)", DUCK), ("LOG(10, x)", DUCK),
     ("LOG(2, x)", DUCK), ("LOG(3, x)", DUCK), ("LOG(2.0, x)", DUCK), ("LOG(x, 8)", DUCK), ("LOG10(x)", DUCK),
+    # exact for a base written 10.0: LN(1000) / LN(10.0) is 2.9999999999999996
+    ("FLOOR(LOG(10.0, 1000))", DUCK),
+    # no logarithm to a negative base: nan (None from the executor); Postgres and DuckDB fail
+    ("LOG(-2, 8)", math.nan),
     ("SIN(x)", DUCK), ("COS(x)", DUCK), ("TAN(x)", DUCK), ("ASIN(0.5)", DUCK), ("ACOS(0.5)", DUCK),
     ("ATAN(x)", DUCK), ("ATAN2(x, x)", DUCK), ("RADIANS(x)", DUCK), ("DEGREES(x)", DUCK), ("PI()", DUCK),
     ("GREATEST(x, 1, 2)", DUCK), ("LEAST(x, 1, 2)", DUCK),

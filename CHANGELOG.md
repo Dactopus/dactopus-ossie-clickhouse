@@ -31,7 +31,7 @@ a minor release may change the Python API.
   `CHARINDEX` dropped their extra arguments likewise. Each now refuses
   the arguments its translation would lose, and `validate` reports a
   field or metric that passes them. Longer forms that reach ClickHouse
-  whole and mean there what they mean in DuckDB or Snowflake keep
+  whole and mean there what they mean in DuckDB, Snowflake or Postgres keep
   working: `FLOOR(x, 1)`, `CEIL(x, 1)`, `LTRIM(s, 'ab')`, `RTRIM`,
   `CHARINDEX(substr, str, start)`, `POSITION` likewise and `DATE_TRUNC`
   with a zone.
@@ -40,9 +40,11 @@ a minor release may change the Python API.
   returns the first group of a pattern that has one. It now returns the
   whole match, as DuckDB does; `REGEXP_EXTRACT(s, p, n)` still returns
   group `n`.
-- `LOG(base, x)` with a base other than 2 or 10, `2.0` included, failed
-  in ClickHouse, whose `log` takes one argument. It now runs as
-  `LN(x) / LN(base)`.
+- `LOG(base, x)` with a base other than 2 or 10 failed in ClickHouse,
+  whose `log` takes one argument. It now runs as `LN(x) / LN(base)`.
+  `LOG(-2, x)` and `LOG(-10, x)` ran as `log2(x)` and `log10(x)`, a value
+  where there is none; they now give none. A base written `2.0` or `10.0`
+  runs as `log2` and `log10`, so `LOG(10.0, 1000)` is exactly 3.
 
 ### Changed
 

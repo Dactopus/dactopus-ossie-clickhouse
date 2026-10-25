@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from decimal import Decimal
 
 import sqlglot
 import sqlglot.errors
@@ -45,8 +46,9 @@ def pick_expression(expression: OssieExpression) -> str:
 # the extra arguments and return a different value, so parse() rejects them:
 # SQLGlot prints REGEXP_LIKE(s, p, 'i') as match(s, p), MOD(a, b, c) as a % b,
 # LOG10() as LOG(10). A longer form in brackets is not the spec's either, but
-# reaches ClickHouse whole and means there what it means in DuckDB, so it stays,
-# as a function outside the catalog would ("Dialect Extensions").
+# reaches ClickHouse whole and means there what it means in DuckDB, Snowflake or
+# Postgres, so it stays, as a function outside the catalog would ("Dialect
+# Extensions").
 _SIGNATURES = {
     "APPROX_PERCENTILE": ("APPROX_PERCENTILE(expr, p)", 2, 2),
     "TO_DATE": ("TO_DATE(string[, format])", 1, 2),
@@ -87,9 +89,10 @@ _SIGNATURES = {
     "FIRST_VALUE": ("FIRST_VALUE(expr)", 1, 1),
     "LAST_VALUE": ("LAST_VALUE(expr)", 1, 1),
 }
-# Added to the refusal where engines read the shorter form differently.
+# Added to the refusal of a call, by name and argument count, that engines read
+# differently.
 _HINTS = {
-    "LOG": "LOG(x) is the natural logarithm in ClickHouse and base 10 in Postgres and "
+    ("LOG", 1): "LOG(x) is the natural logarithm in ClickHouse and base 10 in Postgres and "
     "DuckDB; write LN(x) or LOG(10, x)",
 }
 
@@ -163,7 +166,7 @@ def _checked(name: str, build=None):
 
     def checked(args: Sequence[exp.Expression], **kwargs) -> exp.Expression:
         if not low <= len(args) <= high:
-            hint = f"; {_HINTS[name]}" if name in _HINTS else ""
+            hint = f"; {_HINTS[name, len(args)]}" if (name, len(args)) in _HINTS else ""
             raise sqlglot.errors.ParseError(
                 f"expected {signature}, got {len(args)} argument(s){hint}"
             )
@@ -184,7 +187,7 @@ class _OssieParser(Parser):
     # parses as exp.Anonymous and prints as written. FUNCTION_PARSERS holds the
     # special syntaxes (CAST, EXTRACT, TRIM, SUBSTRING ... FROM, POSITION ... IN).
     # One of a name with a signature would skip its check: CEIL(x TO DAY) and
-    # FLOOR(x, 2) are not the spec's, so those two parse as plain calls.
+    # FLOOR(x TO DAY) are not the spec's, so those two parse as plain calls.
     FUNCTIONS = {
         **{name: Parser.FUNCTIONS[name] for name in _CATALOG if name in Parser.FUNCTIONS},
         **{name: _checked(name, _BUILDERS.get(name)) for name in _SIGNATURES},
@@ -206,7 +209,7 @@ class _OssieParser(Parser):
         index = self._index
         if len(args := self._parse_csv(self._parse_bitwise)) > 3:
             self.raise_error(
-                "expected POSITION(substr IN str) or CHARINDEX(substr, str[, start]), "
+                "expected POSITION(substr IN str) or POSITION(substr, str[, start]), "
                 f"got {len(args)} argument(s)"
             )
         self._retreat(index)
@@ -575,13 +578,16 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
     # and LOG(10, x) as log2 and log10, and any other base as written, which fails.
     if isinstance(node, exp.Log) and node.expression:
         base = node.this
-        # As SQLGlot's generator tells them: by the literal's text, so LOG(2.0, x) too.
-        if not (base.is_number and base.name in ("2", "10")):
-            # Floated as the Div rule floats it: rewritten twice, the same.
-            return exp.Div(
-                this=_to_float(exp.Ln(this=node.expression)), expression=exp.Ln(this=base)
-            )
-        return node
+        # SQLGlot's generator tells 2 and 10 by the text, past a minus sign: LOG(-2, x)
+        # printed as log2(x). By value here, so 2.0 and 1e1 stay exact; LN(x) / LN(10.0)
+        # is 2.9999999999999996 for x = 1000.
+        if isinstance(base, exp.Literal) and not base.is_string:
+            value = Decimal(base.this)
+            if value in (2, 10):
+                node.set("this", exp.Literal.number(int(value)))
+                return node
+        # Floated as the Div rule floats it: rewritten twice, the same.
+        return exp.Div(this=_to_float(exp.Ln(this=node.expression)), expression=exp.Ln(this=base))
     if isinstance(node, exp.Extract) and node.name.upper() in _EXTRACT_PARTS:
         return _f(_EXTRACT_PARTS[node.name.upper()], node.expression)
     if isinstance(node, exp.ToChar):

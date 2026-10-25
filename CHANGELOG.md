@@ -7,6 +7,15 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-25
+
+### Changed
+
+- `LOG(x)`, outside the spec, is refused: ClickHouse reads it as the
+  natural logarithm, Postgres and DuckDB as base 10. A field or metric
+  that writes it is hidden from agents after the upgrade, and `validate`
+  reports it with the fix, `LN(x)` or `LOG(10, x)`.
+
 ### Fixed
 
 - A field asked for as a metric, such as `refunds.refunded_amount`, got
@@ -45,13 +54,6 @@ a minor release may change the Python API.
   `LOG(-2, x)` and `LOG(-10, x)` ran as `log2(x)` and `log10(x)`, a value
   where there is none; they now give none. A base written `2.0` or `10.0`
   runs as `log2` and `log10`, so `LOG(10.0, 1000)` is exactly 3.
-
-### Changed
-
-- `LOG(x)`, outside the spec, is refused: ClickHouse reads it as the
-  natural logarithm, Postgres and DuckDB as base 10. A field or metric
-  that writes it is hidden from agents after the upgrade, and `validate`
-  reports it with the fix, `LN(x)` or `LOG(10, x)`.
 
 ## [0.10.0] - 2026-10-23
 

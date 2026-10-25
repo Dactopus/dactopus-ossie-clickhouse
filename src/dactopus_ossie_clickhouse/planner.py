@@ -440,9 +440,51 @@ class Planner:
         named ``dataset.metric``."""
         m = self._metrics.get(name.upper())
         if m is None:
-            names = (x.name for x in self._metrics.values())
-            raise PlanError(f"unknown metric {name!r}{suggest(name, names)}")
+            if not (fields := self._fields_named(name)):
+                names = (x.name for x in self._metrics.values())
+                raise PlanError(f"unknown metric {name!r}{suggest(name, names)}")
+            raise PlanError(f"unknown metric {name!r}: {self._field_not_metric(name, fields)}")
         return m
+
+    def _fields_named(self, name: str) -> list[str]:
+        """``dataset.field`` of the field ``name`` names: dataset.field, or a bare name
+        that is a field of one or more datasets (#66)."""
+        ds_name, _, f_name = name.rpartition(".")
+        return [
+            f"{d.name}.{self._fields[d.name.upper()][f_name.upper()].name}"
+            for d in self.model.datasets
+            if (not ds_name or d.name.upper() == ds_name.upper())
+            and f_name.upper() in self._fields[d.name.upper()]
+        ]
+
+    def _field_not_metric(self, name: str, fields: list[str]) -> str:
+        """The metrics whose expressions read the fields, by name: since a dataset's
+        metric is ``dataset.metric``, a field reads like one, and suggestions by
+        spelling offer metrics over other fields instead (#66). A bare name may
+        still be a dataset's metric asked without its dataset."""
+        wanted = {f.upper() for f in fields}
+        over = []
+        for metric, m, ds in all_metrics(self.model):
+            try:
+                tree = parse(pick_expression(m.expression))
+            except ValueError:  # refused in every question, and hidden by the executor
+                continue
+            read = {
+                f"{c.table or (ds.name if ds else '')}.{c.name}".upper()
+                for c in tree.find_all(exp.Column)
+            }
+            if read & wanted:
+                over.append(metric)
+        it = "it" if len(fields) == 1 else "them"
+        if "." in name:
+            what, same = f"it is a field of {fields[0].partition('.')[0]}", []
+        else:
+            what = f"it names the field{'s' * (len(fields) > 1)} {', '.join(fields)}"
+            suffix = f".{name.upper()}"
+            same = [x.name for x in self._metrics.values() if x.name.upper().endswith(suffix)]
+        listed = f"metrics over {it}: {', '.join(over)}" if over else f"no metric reads {it}"
+        hint = f"; dataset metrics of that name: {', '.join(same)}" if same else ""
+        return f"{what}, not a metric; {listed}{hint}"
 
     def _named_metric(self, col: exp.Column) -> OssieMetric | None:
         """The metric a filter's column names: a bare metric name, or dataset.metric

@@ -172,6 +172,30 @@ def test_unknown_metric_suggests_the_dataset_metric(planner):
     assert "did you mean: orders.revenue" in refusal(planner, Query(("orders.revenu",)))
 
 
+def test_a_field_asked_for_as_a_metric_names_the_metrics_over_it(planner, tmp_path):
+    """returns.amount reads like a dataset's metric. By spelling it got orders.revenue,
+    which adds up another field (#66); the metrics that read it are the answer."""
+    assert refusal(planner, Query(("Returns.Amount",))) == (
+        "unknown metric 'Returns.Amount': it is a field of returns, not a metric; "
+        "metrics over it: total_returns, return_rate, returns.revenue"
+    )
+    assert refusal(planner, Query(("amount",))) == (
+        "unknown metric 'amount': it names the fields orders.amount, returns.amount, not "
+        "a metric; metrics over them: total_revenue, revenue_or_zero, total_returns, "
+        "return_rate, orders.revenue, returns.revenue"
+    )
+    assert refusal(planner, Query(("customers.segment",))).endswith(
+        "it is a field of customers, not a metric; no metric reads it"
+    )
+    # A bare name may be a dataset's metric asked without its dataset.
+    data = model_data()
+    data["datasets"][1]["metrics"].append(metric("segment", "COUNT(*)"))
+    other = Planner(load_model(write(tmp_path, data)))
+    assert refusal(other, Query(("segment",))).endswith(
+        "no metric reads it; dataset metrics of that name: orders.segment"
+    )
+
+
 def test_untranslatable_names_a_dataset_metric(tmp_path):
     data = model_data()
     data["datasets"][1]["metrics"].append(metric("odd", "SUM(amount) +"))

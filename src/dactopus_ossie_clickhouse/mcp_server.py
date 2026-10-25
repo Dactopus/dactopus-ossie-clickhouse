@@ -107,14 +107,16 @@ def _objects(model: OssieDocument):
 
 
 def search(model: OssieDocument, text: str, limit: int = 20) -> list[dict[str, Any]]:
-    """Objects whose name, description or synonyms contain every word of ``text``."""
+    """Objects whose name, description or synonyms contain every word of ``text``: up
+    to ``limit`` datasets and fields, then up to ``limit`` metrics. One limit for all
+    let a broad word ("refund") fill it with fields before the metrics came (#66)."""
     words = text.lower().split()
-    hits = []
+    hits: dict[bool, list[dict[str, Any]]] = {False: [], True: []}  # by: is a metric
     for kind, name, obj in _objects(model):
         hay = " ".join([name, obj.description or "", *_ai(obj).get("synonyms", [])]).lower()
         if words and all(w in hay for w in words):
-            hits.append({"kind": kind} | _brief(obj) | {"name": name})
-    return hits[:limit]
+            hits[kind == "metric"].append({"kind": kind} | _brief(obj) | {"name": name})
+    return hits[False][:limit] + hits[True][:limit]
 
 
 def _edge(r) -> str:
@@ -191,7 +193,8 @@ def build_server(
     @server.tool()
     def search_model(text: str) -> list[dict[str, Any]]:
         """Find datasets, fields and metrics whose name, description or synonyms contain
-        every word of the text. Try single words too: "returns", then "discount"."""
+        every word of the text: up to 20 datasets and fields, then up to 20 metrics. Try
+        single words too: "returns", then "discount"."""
         return search(m, text)
 
     @server.tool()

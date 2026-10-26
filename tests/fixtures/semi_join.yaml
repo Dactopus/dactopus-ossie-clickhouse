@@ -1,7 +1,8 @@
 # Test model: customers are counted by filters on orders, order lines and
 # items, which reach customers but which customers do not reach; accounts by
-# filters on logins, joined on a key of two columns. Created by
-# tests/test_semi_join.py.
+# filters on logins, joined on a key of two columns. Order lines are counted
+# by the tags of their item or of their order's customer, which meet lines at
+# a dataset both reach. Created by tests/test_semi_join.py.
 version: "0.2.0.dev0"
 name: semi_join_model
 datasets:
@@ -47,6 +48,22 @@ datasets:
         expression: {dialects: [{dialect: ANSI_SQL, expression: id}]}
       - name: category
         expression: {dialects: [{dialect: ANSI_SQL, expression: category}]}
+  - name: item_tags
+    source: ossie_semi.item_tags
+    primary_key: [item_id, tag]
+    fields:
+      - name: item_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: item_id}]}
+      - name: tag
+        expression: {dialects: [{dialect: ANSI_SQL, expression: tag}]}
+  - name: customer_tags
+    source: ossie_semi.customer_tags
+    primary_key: [customer_id, tag]
+    fields:
+      - name: customer_id
+        expression: {dialects: [{dialect: ANSI_SQL, expression: customer_id}]}
+      - name: tag
+        expression: {dialects: [{dialect: ANSI_SQL, expression: tag}]}
   - name: accounts
     source: ossie_semi.accounts
     primary_key: [tenant, account]
@@ -85,6 +102,16 @@ relationships:
     to: items
     from_columns: [item_id]
     to_columns: [id]
+  - name: item_tags_to_item
+    from: item_tags
+    to: items
+    from_columns: [item_id]
+    to_columns: [id]
+  - name: customer_tags_to_customer
+    from: customer_tags
+    to: customers
+    from_columns: [customer_id]
+    to_columns: [id]
   - name: logins_to_account
     from: logins
     to: accounts
@@ -95,6 +122,8 @@ metrics:
     expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(customers.name)"}]}
   - name: order_count
     expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(orders.id)"}]}
+  - name: line_count
+    expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(lines.id)"}]}
   - name: account_count
     expression: {dialects: [{dialect: ANSI_SQL, expression: "COUNT(accounts.plan)"}]}
   - name: paid_customers

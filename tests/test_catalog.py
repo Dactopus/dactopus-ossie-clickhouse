@@ -104,6 +104,9 @@ CATALOG = [
     ("LTRIM(s, 'ba')", DUCK), ("RTRIM(s, 'fe')", DUCK), ("LEFT(s, 2)", DUCK), ("RIGHT(s, 2)", DUCK),
     ("SUBSTRING(s, 1, 2)", DUCK), ("REPLACE(s, 'a', 'b')", DUCK), ("SPLIT_PART(s, '-', 1)", DUCK),
     ("SPLIT_PART(s, '-', 5)", ""),  # out of range: empty string, as in Snowflake/Postgres
+    # NULL in any argument: NULL, though splitByString never returns a Nullable array
+    ("SPLIT_PART(NULLIF(s, 'abc-def'), '-', 2)", DUCK), ("SPLIT_PART(s, NULLIF('-', '-'), 2)", DUCK),
+    ("SPLIT_PART(s, '-', CAST(n AS INTEGER))", DUCK),
     ("POSITION('c' IN s)", DUCK), ("CHARINDEX('c', s)", 3),
     # a start, as in Snowflake (DuckDB lacks CHARINDEX)
     ("CHARINDEX('c', CONCAT(s, s), 4)", 10), ("POSITION('c', CONCAT(s, s), 4)", 10),

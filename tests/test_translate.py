@@ -151,7 +151,10 @@ def test_translate_uses_picked_dialect():
         ("TO_TIMESTAMP(s, 'YYYY-MM-DD')", "parseDateTime(s, '%Y-%m-%d', 'UTC')"),
         ("TO_CHAR(d, 'YYYY-MM-DD HH24:MI:SS')", "formatDateTime(d, '%Y-%m-%d %H:%i:%S')"),
         # strings
-        ("SPLIT_PART(s, '-', 2)", "arrayElement(splitByString('-', s), 2)"),
+        (
+            "SPLIT_PART(s, '-', 2)",
+            "if((s IS NULL) OR ('-' IS NULL), NULL, arrayElement(splitByString('-', s), 2))",
+        ),
         ("CONTAINS(s, 'a')", "POSITION(s, 'a') > 0"),
         # CONTAINS prints as an operator and stays one operand
         ("CONTAINS(s, 'a') + 1", "(POSITION(s, 'a') > 0) + 1"),

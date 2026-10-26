@@ -175,9 +175,13 @@ cannot name a dataset's metric either.
 
 ## Expressions
 
-Each field and metric carries expressions in one or more dialects.
-`OSSIE_SQL_2026` is preferred, `ANSI_SQL` is the fallback and what models
-carry today. Within a field, bare column names are the dataset's own
+Each field and metric carries its expression in `sql`, the spec's
+portable form in OSSIE_SQL_2026, or in `dialects`, or both. `sql` is read
+first and wins over an `OSSIE_SQL_2026` entry, as the spec says; without
+it, an `OSSIE_SQL_2026` entry is read, then `ANSI_SQL`, which the spec
+leaves opaque and this executor reads as OSSIE_SQL_2026. Other dialects
+are carried and ignored; an expression with only those is reported by
+`validate`. Within a field, bare column names are the dataset's own
 columns; a field may not reach into another dataset. Metrics reference
 fields as `dataset.field`.
 

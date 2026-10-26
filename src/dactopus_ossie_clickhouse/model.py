@@ -20,15 +20,17 @@ from ossie import (
     OssieAIContextObject,
     OssieCustomExtension,
     OssieDataset,
-    OssieDialect,
     OssieDocument,
+    OssieExpression,
     OssieMetric,
     OssieRelationship,
 )
 from pydantic import ValidationError
 
 SUPPORTED_VERSION = "0.2.0.dev0"
-SUPPORTED_DIALECTS = frozenset({OssieDialect.OSSIE_SQL_2026, OssieDialect.ANSI_SQL})
+# Dialects of a `dialects` entry this executor reads, in order of preference. The
+# expression's own `sql` comes before them (expression_text).
+SUPPORTED_DIALECTS = ("OSSIE_SQL_2026", "ANSI_SQL")
 # The custom_extensions namespace this project owns (docs/model-authoring.md):
 # a JSON object on a dataset or on the model, with these keys and values.
 VENDOR = "CLICKHOUSE"
@@ -215,10 +217,10 @@ def _check_whole(doc: OssieDocument) -> list[str]:
         names = [f.name for f in d.fields or []] + [m.name for m in d.metrics or []]
         problems += _duplicates(f"field or metric in dataset {d.name!r}", names)
         for f in d.fields or []:
-            problems += _dialect_check(f"field {d.name}.{f.name}", f.expression.dialects)
+            problems += _dialect_check(f"field {d.name}.{f.name}", f.expression)
         for m in d.metrics or []:
             name = f"{d.name}.{m.name}"
-            problems += _dialect_check(f"metric {name!r}", m.expression.dialects)
+            problems += _dialect_check(f"metric {name!r}", m.expression)
         keys = [
             ("primary_key", d.primary_key or []),
             *(("unique_keys", k) for k in d.unique_keys or []),
@@ -228,7 +230,7 @@ def _check_whole(doc: OssieDocument) -> list[str]:
 
     scoped = {name.upper() for name, _, d in all_metrics(doc) if d}
     for m in doc.metrics or []:
-        problems += _dialect_check(f"metric {m.name!r}", m.expression.dialects)
+        problems += _dialect_check(f"metric {m.name!r}", m.expression)
         if m.name.upper() in scoped:
             problems.append(f"metric {m.name!r} has the name of a dataset's metric")
 
@@ -418,11 +420,30 @@ def _pairs(pairs: list[tuple[str, object]]) -> dict:
     return dict(pairs)
 
 
-def _dialect_check(what: str, dialects) -> list[str]:
-    if any(d.dialect in SUPPORTED_DIALECTS for d in dialects):
+def expression_text(expression: OssieExpression) -> str | None:
+    """The text of ``expression`` this executor reads, or None if it has none.
+
+    The spec's portable `sql` (OSSIE_SQL_2026) wins over an OSSIE_SQL_2026 entry in
+    `dialects` ("Expression"). Without it, an entry in SUPPORTED_DIALECTS; any other
+    dialect is opaque to Ossie and to this executor.
+    """
+    if expression.sql is not None:
+        return expression.sql
+    by_dialect = {d.dialect: d.expression for d in expression.dialects or []}
+    return next((by_dialect[d] for d in SUPPORTED_DIALECTS if d in by_dialect), None)
+
+
+def dialects_of(expression: OssieExpression) -> str:
+    return ", ".join(sorted(d.dialect for d in expression.dialects or []))
+
+
+def _dialect_check(what: str, expression: OssieExpression) -> list[str]:
+    if expression_text(expression) is not None:
         return []
-    have = ", ".join(sorted(d.dialect.value for d in dialects))
-    return [f"{what}: no expression in a supported dialect (has {have}; need ANSI_SQL)"]
+    return [
+        f"{what}: no expression in a supported dialect (has {dialects_of(expression)}; "
+        "need sql, or a dialect ANSI_SQL or OSSIE_SQL_2026)"
+    ]
 
 
 def _format(err: dict) -> str:

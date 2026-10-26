@@ -82,6 +82,20 @@ def test_null_property(tmp_path, tpcds):
     ]
 
 
+@pytest.mark.parametrize("suffix", ["yaml", "json"])
+def test_duplicate_key(tmp_path, suffix):
+    # The SDK refuses a repeated key since apache/ossie#618; the last one used to win.
+    p = tmp_path / f"m.{suffix}"
+    p.write_text(
+        '{"version": "0.2.0.dev0", "name": "a", "name": "b", "datasets": []}'
+        if suffix == "json"
+        else "version: 0.2.0.dev0\nname: a\nname: b\ndatasets: []\n"
+    )
+    with pytest.raises(ModelError) as e:
+        load_model(p)
+    assert any("duplicate key 'name'" in problem for problem in e.value.problems)
+
+
 def test_empty_key(tmp_path, tpcds):
     # An empty key names no column; the SDK refuses it since apache/ossie#574.
     tpcds["datasets"][0]["primary_key"] = []
@@ -146,8 +160,36 @@ def test_a_datasets_metric_needs_a_supported_dialect(tmp_path, tpcds):
     sales["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
     assert problems_of(tmp_path, tpcds) == [
         "metric 'store_sales.total_quantity': no expression in a supported dialect "
-        "(has DAX; need ANSI_SQL)"
+        "(has DAX; need sql, or a dialect ANSI_SQL or OSSIE_SQL_2026)"
     ]
+
+
+def _to_sql(node):
+    """``node`` with every expression in the portable form: sql, no dialects."""
+    if isinstance(node, dict):
+        if "dialects" in node and set(node) <= {"dialects", "sql"}:
+            (entry,) = node["dialects"]
+            return {"sql": entry["expression"]}
+        return {k: _to_sql(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_to_sql(v) for v in node]
+    return node
+
+
+def test_expressions_in_sql_answer_as_dialects_do(tmp_path, tpcds):
+    portable = _to_sql(tpcds)
+    assert "dialects" not in json.dumps(portable)
+    q = Query(metrics=("total_sales", "store_sales.total_quantity"), dimensions=("item.i_brand",))
+    assert Planner(load_model(write(tmp_path, portable))).sql(q) == Planner(
+        load_model(FIXTURE)
+    ).sql(q)
+
+
+def test_sql_needs_no_supported_dialect(tmp_path, tpcds):
+    m = tpcds["metrics"][0]
+    m["expression"] = {"sql": m["expression"]["dialects"][0]["expression"]}
+    m["expression"]["dialects"] = [{"dialect": "DAX", "expression": "SUM([x])"}]
+    load_model(write(tmp_path, tpcds))
 
 
 def test_a_model_metric_may_not_take_a_datasets_metric_name(tmp_path, tpcds):

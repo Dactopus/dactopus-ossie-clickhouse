@@ -125,7 +125,8 @@ questions it refuses.
   single-key [dictionaries](https://clickhouse.com/docs/sql-reference/dictionaries) are read with
   `dictGetOrNull` instead of a join. Both are learned from `system.tables`
   and `system.dictionaries`, not configured.
-- Expressions in `OSSIE_SQL_2026` or `ANSI_SQL` are translated on the
+- Expressions in `sql` (OSSIE_SQL_2026), or in the `OSSIE_SQL_2026` or
+  `ANSI_SQL` dialect, are translated on the
   [SQLGlot](https://github.com/tobymao/sqlglot) AST; the spec's function
   catalog is mapped to ClickHouse equivalents and checked by value against
   [DuckDB](https://duckdb.org) and the spec text. Any other function

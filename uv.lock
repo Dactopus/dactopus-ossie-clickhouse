@@ -32,7 +32,7 @@ wheels = [
 [[package]]
 name = "apache-ossie"
 version = "0.2.0.dev0"
-source = { git = "https://github.com/apache/ossie.git?subdirectory=python&rev=7205e15#7205e15253ae3f340f8f191e978685006f5fa72d" }
+source = { git = "https://github.com/apache/ossie.git?subdirectory=python&rev=d13bb6a#d13bb6a534a100e792a048dd7a14d4d37c723b2c" }
 dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -384,7 +384,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apache-ossie", git = "https://github.com/apache/ossie.git?subdirectory=python&rev=7205e15" },
+    { name = "apache-ossie", git = "https://github.com/apache/ossie.git?subdirectory=python&rev=d13bb6a" },
     { name = "clickhouse-connect", specifier = ">=1,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },

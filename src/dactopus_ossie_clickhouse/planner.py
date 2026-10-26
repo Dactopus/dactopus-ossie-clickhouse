@@ -30,6 +30,7 @@ from sqlglot.dialects.clickhouse import ClickHouse
 from dactopus_ossie_clickhouse.model import (
     all_metrics,
     covers_key,
+    declared_keys,
     join_problem,
     suggest,
     time_zone,
@@ -1045,6 +1046,8 @@ class Planner:
                     f"does not reach {root.name} through many-to-one relationships{hint}"
                 )
             shared = self.dataset(meets[0])
+            if problem := self._not_a_property(top, shared, root):
+                raise PlanError(f"{labels[0]} {problem}")
             on_shared = self._semi_join(shared, self.dataset(top), filters, used)
             semi_joins.append(self._semi_join_to(root, shared, on_shared))
         return root, joined, semi_joins
@@ -1063,6 +1066,30 @@ class Planner:
                     seen.add(to.upper())
                     todo.append(to)
         return sorted(found)
+
+    def _not_a_property(self, m: str, shared: OssieDataset, root: OssieDataset) -> str | None:
+        """Why the rows of ``m`` are not properties of ``shared`` rows, or None.
+
+        A key of each dataset on the path holds its columns to the next one:
+        ``product_categories (product_id, category)`` lists properties of a
+        product. ``returns (return_id)`` may be a fact of its own about a
+        customer, and orders of customers with a return are not the orders
+        returned, so it is refused rather than read that way (#69)."""
+        for path in self._paths(m, shared.name):  # two are refused as ambiguous later
+            for r in path:
+                at = self.dataset(r.from_dataset)
+                cols = {c.upper() for c in r.from_columns}
+                if not any(cols <= {c.upper() for c in k} for k in declared_keys(at)):
+                    columns = ", ".join(r.from_columns)
+                    return (
+                        f"reads {m}, which meets {root.name} only at {shared.name}, and no key "
+                        f"of {at.name} holds {columns}: its rows may be facts of their own "
+                        f"rather than properties of a {r.to} row, so {root.name} filtered by "
+                        f"them could mean other rows. Relate {m} to {root.name}, or, if each "
+                        f"{at.name} row describes its {r.to} row, declare a key of {at.name} "
+                        f"that includes {columns}"
+                    )
+        return None
 
     def _semi_join_to(
         self, root: OssieDataset, shared: OssieDataset, on_shared: exp.Expression

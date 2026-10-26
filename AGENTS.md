@@ -133,7 +133,10 @@ Python library with a CLI entry point. The parts that constrain code:
   from M. An M that does not reach the root meets it at S, the first
   dataset on M's relationships the root reaches: M's subquery keeps S
   rows, and the root's path to S is one `IN` per relationship, each
-  dataset read (`Planner._semi_join_to`); two such S are refused. Both
+  dataset read (`Planner._semi_join_to`); two such S are refused, and so
+  is an M whose path has a dataset no key of which holds its columns to
+  the next (`Planner._not_a_property`): its rows may be facts, not
+  properties of S. Both
   are tried only when the question is refused over the root of
   everything it reads, from the root of its metrics, dimensions and
   aggregate filters; a filter mixing both sides is refused.

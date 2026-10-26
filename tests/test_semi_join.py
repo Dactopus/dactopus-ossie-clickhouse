@@ -437,24 +437,21 @@ def test_a_shared_dataset_two_steps_from_the_root_reads_each_with_final(ex):
     ) in result.sql
 
 
-def test_a_sibling_fact_filters_through_what_both_reference():
-    """The rule cannot tell a table of a customer's properties from another fact
-    about customers. Orders filtered on returns are the orders of customers with
-    such a return, not the orders returned; a model that means the latter relates
-    returns to orders."""
+def _with_returns(primary_key: list[str] | None) -> Planner:
+    """MODEL with returns of customers, which no relationship ties to orders."""
     m = MODEL.model_dump(by_alias=True, exclude_none=True)
 
     def field(name: str) -> dict:
         return {"name": name, "expression": {"sql": name}}
 
-    m["datasets"].append(
-        {
-            "name": "returns",
-            "source": "ossie_semi.returns",
-            "primary_key": ["id"],
-            "fields": [field("id"), field("customer_id"), field("reason")],
-        }
-    )
+    returns = {
+        "name": "returns",
+        "source": "ossie_semi.returns",
+        "fields": [field("id"), field("customer_id"), field("reason")],
+    }
+    if primary_key:
+        returns["primary_key"] = primary_key
+    m["datasets"].append(returns)
     m["relationships"].append(
         {
             "name": "returns_to_customer",
@@ -464,9 +461,31 @@ def test_a_sibling_fact_filters_through_what_both_reference():
             "to_columns": ["id"],
         }
     )
-    sql = Planner(OssieDocument.model_validate(m)).sql(
-        Query(("order_count",), (), ("returns.reason = 'damaged'",))
+    return Planner(OssieDocument.model_validate(m))
+
+
+DAMAGED = Query(("order_count",), (), ("returns.reason = 'damaged'",))
+
+
+@pytest.mark.parametrize("primary_key", [["id"], None])
+def test_a_sibling_fact_is_not_read_through_what_both_reference(primary_key):
+    """A return may be a fact of its own about a customer: orders of customers with
+    a damaged return are not the orders returned, so the filter is refused, as is
+    one on a dataset that declares no key (#69)."""
+    with pytest.raises(PlanError) as e:
+        _with_returns(primary_key).sql(DAMAGED)
+    assert str(e.value) == (
+        "filter \"returns.reason = 'damaged'\" reads returns, which meets orders only at "
+        "customers, and no key of returns holds customer_id: its rows may be facts of "
+        "their own rather than properties of a customers row, so orders filtered by them "
+        "could mean other rows. Relate returns to orders, or, if each returns row "
+        "describes its customers row, declare a key of returns that includes customer_id"
     )
+
+
+def test_a_key_that_holds_the_reference_makes_rows_properties():
+    """Declared so, each returns row describes one customer, as a tag does."""
+    sql = _with_returns(["customer_id", "id"]).sql(DAMAGED)
     assert (
         "WHERE orders.customer_id IN (SELECT customers.id FROM ossie_semi.customers AS "
         "customers WHERE customers.id IN (SELECT returns.customer_id FROM "

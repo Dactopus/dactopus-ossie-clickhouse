@@ -546,14 +546,19 @@ order_lines.product_id IN (SELECT products.product_id FROM products
   with both named, even when one reaches the other: M's row then names
   the second one twice, directly and through the first. So are two paths
   from the root to S (#246 section 6.9).
-- The rule cannot tell a table of S's properties from another fact about
-  S. With `returns -> customers` and `orders -> customers`, `-m
-  order_count -f "returns.reason = 'damaged'"` was refused and now counts
-  the orders of customers with a damaged return. That is one reading of
-  the question; the orders returned need a relationship from returns to
-  orders. A narrower rule, taking only an M whose key holds its
-  columns to S (`product_categories`, not `returns`), would refuse it
-  again, and waits for a case that needs it.
+- Only a table of S's properties qualifies: on M's path to S, a key of
+  each dataset holds its columns to the next (`Planner._not_a_property`).
+  `product_categories (product_id, category)` lists properties of a
+  product. With `returns (return_id) -> customers` and `orders ->
+  customers`, `-m order_count -f "returns.reason = 'damaged'"` would
+  count the orders of customers with a damaged return. Someone asking
+  that question means the orders returned, and an agent would pass the
+  other number on without a word, so it is refused with what to do:
+  relate returns to orders, or declare a key of returns that includes
+  `customer_id` if each row does describe its customer. A dataset that
+  declares no key is refused the same way, since nothing says what its
+  rows are. Refused questions can be answered later without breaking an
+  answer; the other way round, a wider rule narrowed later would.
 - A dimension of M stays refused: by category, a line would count once
   per category. A root two steps away from M through a fact
   (`orders.order_count` by the categories of its lines) is refused, as

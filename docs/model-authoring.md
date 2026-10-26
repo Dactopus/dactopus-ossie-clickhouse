@@ -127,13 +127,16 @@ reference works the same way, through the dataset both reach. With
 order_lines.line_revenue -f "product_categories.category = 'Clothing'"`
 adds up the lines whose product has a Clothing row, each line once. The
 planner reads `products` too, so a category of a product that does not
-exist keeps no line. The rule does not know a table of a product's
-properties from another fact about products: with `returns -> customers`
-and `orders -> customers`, `-m order_count -f "returns.reason =
-'damaged'"` counts the orders of customers who have a damaged return.
-For the orders returned, relate `returns` to `orders`. A filter dataset
-that meets the metric's at two datasets is refused, since either could
-be meant.
+exist keeps no line. The filter dataset must list properties of the
+shared one: declare a key that holds its columns to it, here
+`primary_key: [product_id, category]`. A dataset with a key of its own,
+such as `returns (return_id) -> customers` next to `orders ->
+customers`, may hold facts of their own, and `-m order_count -f
+"returns.reason = 'damaged'"` is refused: through customers it would
+count the orders of customers with a damaged return, not the orders
+returned. Relate `returns` to `orders` for those. A filter dataset that
+meets the metric's at two datasets is refused, since either could be
+meant.
 
 Such a filter cannot ask for rows without a match: `NOT
 readings.reading_date = '2026-10-19'` counts devices that have a reading

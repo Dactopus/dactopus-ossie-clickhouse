@@ -541,16 +541,17 @@ order_lines.product_id IN (SELECT products.product_id FROM products
   version; and the relationship from the root may name another key of S
   than M's does.
 - S is found by walking M's relationships and stopping each path at the
-  first dataset the root reaches. Two such datasets, neither reaching the
-  other, are two meanings (a line kept through its item or through its
-  customer) and are refused with both named; so are two paths from the
-  root to S (#246 section 6.9).
+  first dataset the root reaches. Two such datasets are two meanings (a
+  line kept through its item or through its customer) and are refused
+  with both named, even when one reaches the other: M's row then names
+  the second one twice, directly and through the first. So are two paths
+  from the root to S (#246 section 6.9).
 - The rule cannot tell a table of S's properties from another fact about
   S. With `returns -> customers` and `orders -> customers`, `-m
   order_count -f "returns.reason = 'damaged'"` was refused and now counts
-  the orders of customers with a damaged return. That is a reading of the
-  question, not the orders returned, which needs a relationship from
-  returns to orders. A narrower rule, taking only an M whose key holds its
+  the orders of customers with a damaged return. That is one reading of
+  the question; the orders returned need a relationship from returns to
+  orders. A narrower rule, taking only an M whose key holds its
   columns to S (`product_categories`, not `returns`), would refuse it
   again, and waits for a case that needs it.
 - A dimension of M stays refused: by category, a line would count once

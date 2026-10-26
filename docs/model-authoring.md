@@ -130,10 +130,10 @@ planner reads `products` too, so a category of a product that does not
 exist keeps no line. The rule does not know a table of a product's
 properties from another fact about products: with `returns -> customers`
 and `orders -> customers`, `-m order_count -f "returns.reason =
-'damaged'"` counts the orders of customers who have a damaged return,
-not the orders returned. Relate `returns` to `orders` for that. A filter
-dataset that meets the metric's at two datasets, neither of which
-reaches the other, is refused, since either could be meant.
+'damaged'"` counts the orders of customers who have a damaged return.
+For the orders returned, relate `returns` to `orders`. A filter dataset
+that meets the metric's at two datasets is refused, since either could
+be meant.
 
 Such a filter cannot ask for rows without a match: `NOT
 readings.reading_date = '2026-10-19'` counts devices that have a reading

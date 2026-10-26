@@ -19,11 +19,12 @@ a minor release may change the Python API.
   shared dataset and each one on the root's path to it are read, with
   `FINAL` where needed, so a category of a product that does not exist
   keeps no line. A filter dataset that meets the root at two datasets,
-  neither of which reaches the other, is refused with both named.
+  even when one of them reaches the other, is refused with both named.
   The rule does not tell a table of properties from another fact: with
   `returns -> customers` and `orders -> customers`, `-m order_count -f
   "returns.reason = 'damaged'"` was refused and now counts the orders of
-  customers with a damaged return, not the orders returned.
+  customers with a damaged return; the orders returned need a
+  relationship from returns to orders.
 - An expression may be written in `sql`, the spec's portable form in
   OSSIE_SQL_2026 (apache/ossie#617), with or without `dialects`. `sql` is
   read first and wins over an `OSSIE_SQL_2026` entry, as the spec says;

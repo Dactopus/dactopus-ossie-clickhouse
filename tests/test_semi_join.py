@@ -563,6 +563,22 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "and items: a lines row could be kept through either, and this version cannot "
             "choose between them",
         ),
+        # customer_tags meets lines at orders and at customers, which orders reaches: a
+        # tag row names a customer directly and another through its order.
+        (
+            _variant(
+                {
+                    "name": "customer_tags_to_order",
+                    "from": "customer_tags",
+                    "to": "orders",
+                    "from_columns": ["customer_id"],
+                    "to_columns": ["id"],
+                }
+            ),
+            Query(("line_count",), (), ("customer_tags.tag = 'vip'",)),
+            "filter \"customer_tags.tag = 'vip'\" reads customer_tags, which meets lines at "
+            "customers and orders: a lines row could be kept through either",
+        ),
         # Orders by their lines' item tags: the fact between them, lines, is not
         # found, and naming it does not answer either (#69 item 2).
         (

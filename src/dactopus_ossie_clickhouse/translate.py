@@ -598,9 +598,21 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
     if isinstance(node, exp.RegexpExtract):
         group = node.args.get("position") or exp.Literal.number(0)
         return _f("regexpExtract", node.this, node.expression, group)
+    # SPLIT_PART is NULL when an argument is. splitByString returns an Array, which
+    # ClickHouse never makes Nullable: a NULL string gives an empty one and the part
+    # '', and a NULL delimiter splits into characters. A NULL part is NULL already.
     if isinstance(node, exp.SplitPart):
-        parts = _f("splitByString", node.args["delimiter"], node.this)
-        return _f("arrayElement", parts, node.args["part_index"])
+        text, delimiter = node.this, node.args["delimiter"]
+        parts = _f("splitByString", delimiter, text)
+        return _f(
+            "if",
+            exp.or_(
+                exp.Is(this=text.copy(), expression=exp.Null()),
+                exp.Is(this=delimiter.copy(), expression=exp.Null()),
+            ),
+            exp.Null(),
+            _f("arrayElement", parts, node.args["part_index"]),
+        )
     # Spec windows follow ANSI SQL: NULL when the row does not exist, and NULLs are
     # respected. ClickHouse returns the type's default (0) for a non-Nullable argument
     # and skips NULLs in first_value / last_value. A Nullable argument also lets a

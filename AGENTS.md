@@ -216,9 +216,7 @@ local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
 - SQLGlot adds no parentheses for precedence, and its Python operators
   (`1 - p`) skip them when `p` is the same operator. `rewrite_tree`
   parenthesizes every operator under another operator, so a rewrite builds
-  plain nodes and an inlined field or metric needs nothing. `CONTAINS`
-  counts as an operator there: SQLGlot prints it as `POSITION(...) > 0`
-  and parenthesizes that only under a binary operator. Code that puts
+  plain nodes and an inlined field or metric needs nothing. Code that puts
   an operator under another after `rewrite_tree` parenthesizes it itself
   (`exp.and_` does for `WHERE`, `HAVING` and `ON`).
 - A rewritten function, ours or SQLGlot's, gets its spec signature in

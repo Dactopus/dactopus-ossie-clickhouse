@@ -7,6 +7,14 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- Requires SQLGlot 30.25 or later. Its ClickHouse generator parenthesizes
+  `CONTAINS`, printed as `POSITION(...) > 0`, under another operator
+  (tobymao/sqlglot#8782), so the rule this project carried for it is gone.
+  Values are unchanged; `NOT CONTAINS(s, 'a')` now prints as
+  `NOT POSITION(s, 'a') > 0`, which ClickHouse reads the same way.
+
 ## [0.11.0] - 2026-10-27
 
 ### Added

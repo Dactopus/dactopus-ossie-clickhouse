@@ -169,7 +169,7 @@ def test_translate_uses_picked_dialect():
         ("CONTAINS(s, 'a')", "POSITION(s, 'a') > 0"),
         # CONTAINS prints as an operator and stays one operand
         ("CONTAINS(s, 'a') + 1", "(POSITION(s, 'a') > 0) + 1"),
-        ("NOT CONTAINS(s, 'a')", "NOT (POSITION(s, 'a') > 0)"),
+        ("NOT CONTAINS(s, 'a')", "NOT POSITION(s, 'a') > 0"),
         ("-CONTAINS(s, 'a')", "-(POSITION(s, 'a') > 0)"),
         # every operator under another is one operand, except the left one of its kind
         ("a OR b AND c", "a OR (b AND c)"),

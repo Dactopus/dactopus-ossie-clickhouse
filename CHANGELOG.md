@@ -7,6 +7,45 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
+### Added
+
+- A row filter on a dataset that meets the root at a dataset both reach
+  is a semi-join through it (part of #69). With `order_lines -> products`
+  and `product_categories -> products`, `-m order_lines.line_revenue -f
+  "product_categories.category = 'Clothing'"` adds up the lines whose
+  product has a Clothing row, each line once; 0.10.1 refused it. The
+  shared dataset and each one on the root's path to it are read, with
+  `FINAL` where needed, so a category of a product that does not exist
+  keeps no line. A filter dataset that meets the root at two datasets,
+  neither of which reaches the other, is refused with both named.
+  The rule does not tell a table of properties from another fact: with
+  `returns -> customers` and `orders -> customers`, `-m order_count -f
+  "returns.reason = 'damaged'"` was refused and now counts the orders of
+  customers with a damaged return, not the orders returned.
+- An expression may be written in `sql`, the spec's portable form in
+  OSSIE_SQL_2026 (apache/ossie#617), with or without `dialects`. `sql` is
+  read first and wins over an `OSSIE_SQL_2026` entry, as the spec says;
+  without it, an `OSSIE_SQL_2026` entry is read, then `ANSI_SQL`. A
+  dialect is any string now, and an expression with neither `sql` nor a
+  dialect this executor reads is reported by `validate`, as before.
+
+### Changed
+
+- Breaking: `apache-ossie` is pinned to apache/ossie commit `d13bb6a`.
+  A model file with a repeated key, such as two `name:` lines in one
+  dataset, fails to load (apache/ossie#618); before, the last one won
+  without a word. An empty `sql`, `expression`, `dialect` or
+  `vendor_name` fails to load too.
+
+### Fixed
+
+- `SPLIT_PART` returned `''` for a NULL string, so a count of the parts
+  counted rows without one and `IS NULL` missed them; a NULL delimiter
+  split the string into characters. Both now give NULL, as in DuckDB:
+  ClickHouse's `splitByString` returns an array, which is never NULL.
+
 ## [0.10.1] - 2026-10-25
 
 ### Changed

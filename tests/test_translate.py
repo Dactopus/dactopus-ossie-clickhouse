@@ -1,5 +1,5 @@
 import pytest
-from ossie import OssieDialect, OssieDialectExpression, OssieExpression
+from ossie import OssieDialectExpression, OssieExpression
 
 from dactopus_ossie_clickhouse.translate import (
     _CATALOG,
@@ -15,12 +15,9 @@ from dactopus_ossie_clickhouse.translate import (
 )
 
 
-def dialects(**kw) -> OssieExpression:
-    return OssieExpression(
-        dialects=[
-            OssieDialectExpression(dialect=OssieDialect[k], expression=v) for k, v in kw.items()
-        ]
-    )
+def dialects(sql: str | None = None, **kw) -> OssieExpression:
+    entries = [OssieDialectExpression(dialect=k, expression=v) for k, v in kw.items()]
+    return OssieExpression(sql=sql, dialects=entries or None)
 
 
 def test_pick_prefers_ossie_sql_then_ansi():
@@ -28,6 +25,20 @@ def test_pick_prefers_ossie_sql_then_ansi():
     assert pick_expression(dialects(DAX="x", ANSI_SQL="a")) == "a"
     with pytest.raises(ValueError, match="has DAX"):
         pick_expression(dialects(DAX="x"))
+
+
+def test_pick_prefers_sql():
+    # spec, "Expression": sql is authoritative over an OSSIE_SQL_2026 entry
+    assert pick_expression(dialects("s")) == "s"
+    assert pick_expression(dialects("s", DAX="x")) == "s"
+    assert pick_expression(dialects("s", OSSIE_SQL_2026="o", ANSI_SQL="a")) == "s"
+
+
+def test_pick_reads_any_dialect_name():
+    # a dialect is any string since apache/ossie#617; one we do not read is reported
+    assert pick_expression(dialects(MY_ENGINE="x", ANSI_SQL="a")) == "a"
+    with pytest.raises(ValueError, match="has MY_ENGINE"):
+        pick_expression(dialects(MY_ENGINE="x"))
 
 
 def test_translate_uses_picked_dialect():

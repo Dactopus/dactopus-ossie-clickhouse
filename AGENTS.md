@@ -53,8 +53,11 @@ Out of scope, do not build:
 Python library with a CLI entry point. The parts that constrain code:
 
 - **SQLGlot** for expression translation, parsing with its default dialect
-  until the upstream Ossie dialect (apache/ossie PR #222) lands. Models today
-  carry `ANSI_SQL` expressions only; prefer `OSSIE_SQL_2026` when present.
+  until the upstream Ossie dialect (apache/ossie PR #222) lands. An
+  expression's `sql` (OSSIE_SQL_2026) comes first, then a `dialects` entry
+  in `OSSIE_SQL_2026`, then `ANSI_SQL`; `model.expression_text` is the one
+  place that picks. A dialect is any string in the schema; others are
+  opaque.
 - **clickhouse-connect** over HTTP for execution.
 - **MCP SDK** only behind the `[mcp]` extra. The core library must import
   without it.

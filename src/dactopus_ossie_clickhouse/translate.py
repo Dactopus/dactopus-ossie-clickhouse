@@ -15,25 +15,25 @@ from decimal import Decimal
 
 import sqlglot
 import sqlglot.errors
-from ossie import OssieDialect, OssieDocument, OssieExpression
+from ossie import OssieDocument, OssieExpression
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.parser import Parser
 
-from dactopus_ossie_clickhouse.model import DEFAULT_TIME_ZONE, all_metrics
-
-# Preference order when a field or metric carries several dialects.
-DIALECT_PREFERENCE = (OssieDialect.OSSIE_SQL_2026, OssieDialect.ANSI_SQL)
+from dactopus_ossie_clickhouse.model import (
+    DEFAULT_TIME_ZONE,
+    all_metrics,
+    dialects_of,
+    expression_text,
+)
 
 
 def pick_expression(expression: OssieExpression) -> str:
-    """The expression text in the most preferred dialect we can translate."""
-    by_dialect = {d.dialect: d.expression for d in expression.dialects}
-    for dialect in DIALECT_PREFERENCE:
-        if dialect in by_dialect:
-            return by_dialect[dialect]
-    have = ", ".join(sorted(d.dialect.value for d in expression.dialects))
-    raise ValueError(f"no expression in a supported dialect (has {have})")
+    """The expression text we translate (model.expression_text)."""
+    text = expression_text(expression)
+    if text is None:
+        raise ValueError(f"no expression in a supported dialect (has {dialects_of(expression)})")
+    return text
 
 
 # --- parsing ----------------------------------------------------------------

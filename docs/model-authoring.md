@@ -121,6 +121,20 @@ lines). Filters on one such dataset, and on the datasets it reaches
 with a paid order and a large order line counts only when the large line
 is on a paid order.
 
+A filter on a dataset whose rows reference what the metric's rows
+reference works the same way, through the dataset both reach. With
+`order_lines -> products` and `product_categories -> products`, `-m
+order_lines.line_revenue -f "product_categories.category = 'Clothing'"`
+adds up the lines whose product has a Clothing row, each line once. The
+planner reads `products` too, so a category of a product that does not
+exist keeps no line. The rule does not know a table of a product's
+properties from another fact about products: with `returns -> customers`
+and `orders -> customers`, `-m order_count -f "returns.reason =
+'damaged'"` counts the orders of customers who have a damaged return,
+not the orders returned. Relate `returns` to `orders` for that. A filter
+dataset that meets the metric's at two datasets, neither of which
+reaches the other, is refused, since either could be meant.
+
 Such a filter cannot ask for rows without a match: `NOT
 readings.reading_date = '2026-10-19'` counts devices that have a reading
 on another day. For absence, give the root a field

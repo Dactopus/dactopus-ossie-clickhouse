@@ -512,6 +512,60 @@ dactopus-data-models, 4,446 sessions have a purchase with revenue above
 4,848, since 450 purchases carry no revenue. On a Sensor.Community load,
 35 of 36 devices have a reading on 2026-10-19.
 
+### Through a dataset both reach
+
+A WooCommerce product is in several categories, modelled as
+`product_categories (product_id, category) -> products`; order lines
+reach `products` too. "Revenue of the lines in Clothing" has one meaning,
+the lines whose product has a Clothing row, each once, but M (the
+categories) does not reach the root (the lines), and 0.10.1 refused it
+(#69). A model could answer it only through a dataset at the grain of
+line and category, which repeats each line once per category and
+rewrites past lines whenever the catalog changes.
+
+The filter is now a semi-join through S, the first dataset on M's
+relationships that the root reaches: M's subquery keeps S rows, and the
+root's path to S adds one `IN` per relationship, as M's path does.
+
+```sql
+order_lines.product_id IN (SELECT products.product_id FROM products
+  WHERE products.product_id IN (SELECT product_categories.product_id
+    FROM product_categories WHERE product_categories.category = 'Clothing'))
+```
+
+- S and every dataset on the root's path to it are read, with `FINAL`
+  where the table needs it, though `order_lines.product_id IN (SELECT
+  product_categories.product_id ...)` would be shorter. A line whose
+  product does not exist has no category, as a join from the line would
+  find; an order updated in a `ReplacingMergeTree` counts at its latest
+  version; and the relationship from the root may name another key of S
+  than M's does.
+- S is found by walking M's relationships and stopping each path at the
+  first dataset the root reaches. Two such datasets, neither reaching the
+  other, are two meanings (a line kept through its item or through its
+  customer) and are refused with both named; so are two paths from the
+  root to S (#246 section 6.9).
+- The rule cannot tell a table of S's properties from another fact about
+  S. With `returns -> customers` and `orders -> customers`, `-m
+  order_count -f "returns.reason = 'damaged'"` was refused and now counts
+  the orders of customers with a damaged return. That is a reading of the
+  question, not the orders returned, which needs a relationship from
+  returns to orders. A narrower rule, taking only an M whose key holds its
+  columns to S (`product_categories`, not `returns`), would refuse it
+  again, and waits for a case that needs it.
+- A dimension of M stays refused: by category, a line would count once
+  per category. A root two steps away from M through a fact
+  (`orders.order_count` by the categories of its lines) is refused, as
+  before. No hint names the fact, since nothing reaches M, and naming it
+  in a filter of its own does not answer the question yet; that, and
+  whether the fact must be named, is open in #69.
+
+The data in `tests/test_semi_join.py` has an item with two matching tags,
+two tag filters passed by different rows, a tag of an item that does not
+exist, a line on the order of a missing customer and NULL keys: a join, a
+subquery that skips the shared dataset, and one that skips the orders on
+the way each give another answer.
+
 ## The model's time zone, UTC by default
 
 A ClickHouse `DateTime` is an instant; its zone decides how it prints and

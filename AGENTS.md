@@ -130,7 +130,11 @@ Python library with a CLI entry point. The parts that constrain code:
   reaches the root, is a semi-join: the root's key `IN` the keys of M rows
   that pass every filter on M and the datasets M reaches (one subquery,
   planned as a question over M), one `IN` per relationship on the one path
-  from M. It is tried only when the question is refused over the root of
+  from M. An M that does not reach the root meets it at S, the first
+  dataset on M's relationships the root reaches: M's subquery keeps S
+  rows, and the root's path to S is one `IN` per relationship, each
+  dataset read (`Planner._semi_join_to`); two such S are refused. Both
+  are tried only when the question is refused over the root of
   everything it reads, from the root of its metrics, dimensions and
   aggregate filters; a filter mixing both sides is refused.
   Metrics run over the root's rows, so the planner refuses an aggregate

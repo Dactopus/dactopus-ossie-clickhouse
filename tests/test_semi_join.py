@@ -6,10 +6,15 @@ a count of accounts, joined on a key of two columns. Expected rows come from
 DuckDB running EXISTS: a customer counts once when at least one of its orders
 passes every filter on orders, and not at all without one (#246 §6.5,
 filtering join; Semantic 2). orders is a ReplacingMergeTree with an order
-updated after it was paid, so a subquery read without FINAL counts it."""
+updated after it was paid, so a subquery read without FINAL counts it.
+
+Order lines are counted by tags of their item, and of their order's customer,
+which reach a dataset that lines reach too (#69): a line counts once when the
+dataset it reaches has a tag row that passes every filter on tags."""
 
 import copy
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import clickhouse_connect
@@ -31,10 +36,15 @@ ROWS = {
     "orders": "(10, 1, 'paid', 5, 1), (11, 1, 'paid', 7, 1), (12, 2, 'paid', 3, 1), "
     "(13, NULL, 'paid', 9, 1), (14, 3, 'paid', 0, 1), (15, 99, 'paid', 4, 1), "
     "(16, 3, 'open', 8, 1)",
-    # Line 103 is on an order that does not exist, line 104 on none.
+    # Line 103 is on an order that does not exist, line 104 on none. Line 105 is
+    # on an item that does not exist, line 106 on the order of a missing customer.
     "lines": "(100, 10, 1000, 2), (101, 12, 1001, 1), (102, 16, 1000, 5), "
-    "(103, 77, 1000, 1), (104, NULL, 1000, 1)",
+    "(103, 77, 1000, 1), (104, NULL, 1000, 1), (105, 11, 1002, 3), (106, 15, 1001, 1)",
     "items": "(1000, 'toys'), (1001, 'books')",
+    # Item 1000 has two tags; item 1002, which does not exist, has one, and so has
+    # customer 99. A NULL key tags nothing.
+    "item_tags": "(1000, 'sale'), (1000, 'kids'), (1001, 'kids'), (1002, 'sale'), (NULL, 'sale')",
+    "customer_tags": "(1, 'vip'), (2, 'vip'), (3, 'new'), (99, 'vip'), (NULL, 'vip')",
     "accounts": "(1, 1, 'a'), (1, 2, 'b'), (2, 1, 'c'), (1, NULL, 'z')",
     # Login 4 has a NULL in one column of the key: it references no account.
     "logins": "(1, 1, 1, 'd1'), (2, 1, 1, 'd1'), (3, 2, 1, 'd2'), (4, 1, NULL, 'd1'), "
@@ -64,6 +74,8 @@ COLUMNS = {
         ("qty", ("Int32", "INTEGER")),
     ),
     "items": (("id", ("Int32", "INTEGER")), ("category", ("String", "VARCHAR"))),
+    "item_tags": (("item_id", NULLABLE_INT), ("tag", ("String", "VARCHAR"))),
+    "customer_tags": (("customer_id", NULLABLE_INT), ("tag", ("String", "VARCHAR"))),
     "accounts": (
         ("tenant", ("Int32", "INTEGER")),
         ("account", NULLABLE_INT),
@@ -80,6 +92,8 @@ ENGINES = {
     "customers": "MergeTree ORDER BY tuple()",
     "orders": "ReplacingMergeTree(version) ORDER BY id",
     "accounts": "MergeTree ORDER BY tenant",
+    "item_tags": "MergeTree ORDER BY tag",
+    "customer_tags": "MergeTree ORDER BY tag",
 }
 
 
@@ -92,6 +106,21 @@ ORDERS = "orders o WHERE o.customer_id = c.id AND"
 LINES = (
     "lines l LEFT JOIN orders o ON l.order_id = o.id LEFT JOIN items i ON l.item_id = i.id "
     "WHERE o.customer_id = c.id AND"
+)
+
+
+def _lines(where: str, dimension: str = "") -> str:
+    joined, group = (
+        ("LEFT JOIN items d ON l.item_id = d.id", "GROUP BY d.category") if dimension else ("", "")
+    )
+    return f"""SELECT {dimension} COUNT(l.id) AS line_count FROM lines l {joined}
+        WHERE EXISTS (SELECT 1 FROM {where}) {group}"""
+
+
+ITEM_TAGS = "items i JOIN item_tags t ON t.item_id = i.id WHERE i.id = l.item_id AND"
+CUSTOMER_TAGS = (
+    "orders o JOIN customers c ON o.customer_id = c.id "
+    "JOIN customer_tags t ON t.customer_id = c.id WHERE o.id = l.order_id AND"
 )
 
 CASES = [
@@ -143,6 +172,45 @@ CASES = [
         Query(("customer_count",), (), ("orders.status = 'paid'", "customers.region = 'EAST'")),
         "SELECT COUNT(c.name) FROM customers c WHERE c.region = 'EAST' AND EXISTS "
         f"(SELECT 1 FROM {ORDERS} o.status = 'paid')",
+    ),
+    # Through a dataset both reach (#69): lines whose item has a tag. Item 1000's two
+    # tags count its lines once; line 105's item does not exist, though tagged.
+    (
+        Query(("line_count",), (), ("item_tags.tag = 'sale'",)),
+        _lines(f"{ITEM_TAGS} t.tag = 'sale'"),
+    ),
+    (
+        Query(("line_count",), (), ("item_tags.tag IN ('sale', 'kids')",)),
+        _lines(f"{ITEM_TAGS} t.tag IN ('sale', 'kids')"),
+    ),
+    # Two filters on tags: one tag row passes both, so no line counts.
+    (
+        Query(("line_count",), (), ("item_tags.tag = 'sale'", "item_tags.tag = 'kids'")),
+        _lines(f"{ITEM_TAGS} t.tag = 'sale' AND t.tag = 'kids'"),
+    ),
+    # A dimension of the dataset the tags meet lines at.
+    (
+        Query(("line_count",), ("items.category",), ("item_tags.tag = 'kids'",)),
+        _lines(f"{ITEM_TAGS} t.tag = 'kids'", "d.category,"),
+    ),
+    # Two steps from the root: lines whose order's customer has a tag. Line 103's
+    # order and line 106's customer do not exist.
+    (
+        Query(("line_count",), (), ("customer_tags.tag = 'vip'",)),
+        _lines(f"{CUSTOMER_TAGS} t.tag = 'vip'"),
+    ),
+    (
+        Query(("order_count",), (), ("customer_tags.tag = 'vip'",)),
+        "SELECT COUNT(o.id) FROM orders o WHERE EXISTS (SELECT 1 FROM customers c "
+        "JOIN customer_tags t ON t.customer_id = c.id WHERE c.id = o.customer_id "
+        "AND t.tag = 'vip')",
+    ),
+    # Tags of the item and of the customer: one semi-join each.
+    (
+        Query(("line_count",), (), ("item_tags.tag = 'sale'", "customer_tags.tag = 'vip'")),
+        f"""SELECT COUNT(l.id) FROM lines l
+            WHERE EXISTS (SELECT 1 FROM {ITEM_TAGS} t.tag = 'sale')
+            AND EXISTS (SELECT 1 FROM {CUSTOMER_TAGS} t.tag = 'vip')""",
     ),
     # A key of two columns; login 4's NULL references no account, not even (1, NULL).
     (
@@ -207,17 +275,29 @@ def test_semi_joins_match_the_reference(ex, semi_duck, query, gold):
     assert sorted(got, key=_key) == sorted(semi_duck.sql(gold).fetchall(), key=_key)
 
 
+def _key_fields() -> set[tuple[str, str]]:
+    """(dataset, field) of every field a key or relationship names."""
+    named = {(d.name, c) for d in MODEL.datasets for c in d.primary_key}
+    for r in MODEL.relationships:
+        named |= {(r.from_dataset, c) for c in r.from_columns} | {(r.to, c) for c in r.to_columns}
+    return named
+
+
+def _renamed(query: Query) -> Query:
+    """``query`` in the field names of _keys_renamed."""
+    filters = list(query.filters)
+    for ds, c in _key_fields():
+        filters = [re.sub(rf"\b{ds}\.{c}\b", f"{ds}.{c}_key", f) for f in filters]
+    return replace(query, filters=tuple(filters))
+
+
 def _keys_renamed() -> OssieDocument:
     """MODEL with every field a key or relationship names renamed (id to id_key), and
     orders.customer_id read through an expression: keys and relationships name
     fields, not columns (spec, "Name Resolution"), so the SQL reads the columns the
     fields do."""
     data = MODEL.model_dump(by_alias=True, exclude_none=True)
-    named = {(d["name"], c) for d in data["datasets"] for k in [d["primary_key"]] for c in k}
-    for r in data["relationships"]:
-        named |= {(r["from"], c) for c in r["from_columns"]} | {
-            (r["to"], c) for c in r["to_columns"]
-        }
+    named = _key_fields()
     for d in data["datasets"]:
         for f in d["fields"]:
             if (d["name"], f["name"]) in named:
@@ -238,7 +318,7 @@ def _keys_renamed() -> OssieDocument:
 
 @pytest.mark.parametrize(("query", "gold"), CASES)
 def test_keys_named_unlike_their_columns_give_the_same_answers(ex, semi_duck, query, gold):
-    got = Executor(ex.client, _keys_renamed()).execute(query).rows
+    got = Executor(ex.client, _keys_renamed()).execute(_renamed(query)).rows
     assert sorted(got, key=_key) == sorted(semi_duck.sql(gold).fetchall(), key=_key)
 
 
@@ -265,6 +345,30 @@ def test_the_data_tells_the_semi_join_from_wrong_plans(semi_duck):
         WHERE EXISTS (SELECT 1 FROM {ORDERS} o.status = 'paid')
         AND EXISTS (SELECT 1 FROM {ORDERS} o.total > 4) GROUP BY c.region"""
     assert sorted(semi_duck.sql(apart).fetchall(), key=_key) != both
+
+
+def test_the_data_tells_the_shared_semi_join_from_wrong_plans(semi_duck):
+    """Through a shared dataset (#69): a join counts a line once per tag of its item,
+    and a subquery that skips items or orders counts lines whose item or customer
+    does not exist."""
+    [[tagged]] = semi_duck.sql(_lines(f"{ITEM_TAGS} t.tag IN ('sale', 'kids')")).fetchall()
+    [[joined]] = semi_duck.sql(
+        "SELECT COUNT(l.id) FROM lines l JOIN item_tags t ON t.item_id = l.item_id "
+        "WHERE t.tag IN ('sale', 'kids')"
+    ).fetchall()
+    assert joined > tagged
+    [[sale]] = semi_duck.sql(_lines(f"{ITEM_TAGS} t.tag = 'sale'")).fetchall()
+    [[skipped]] = semi_duck.sql(
+        "SELECT COUNT(l.id) FROM lines l WHERE l.item_id IN "
+        "(SELECT item_id FROM item_tags WHERE tag = 'sale')"
+    ).fetchall()
+    assert skipped > sale
+    [[vip]] = semi_duck.sql(_lines(f"{CUSTOMER_TAGS} t.tag = 'vip'")).fetchall()
+    [[no_customers]] = semi_duck.sql(
+        "SELECT COUNT(l.id) FROM lines l WHERE l.order_id IN (SELECT id FROM orders "
+        "WHERE customer_id IN (SELECT customer_id FROM customer_tags WHERE tag = 'vip'))"
+    ).fetchall()
+    assert no_customers > vip
 
 
 def test_order_read_without_final_would_count_bob(ex, clickhouse):
@@ -309,6 +413,64 @@ def test_two_steps_nest_one_in_per_relationship():
         "WHERE customers.id IN (SELECT orders.customer_id FROM ossie_semi.orders AS orders "
         "WHERE orders.id IN (SELECT lines.order_id FROM ossie_semi.lines AS lines "
         "WHERE lines.qty > 1))"
+    ) in sql
+
+
+def test_a_shared_dataset_is_read():
+    """#69: order lines by the tags of their item, which lines and tags both reach.
+    items is read, so a tag of an item that does not exist keeps no line."""
+    sql = Planner(MODEL).sql(Query(("line_count",), (), ("item_tags.tag = 'sale'",)))
+    assert (
+        "WHERE lines.item_id IN (SELECT items.id FROM ossie_semi.items AS items "
+        "WHERE items.id IN (SELECT item_tags.item_id FROM ossie_semi.item_tags AS item_tags "
+        "WHERE item_tags.tag = 'sale'))"
+    ) in sql
+
+
+def test_a_shared_dataset_two_steps_from_the_root_reads_each_with_final(ex):
+    result = ex.execute(Query(("line_count",), (), ("customer_tags.tag = 'vip'",)))
+    assert (
+        "WHERE lines.order_id IN (SELECT orders.id FROM ossie_semi.orders AS orders FINAL "
+        "WHERE orders.customer_id IN (SELECT customers.id FROM ossie_semi.customers AS "
+        "customers WHERE customers.id IN (SELECT customer_tags.customer_id FROM "
+        "ossie_semi.customer_tags AS customer_tags WHERE customer_tags.tag = 'vip')))"
+    ) in result.sql
+
+
+def test_a_sibling_fact_filters_through_what_both_reference():
+    """The rule cannot tell a table of a customer's properties from another fact
+    about customers. Orders filtered on returns are the orders of customers with
+    such a return, not the orders returned; a model that means the latter relates
+    returns to orders."""
+    m = MODEL.model_dump(by_alias=True, exclude_none=True)
+
+    def field(name: str) -> dict:
+        return {"name": name, "expression": {"sql": name}}
+
+    m["datasets"].append(
+        {
+            "name": "returns",
+            "source": "ossie_semi.returns",
+            "primary_key": ["id"],
+            "fields": [field("id"), field("customer_id"), field("reason")],
+        }
+    )
+    m["relationships"].append(
+        {
+            "name": "returns_to_customer",
+            "from": "returns",
+            "to": "customers",
+            "from_columns": ["customer_id"],
+            "to_columns": ["id"],
+        }
+    )
+    sql = Planner(OssieDocument.model_validate(m)).sql(
+        Query(("order_count",), (), ("returns.reason = 'damaged'",))
+    )
+    assert (
+        "WHERE orders.customer_id IN (SELECT customers.id FROM ossie_semi.customers AS "
+        "customers WHERE customers.id IN (SELECT returns.customer_id FROM "
+        "ossie_semi.returns AS returns WHERE returns.reason = 'damaged'))"
     ) in sql
 
 
@@ -384,6 +546,50 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "filter \"items.category = 'books'\" reads items, which customers does not join "
             "to and which does not reach customers through many-to-one relationships; name "
             "the dataset that links them (lines) in a filter",
+        ),
+        # item_tags meets lines at items and at customers (#69 item 3).
+        (
+            _variant(
+                {
+                    "name": "item_tags_to_customer",
+                    "from": "item_tags",
+                    "to": "customers",
+                    "from_columns": ["item_id"],
+                    "to_columns": ["id"],
+                }
+            ),
+            Query(("line_count",), (), ("item_tags.tag = 'sale'",)),
+            "filter \"item_tags.tag = 'sale'\" reads item_tags, which meets lines at customers "
+            "and items: a lines row could be kept through either, and this version cannot "
+            "choose between them",
+        ),
+        # Orders by their lines' item tags: the fact between them, lines, is not
+        # found, and naming it does not answer either (#69 item 2).
+        (
+            Planner(MODEL),
+            Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
+            "filter \"item_tags.tag = 'sale'\" reads item_tags, which orders does not join to "
+            "and which does not reach orders through many-to-one relationships",
+        ),
+        (
+            Planner(MODEL),
+            Query(("order_count",), (), ("item_tags.tag = 'sale'", "lines.qty > 0")),
+            "filter \"item_tags.tag = 'sale'\" reads item_tags, which orders does not join to",
+        ),
+        # Two paths from lines to customers, which customer_tags meets lines at.
+        (
+            _variant(
+                {
+                    "name": "lines_to_customer",
+                    "from": "lines",
+                    "to": "customers",
+                    "from_columns": ["order_id"],
+                    "to_columns": ["id"],
+                }
+            ),
+            Query(("line_count",), (), ("customer_tags.tag = 'vip'",)),
+            "ambiguous join from 'lines' to 'customers': relationship paths "
+            "'lines_to_customer' and 'lines_to_order' -> 'orders_to_customer'",
         ),
         # A dimension of the filtered dataset still makes it the root.
         (

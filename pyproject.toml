@@ -23,7 +23,7 @@ dependencies = [
     "PyYAML>=6,<7",
     # Upper bounds: the translator builds on SQLGlot AST classes and parser
     # internals, and clickhouse-connect's client options; both move between majors.
-    "sqlglot>=30.24,<31",
+    "sqlglot>=30.25,<31",
     "clickhouse-connect>=1,<2",
 ]
 

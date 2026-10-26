@@ -648,9 +648,7 @@ def rewrite_tree(tree: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Exp
     operator would be regrouped: ``net * 2``, ``net`` being ``amount - 5``, must not
     print as ``amount - 5 * 2``. Every operator under another operator ends up in
     parentheses, except the left operand of the same operator (``a - b - c``), which
-    reads the same without them. CONTAINS counts as an operator here: SQLGlot prints
-    it as ``POSITION(a, 'x') > 0`` and parenthesizes that only under a binary
-    operator, so ``-CONTAINS(a, 'x')`` would print as ``-POSITION(a, 'x') > 0``."""
+    reads the same without them."""
     tree = tree.copy()
     # Bottom-up, so a rewrite that replaces a node still sees its arguments rewritten;
     # Expression.transform does not descend into a replaced node.
@@ -669,7 +667,7 @@ def rewrite_tree(tree: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Exp
         # dot bind tighter than any operator: `(x LIKE 'a!%') ESCAPE '!'` does not parse.
         if index is not None or isinstance(parent, exp.Escape | exp.Dot):
             continue
-        if not ((_operator(node) or isinstance(node, exp.Contains)) and _operator(parent)):
+        if not (_operator(node) and _operator(parent)):
             continue
         if arg_key == "this" and type(node) is type(parent) and isinstance(node, exp.Binary):
             continue

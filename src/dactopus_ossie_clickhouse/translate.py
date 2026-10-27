@@ -390,7 +390,6 @@ def _fmt_literal(node: exp.Expression | None) -> exp.Literal:
 _EXTRACT_PARTS = {
     "DAYOFWEEK": "toDayOfWeek",
     "DAYOFYEAR": "toDayOfYear",
-    "MILLISECOND": "toMillisecond",
 }
 
 # Functions SQLGlot keeps as exp.Anonymous (no dedicated node): name -> rewrite(args).

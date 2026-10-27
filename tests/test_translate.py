@@ -153,6 +153,8 @@ def test_translate_uses_picked_dialect():
         ("CEILING(x)", "CEIL(x)"),
         ("EXTRACT(DAYOFWEEK FROM d)", "toDayOfWeek(d)"),
         ("EXTRACT(DAYOFYEAR FROM d)", "toDayOfYear(d)"),
+        # ClickHouse reads it as toMillisecond(ts), the spec's component
+        ("EXTRACT(MILLISECOND FROM ts)", "EXTRACT(MILLISECOND FROM ts)"),
         ("TO_DATE('2024-01-15')", "toDate('2024-01-15')"),
         ("TO_DATE('15/01/2024', 'DD/MM/YYYY')", "toDate(parseDateTime('15/01/2024', '%d/%m/%Y'))"),
         (

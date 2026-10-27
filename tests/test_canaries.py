@@ -15,7 +15,7 @@ from ossie import OssieDocument
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse.model import SUPPORTED_VERSION
-from dactopus_ossie_clickhouse.translate import OssieSQL, parse
+from dactopus_ossie_clickhouse.translate import _ANONYMOUS, _ZONED, OssieSQL, parse
 
 pytestmark = pytest.mark.canary
 
@@ -74,17 +74,22 @@ def test_sqlglot_generates(ossie, generated, rule):
 
 # Functions the default dialect does not type, rewritten by name in _ANONYMOUS and
 # _ZONED. Typed, they would skip those rules.
-@pytest.mark.parametrize(
-    "ossie",
-    [
-        "APPROX_PERCENTILE(x, 0.9)",
-        "IFF(a, 1, 2)",
-        "ZEROIFNULL(x)",
-        "NULLIFZERO(x)",
-        "TO_DATE(s)",
-        "TO_TIMESTAMP(s)",
-    ],
-)
+ANONYMOUS = [
+    "APPROX_PERCENTILE(x, 0.9)",
+    "IFF(a, 1, 2)",
+    "ZEROIFNULL(x)",
+    "NULLIFZERO(x)",
+    "TO_DATE(s)",
+    "TO_TIMESTAMP(s)",
+]
+
+
+def test_anonymous_canaries_cover_every_rule():
+    names = {call.split("(")[0] for call in ANONYMOUS}
+    assert names == set(_ANONYMOUS) | set(_ZONED), "add a call to ANONYMOUS for each rule"
+
+
+@pytest.mark.parametrize("ossie", ANONYMOUS)
 def test_sqlglot_parses_as_anonymous(ossie):
     tree = parse(ossie)
     assert isinstance(tree, exp.Anonymous), (

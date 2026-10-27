@@ -13,6 +13,9 @@ on:
   pull_request:
     paths: [.github/workflows/latest.yml]  # a change to it runs it
 
+permissions:
+  contents: read  # runs code from Ossie's main and an unpinned SQLGlot
+
 env:
   OSSIE_CLICKHOUSE_REQUIRED: 1  # a missing server or database fails the run instead of skipping
   UV_PYTHON: "3.13"
@@ -44,10 +47,8 @@ jobs:
         run: uv pip install -U sqlglot
       - name: Install apache-ossie from main
         if: matrix.upstream == 'ossie'
-        run: |
-          git ls-remote https://github.com/apache/ossie.git refs/heads/main
-          uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
-      - run: uv pip list | grep -E "^(sqlglot|apache-ossie) "
+        run: uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
+      - run: uv pip freeze | grep -E "^(sqlglot|apache-ossie)[ =]"  # with the Ossie commit
       - name: Load the TPC-DS reference data (see CONTRIBUTING.md)
         run: |
           sudo chmod a+rwx /tmp/tpcds  # docker made the bind mount root-owned
@@ -81,5 +82,5 @@ jobs:
           git clone -q --depth 1 --filter=blob:none --sparse https://github.com/apache/ossie.git "$RUNNER_TEMP/ossie"
           git -C "$RUNNER_TEMP/ossie" sparse-checkout set examples
           echo "OSSIE_REPO=$RUNNER_TEMP/ossie" >> "$GITHUB_ENV"
-      - run: uv pip list | grep -E "^(sqlglot|apache-ossie) "
+      - run: uv pip freeze | grep -E "^(sqlglot|apache-ossie)[ =]"  # with the Ossie commit
       - run: uv run --no-sync pytest -q -m canary -rs

@@ -14,6 +14,9 @@ a minor release may change the Python API.
   (tobymao/sqlglot#8782), so the rule this project carried for it is gone.
   Values are unchanged; `NOT CONTAINS(s, 'a')` now prints as
   `NOT POSITION(s, 'a') > 0`, which ClickHouse reads the same way.
+- `EXTRACT(MILLISECOND FROM ts)` is sent as written instead of as
+  `toMillisecond(ts)`: ClickHouse reads it as that call, so the value is
+  unchanged.
 
 ## [0.11.0] - 2026-10-27
 

@@ -62,4 +62,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["integration: needs a reachable ClickHouse (skipped otherwise)"]
+markers = [
+    "integration: needs a reachable ClickHouse (skipped otherwise)",
+    "canary: pins an upstream gap or fact a rule here depends on (tests/test_canaries.py)",
+]

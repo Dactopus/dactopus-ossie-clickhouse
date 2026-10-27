@@ -166,7 +166,18 @@ is written by hand in the test with a reference to the spec section. The
 spec text wins over any engine. Replace hand-written expectations with the
 Ossie compliance suite (apache/ossie PR #237) once it exists. Integration tests run
 against the TPC-DS reference model from the Ossie repository, loaded into a
-local ClickHouse. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup.
+local ClickHouse; `tests/fixtures/tpcds.yaml` is an exact copy of its
+`examples/tpcds_semantic_model.yaml`. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for setup.
+
+A rule in `translate.py` that exists only because of a gap in SQLGlot, not
+because the spec and ClickHouse differ, comes with a canary in
+`tests/test_canaries.py`: SQLGlot's output without the rule, pinned, and the
+rule named in the message. So does a fact of Ossie a rule here depends on.
+Canaries pass on the lock; `.github/workflows/latest.yml` runs the suite
+weekly on the newest SQLGlot and on apache-ossie from `main`, canaries in a
+job of their own, so a red canary means a rule to revisit, not a broken
+answer.
 
 ## Known ClickHouse traits to handle
 

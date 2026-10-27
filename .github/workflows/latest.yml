@@ -1,0 +1,85 @@
+name: Latest upstream
+
+# Users install the newest SQLGlot the bounds allow, while CI runs the one in uv.lock;
+# Ossie's main is where the next pin comes from. Weekly, each of them over the lock:
+# tests say whether it breaks us, canaries (tests/test_canaries.py) whether a rule
+# here has lost its reason. The SQLGlot variant ignores the upper bound, so a red run
+# may also mean a new major version.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths: [.github/workflows/latest.yml]  # a change to it runs it
+
+env:
+  OSSIE_CLICKHOUSE_REQUIRED: 1  # a missing server or database fails the run instead of skipping
+  UV_PYTHON: "3.13"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        upstream: [sqlglot, ossie]
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.9
+        ports: ["8123:8123"]
+        env:
+          CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+        volumes:
+          - /tmp/tpcds:/var/lib/clickhouse/user_files/tpcds  # as in ci.yml
+        options: >-
+          --health-cmd "wget -qO- http://localhost:8123/ping || exit 1"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Install the newest SQLGlot
+        if: matrix.upstream == 'sqlglot'
+        run: uv pip install -U sqlglot
+      - name: Install apache-ossie from main
+        if: matrix.upstream == 'ossie'
+        run: |
+          git ls-remote https://github.com/apache/ossie.git refs/heads/main
+          uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
+      - run: uv pip list | grep -E "^(sqlglot|apache-ossie) "
+      - name: Load the TPC-DS reference data (see CONTRIBUTING.md)
+        run: |
+          sudo chmod a+rwx /tmp/tpcds  # docker made the bind mount root-owned
+          uv run --no-sync python -c "
+          import duckdb; c = duckdb.connect(); c.execute('INSTALL tpcds; LOAD tpcds; CALL dsdgen(sf=1)')
+          for t in ['store_sales', 'date_dim', 'customer', 'item', 'store']:
+              c.execute(f\"COPY {t} TO '/tmp/tpcds/{t}.parquet' (FORMAT PARQUET)\")"
+          curl -sS --fail-with-body http://127.0.0.1:8123 --data-binary "CREATE DATABASE tpcds"
+          for t in store_sales date_dim customer item store; do
+            curl -sS --fail-with-body http://127.0.0.1:8123 --data-binary "CREATE TABLE tpcds.$t ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM file('tpcds/$t.parquet', Parquet)"
+          done
+      - run: uv run --no-sync pytest -q -m "not canary"
+
+  canaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        upstream: [sqlglot, ossie]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - name: Install the newest SQLGlot
+        if: matrix.upstream == 'sqlglot'
+        run: uv pip install -U sqlglot
+      - name: Install apache-ossie from main, check out its examples
+        if: matrix.upstream == 'ossie'
+        run: |
+          uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/apache/ossie.git "$RUNNER_TEMP/ossie"
+          git -C "$RUNNER_TEMP/ossie" sparse-checkout set examples
+          echo "OSSIE_REPO=$RUNNER_TEMP/ossie" >> "$GITHUB_ENV"
+      - run: uv pip list | grep -E "^(sqlglot|apache-ossie) "
+      - run: uv run --no-sync pytest -q -m canary -rs

@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-27
+
 ### Changed
 
 - Requires SQLGlot 30.25 or later. Its ClickHouse generator parenthesizes

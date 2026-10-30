@@ -138,13 +138,25 @@ returned. Relate `returns` to `orders` for those. A filter dataset that
 meets the metric's at two datasets is refused, since either could be
 meant.
 
+The orders with a line in Clothing need the fact between orders and
+products named in a filter, since refund lines could link them too:
+`-m orders.order_count -f "order_lines.order_id IS NOT NULL" -f
+"product_categories.category = 'Clothing'"`. Every filter on the lines
+and on the categories holds for one line, and so does a filter on
+orders next to them: `orders.status = 'paid'` then keeps the orders
+whose paid status and Clothing line go together, and an order without
+lines no longer counts. Without the filter on the lines the question is
+refused, and the message names each dataset a filter could name to link
+the two, with a filter on it that keeps every one of its rows.
+
 Such a filter cannot ask for rows without a match: `NOT
 readings.reading_date = '2026-10-19'` counts devices that have a reading
 on another day. For absence, give the root a field
 (`devices.last_reading_at`, `sessions.has_purchase`). Refused, with a message that says why: a filter that
 mixes columns of both sides in one expression (write two filters; an
-`OR` across the sides cannot be split), a filter on `items` alone with no
-filter on the order lines that link items to customers, and a dimension
+`OR` across the sides cannot be split), a filter on `items` or
+`product_categories` alone with no filter on the order lines that link
+them to customers or orders, and a dimension
 of the many side next to a metric of the one side.
 
 ## Metrics on a dataset

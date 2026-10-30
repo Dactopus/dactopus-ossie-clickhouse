@@ -136,7 +136,11 @@ Python library with a CLI entry point. The parts that constrain code:
   dataset read (`Planner._semi_join_to`); two such S are refused, and so
   is an M whose path has a dataset no key of which holds its columns to
   the next (`Planner._not_a_property`): its rows may be facts, not
-  properties of S. Both
+  properties of S. An M that meets nothing the root reaches is planned
+  the same way inside the subquery of the one fact another filter names
+  that M meets (`Planner._through`), never a fact the planner picks: a
+  question without one is refused with each fact it would accept named
+  (`Planner._unlinked`). Both
   are tried only when the question is refused over the root of
   everything it reads, from the root of its metrics, dimensions and
   aggregate filters; a filter mixing both sides is refused.

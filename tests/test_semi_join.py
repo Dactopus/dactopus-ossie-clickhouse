@@ -10,7 +10,10 @@ updated after it was paid, so a subquery read without FINAL counts it.
 
 Order lines are counted by tags of their item, and of their order's customer,
 which reach a dataset that lines reach too (#69): a line counts once when the
-dataset it reaches has a tag row that passes every filter on tags."""
+dataset it reaches has a tag row that passes every filter on tags. Orders and
+customers are counted by the tags of their lines' items through a filter on
+lines, which names the fact between them: one line passes every filter on
+lines and has an item with a tag that passes every filter on tags."""
 
 import copy
 import re
@@ -38,9 +41,11 @@ ROWS = {
     "(16, 3, 'open', 8, 1)",
     # Line 103 is on an order that does not exist, line 104 on none. Line 105 is
     # on an item that does not exist, line 106 on the order of a missing customer.
+    # Order 14 has a line of 3 of an untagged item and one of 1 of a kids item.
     "lines": "(100, 10, 1000, 2), (101, 12, 1001, 1), (102, 16, 1000, 5), "
-    "(103, 77, 1000, 1), (104, NULL, 1000, 1), (105, 11, 1002, 3), (106, 15, 1001, 1)",
-    "items": "(1000, 'toys'), (1001, 'books')",
+    "(103, 77, 1000, 1), (104, NULL, 1000, 1), (105, 11, 1002, 3), (106, 15, 1001, 1), "
+    "(107, 14, 1003, 3), (108, 14, 1001, 1)",
+    "items": "(1000, 'toys'), (1001, 'books'), (1003, 'games')",
     # Item 1000 has two tags; item 1002, which does not exist, has one, and so has
     # customer 99. A NULL key tags nothing.
     "item_tags": "(1000, 'sale'), (1000, 'kids'), (1001, 'kids'), (1002, 'sale'), (NULL, 'sale')",
@@ -121,6 +126,17 @@ ITEM_TAGS = "items i JOIN item_tags t ON t.item_id = i.id WHERE i.id = l.item_id
 CUSTOMER_TAGS = (
     "orders o JOIN customers c ON o.customer_id = c.id "
     "JOIN customer_tags t ON t.customer_id = c.id WHERE o.id = l.order_id AND"
+)
+
+
+def _orders(where: str) -> str:
+    return f"SELECT COUNT(o.id) FROM orders o WHERE EXISTS (SELECT 1 FROM {where})"
+
+
+TAGGED_LINES = "lines l JOIN items i ON l.item_id = i.id JOIN item_tags t ON t.item_id = i.id"
+ORDER_LINE_TAGS = f"{TAGGED_LINES} WHERE l.order_id = o.id AND"
+CUSTOMER_LINE_TAGS = (
+    f"{TAGGED_LINES} JOIN orders o ON l.order_id = o.id WHERE o.customer_id = c.id AND"
 )
 
 CASES = [
@@ -211,6 +227,46 @@ CASES = [
         f"""SELECT COUNT(l.id) FROM lines l
             WHERE EXISTS (SELECT 1 FROM {ITEM_TAGS} t.tag = 'sale')
             AND EXISTS (SELECT 1 FROM {CUSTOMER_TAGS} t.tag = 'vip')""",
+    ),
+    # Orders by their lines' item tags, with lines named (#69 item 2). Line 105's
+    # item does not exist, though tagged, so order 11 is not kept.
+    (
+        Query(("order_count",), (), ("lines.order_id IS NOT NULL", "item_tags.tag = 'sale'")),
+        _orders(f"{ORDER_LINE_TAGS} t.tag = 'sale'"),
+    ),
+    # One line passes both: order 14's line of 3 is of an untagged item.
+    (
+        Query(("order_count",), (), ("lines.qty > 1", "item_tags.tag = 'kids'")),
+        _orders(f"{ORDER_LINE_TAGS} l.qty > 1 AND t.tag = 'kids'"),
+    ),
+    # A filter the root joins to stays a plain WHERE.
+    (
+        Query(
+            ("order_count",),
+            (),
+            ("orders.status = 'paid'", "lines.qty > 0", "item_tags.tag IN ('sale', 'kids')"),
+        ),
+        "SELECT COUNT(o.id) FROM orders o WHERE o.status = 'paid' AND EXISTS (SELECT 1 FROM "
+        f"{ORDER_LINE_TAGS} l.qty > 0 AND t.tag IN ('sale', 'kids'))",
+    ),
+    # A filter on orders then holds for the line's order too: an order of cid with
+    # a kids line is open, the paid one has an untagged line of 3.
+    (
+        Query(
+            ("customer_count",),
+            ("customers.region",),
+            ("orders.status = 'paid'", "lines.order_id IS NOT NULL", "item_tags.tag = 'kids'"),
+        ),
+        _customers(f"{CUSTOMER_LINE_TAGS} o.status = 'paid' AND t.tag = 'kids'"),
+    ),
+    # Three steps: customers through their orders' lines.
+    (
+        Query(
+            ("customer_count",),
+            ("customers.region",),
+            ("lines.qty > 0", "item_tags.tag = 'kids'"),
+        ),
+        _customers(f"{CUSTOMER_LINE_TAGS} l.qty > 0 AND t.tag = 'kids'"),
     ),
     # A key of two columns; login 4's NULL references no account, not even (1, NULL).
     (
@@ -371,6 +427,46 @@ def test_the_data_tells_the_shared_semi_join_from_wrong_plans(semi_duck):
     assert no_customers > vip
 
 
+def test_the_data_tells_the_named_fact_semi_join_from_wrong_plans(semi_duck):
+    """#69 item 2: a join counts an order once per tag of its line's item; a
+    subquery that skips items keeps order 11, whose line's item does not exist;
+    one subquery per filter keeps order 14, whose two lines pass one each."""
+    [[tagged]] = semi_duck.sql(
+        _orders(f"{ORDER_LINE_TAGS} l.qty > 0 AND t.tag IN ('sale', 'kids')")
+    ).fetchall()
+    [[joined]] = semi_duck.sql(
+        f"SELECT COUNT(o.id) FROM orders o JOIN {TAGGED_LINES} ON l.order_id = o.id "
+        "WHERE l.qty > 0 AND t.tag IN ('sale', 'kids')"
+    ).fetchall()
+    assert joined > tagged
+    [[sale]] = semi_duck.sql(_orders(f"{ORDER_LINE_TAGS} t.tag = 'sale'")).fetchall()
+    [[skipped]] = semi_duck.sql(
+        "SELECT COUNT(o.id) FROM orders o WHERE o.id IN (SELECT order_id FROM lines "
+        "WHERE item_id IN (SELECT item_id FROM item_tags WHERE tag = 'sale'))"
+    ).fetchall()
+    assert skipped > sale
+    [[kids]] = semi_duck.sql(_orders(f"{ORDER_LINE_TAGS} l.qty > 1 AND t.tag = 'kids'")).fetchall()
+    [[apart]] = semi_duck.sql(
+        "SELECT COUNT(o.id) FROM orders o WHERE o.id IN (SELECT order_id FROM lines "
+        "WHERE qty > 1) AND EXISTS (SELECT 1 FROM "
+        f"{ORDER_LINE_TAGS} t.tag = 'kids')"
+    ).fetchall()
+    assert apart > kids
+
+
+def test_a_named_fact_carries_the_shared_semi_join():
+    """#69 item 2: the filter on tags is planned in the question over lines."""
+    sql = Planner(MODEL).sql(
+        Query(("order_count",), (), ("lines.qty > 1", "item_tags.tag = 'kids'"))
+    )
+    assert (
+        "WHERE orders.id IN (SELECT lines.order_id FROM ossie_semi.lines AS lines "
+        "WHERE lines.qty > 1 AND lines.item_id IN (SELECT items.id FROM ossie_semi.items "
+        "AS items WHERE items.id IN (SELECT item_tags.item_id FROM ossie_semi.item_tags AS "
+        "item_tags WHERE item_tags.tag = 'kids')))"
+    ) in sql
+
+
 def test_order_read_without_final_would_count_bob(ex, clickhouse):
     result = ex.execute(CASES[0][0])
     assert dict(result.rows) == {"EAST": 1, "WEST": 1}
@@ -437,17 +533,99 @@ def test_a_shared_dataset_two_steps_from_the_root_reads_each_with_final(ex):
     ) in result.sql
 
 
+def _field(name: str) -> dict:
+    return {"name": name, "expression": {"sql": name}}
+
+
+def _with_refunds() -> Planner:
+    """MODEL with refund lines, a second fact between orders and items."""
+    m = MODEL.model_dump(by_alias=True, exclude_none=True)
+    m["datasets"].append(
+        {
+            "name": "refunds",
+            "source": "ossie_semi.refunds",
+            "primary_key": ["id"],
+            "fields": [_field("id"), _field("order_id"), _field("item_id")],
+        }
+    )
+    for to in ("orders", "items"):
+        m["relationships"].append(
+            {
+                "name": f"refunds_to_{to}",
+                "from": "refunds",
+                "to": to,
+                "from_columns": [f"{to[:-1]}_id"],
+                "to_columns": ["id"],
+            }
+        )
+    return Planner(OssieDocument.model_validate(m))
+
+
+def _with_favorites(*, drop_lines_to_order: bool = False) -> Planner:
+    """MODEL with favorite items of customers, a fact that meets orders at customers."""
+    m = MODEL.model_dump(by_alias=True, exclude_none=True)
+    m["datasets"].append(
+        {
+            "name": "favorites",
+            "source": "ossie_semi.favorites",
+            "primary_key": ["customer_id", "item_id"],
+            "fields": [_field("customer_id"), _field("item_id"), _field("since")],
+        }
+    )
+    for to in ("customers", "items"):
+        m["relationships"].append(
+            {
+                "name": f"favorites_to_{to}",
+                "from": "favorites",
+                "to": to,
+                "from_columns": [f"{to[:-1]}_id" if to == "items" else "customer_id"],
+                "to_columns": ["id"],
+            }
+        )
+    if drop_lines_to_order:
+        m["relationships"] = [r for r in m["relationships"] if r["name"] != "lines_to_order"]
+    return Planner(OssieDocument.model_validate(m))
+
+
+def test_a_named_fact_that_meets_the_root_at_a_shared_dataset_carries_the_filter():
+    """favorites meets orders at customers; item_tags rides in its subquery."""
+    sql = _with_favorites(drop_lines_to_order=True).sql(
+        Query(("order_count",), (), ("favorites.since > 0", "item_tags.tag = 'kids'"))
+    )
+    assert (
+        "WHERE orders.customer_id IN (SELECT customers.id FROM ossie_semi.customers AS "
+        "customers WHERE customers.id IN (SELECT favorites.customer_id FROM "
+        "ossie_semi.favorites AS favorites WHERE favorites.since > 0 AND favorites.item_id IN "
+        "(SELECT items.id FROM ossie_semi.items AS items WHERE items.id IN (SELECT "
+        "item_tags.item_id FROM ossie_semi.item_tags AS item_tags WHERE item_tags.tag = "
+        "'kids'))))"
+    ) in sql
+
+
+def test_named_fact_subquery_reads_its_own_dictionaries_only():
+    """A dictionary the fact joins is read with dictGetOrNull in the fact's own
+    filters; the subquery of the dataset it carries reads items as a table."""
+    catalog = Catalog({"items": TableInfo("Dictionary", frozenset(), dictionary_key="id")})
+    q = Query(
+        ("order_count",),
+        (),
+        ("lines.qty > 0 AND items.category = 'toys'", "item_tags.tag = 'kids'"),
+    )
+    sql = Planner(MODEL, catalog).sql(q)
+    assert (
+        "dictGetOrNull('ossie_semi.items', 'category', lines.item_id) = 'toys')) AND "
+        "lines.item_id IN (SELECT items.id FROM ossie_semi.items AS items WHERE items.id IN"
+    ) in sql
+
+
 def _with_returns(primary_key: list[str] | None) -> Planner:
     """MODEL with returns of customers, which no relationship ties to orders."""
     m = MODEL.model_dump(by_alias=True, exclude_none=True)
 
-    def field(name: str) -> dict:
-        return {"name": name, "expression": {"sql": name}}
-
     returns = {
         "name": "returns",
         "source": "ossie_semi.returns",
-        "fields": [field("id"), field("customer_id"), field("reason")],
+        "fields": [_field("id"), _field("customer_id"), _field("reason")],
     }
     if primary_key:
         returns["primary_key"] = primary_key
@@ -564,7 +742,7 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             Query(("customer_count",), (), ("items.category = 'books'",)),
             "filter \"items.category = 'books'\" reads items, which customers does not join "
             "to and which does not reach customers through many-to-one relationships; name "
-            "the dataset that links them (lines) in a filter",
+            "the dataset that links them (lines) in a filter, such as lines.order_id IS NOT NULL",
         ),
         # item_tags meets lines at items and at customers (#69 item 3).
         (
@@ -598,18 +776,61 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "filter \"customer_tags.tag = 'vip'\" reads customer_tags, which meets lines at "
             "customers and orders: a lines row could be kept through either",
         ),
-        # Orders by their lines' item tags: the fact between them, lines, is not
-        # found, and naming it does not answer either (#69 item 2).
+        # Orders by their lines' item tags: the fact between them is a choice of
+        # meaning, so the question names it (#69 item 2).
         (
             Planner(MODEL),
             Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
             "filter \"item_tags.tag = 'sale'\" reads item_tags, which orders does not join to "
-            "and which does not reach orders through many-to-one relationships",
+            "and which does not reach orders through many-to-one relationships; name the "
+            "dataset that links them (lines) in a filter, such as lines.order_id IS NOT NULL",
         ),
         (
-            Planner(MODEL),
-            Query(("order_count",), (), ("item_tags.tag = 'sale'", "lines.qty > 0")),
-            "filter \"item_tags.tag = 'sale'\" reads item_tags, which orders does not join to",
+            _with_refunds(),
+            Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
+            "name one of the datasets that link them (lines, refunds) in a filter, such as "
+            "lines.order_id IS NOT NULL or refunds.order_id IS NOT NULL",
+        ),
+        # A fact that meets the root at a shared dataset is named too.
+        (
+            _with_favorites(),
+            Query(("order_count",), (), ("item_tags.tag = 'kids'",)),
+            "name one of the datasets that link them (favorites, lines) in a filter, such as "
+            "favorites.customer_id IS NOT NULL or lines.order_id IS NOT NULL",
+        ),
+        (
+            _with_favorites(drop_lines_to_order=True),
+            Query(("order_count",), (), ("item_tags.tag = 'kids'",)),
+            "name the dataset that links them (favorites) in a filter, such as "
+            "favorites.customer_id IS NOT NULL",
+        ),
+        # Both facts named: an order could be kept through a line or a refund.
+        (
+            _with_refunds(),
+            Query(
+                ("order_count",),
+                (),
+                ("lines.qty > 0", "refunds.id > 0", "item_tags.tag = 'sale'"),
+            ),
+            "filter \"item_tags.tag = 'sale'\" reads item_tags, which meets orders through "
+            "lines and refunds, which the other filters name: a orders row could be kept "
+            "through either, and this version cannot choose between them",
+        ),
+        # Two paths from lines to customers: naming lines would be refused, so the
+        # message does not suggest it.
+        (
+            _variant(
+                {
+                    "name": "lines_to_customer",
+                    "from": "lines",
+                    "to": "customers",
+                    "from_columns": ["order_id"],
+                    "to_columns": ["id"],
+                }
+            ),
+            Query(("customer_count",), (), ("item_tags.tag = 'kids'",)),
+            "filter \"item_tags.tag = 'kids'\" reads item_tags, which customers does not join "
+            "to and which does not reach customers through many-to-one relationships$",
         ),
         # Two paths from lines to customers, which customer_tags meets lines at.
         (
@@ -668,7 +889,10 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
 def test_refusals(planner, query, message):
     with pytest.raises(PlanError) as e:
         planner.sql(query)
-    assert message in str(e.value)
+    if message.endswith("$"):  # the whole message, nothing after it
+        assert str(e.value).endswith(message[:-1])
+    else:
+        assert message in str(e.value)
 
 
 WEB = load_model(Path(__file__).parent / "fixtures" / "web_analytics.yaml")

@@ -104,7 +104,8 @@ questions it refuses.
   purchase of some value, is a semi-join: each session with at least one
   such purchase counts once. So is a filter on rows that reference what
   the root references, such as order lines whose product is in a
-  category
+  category, and, with the order lines named in a filter, orders with a
+  line in a category
   ([semi-joins](docs/design.md#semi-joins-for-filters-on-the-many-side)).
 - Metrics of different facts, such as revenue and returns by region, are
   each computed from their own root and merged on the dimensions

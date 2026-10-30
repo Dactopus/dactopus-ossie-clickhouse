@@ -3,7 +3,8 @@
 Minimum planner: one root dataset plus many-to-one joins along the one path
 to each dataset the query touches. A row filter on a dataset that reaches the
 root but that the root does not reach is a semi-join (IN), and so is one on a
-dataset that meets the root at a dataset both reach. Metrics that no one
+dataset that meets the root at a dataset both reach, or meets a fact another
+filter names. Metrics that no one
 root can answer together are each answered from their own root and merged on
 the dimensions (stitching). Anything else is rejected with a message that
 names the nearest supported thing.
@@ -967,7 +968,10 @@ class Planner:
         own joins, FINAL and dictionaries; M reaches the root along one path of
         relationships, one IN per step. An M that does not reach the root meets it
         at the first dataset S on its relationships that the root reaches (#69):
-        the semi-join keeps S rows, and the root's rows that reach one of them."""
+        the semi-join keeps S rows, and the root's rows that reach one of them.
+        An M that meets no dataset the root reaches does so in the subquery of
+        the one fact another filter names that M meets: orders by the categories
+        of their lines' products, with a filter on the lines (#69 item 2)."""
         core = {label: ds for label, ds in touched.items() if label not in rows}
         if not set().union(*core.values()):
             return None
@@ -1016,41 +1020,118 @@ class Planner:
                     f"the other filters name; this version cannot choose between them"
                 )
             group.setdefault(owners[0], []).append(label)
-        semi_joins = []
+
+        def parts(top: str) -> tuple[list[exp.Expression], set[str]]:
+            labels = group[top]
+            return [rows[lb] for lb in labels], set().union({top}, *(touched[lb] for lb in labels))
+
+        # An M that meets the root nowhere rides in the subquery of a named fact it
+        # meets, as a filter of the question over that fact's rows (#69 item 2).
+        direct = [t for t in group if root.name in reach[t] or self._meets(t, near)]
+        extra: dict[str, list[exp.Expression]] = {t: [] for t in direct}
         for top, labels in group.items():
-            used = set().union({top}, *(touched[label] for label in labels))
-            filters = [rows[label] for label in labels]
-            if root.name in reach[top]:
-                semi_joins.append(self._semi_join(root, self.dataset(top), filters, used))
+            if top in extra:
                 continue
-            meets = self._meets(top, near)
-            if len(meets) > 1:
+            carriers = [t for t in direct if self._meets(top, reach[t])]
+            if not carriers:
+                raise PlanError(self._unlinked(labels[0], top, root, near))
+            if len(carriers) > 1:
                 raise PlanError(
-                    f"{labels[0]} reads {top}, which meets {root.name} at "
-                    f"{' and '.join(meets)}: a {root.name} row could be kept through either, "
-                    "and this version cannot choose between them"
+                    f"{labels[0]} reads {top}, which meets {root.name} through "
+                    f"{' and '.join(sorted(carriers))}, which the other filters name: a "
+                    f"{root.name} row could be kept through either, and this version cannot "
+                    "choose between them"
                 )
-            if not meets:
-                via = sorted(
-                    d.name
-                    for d in self.model.datasets
-                    if {root.name, top} <= self._reachable(d.name) and d.name != top
+            carrier = self.dataset(carriers[0])
+            filters, used = parts(top)
+            on = self._through(labels[0], top, carrier, reach[carrier.name], filters, used)
+            extra[carrier.name].append(on)
+        semi_joins = []
+        for top in direct:
+            filters, used = parts(top)
+            if root.name in reach[top]:
+                semi_joins.append(
+                    self._semi_join(root, self.dataset(top), filters, used, extra[top])
                 )
-                hint = (
-                    f"; name the dataset that links them ({', '.join(via)}) in a filter"
-                    if via
-                    else ""
+            else:
+                semi_joins.append(
+                    self._through(group[top][0], top, root, near, filters, used, extra[top])
                 )
-                raise PlanError(
-                    f"{labels[0]} reads {top}, which {root.name} does not join to and which "
-                    f"does not reach {root.name} through many-to-one relationships{hint}"
-                )
-            shared = self.dataset(meets[0])
-            if problem := self._not_a_property(top, shared, root):
-                raise PlanError(f"{labels[0]} {problem}")
-            on_shared = self._semi_join(shared, self.dataset(top), filters, used)
-            semi_joins.append(self._semi_join_to(root, shared, on_shared))
         return root, joined, semi_joins
+
+    def _through(
+        self,
+        label: str,
+        m: str,
+        at: OssieDataset,
+        near: set[str],
+        filters: list[exp.Expression],
+        used: set[str],
+        extra: list[exp.Expression] | None = None,
+    ) -> exp.Expression:
+        """``at``'s rows that reach a dataset S of ``near`` that ``m`` meets, kept
+        when an ``m`` row that passes ``filters`` references their S row."""
+        meets = self._meets(m, near)
+        if len(meets) > 1:
+            raise PlanError(
+                f"{label} reads {m}, which meets {at.name} at {' and '.join(meets)}: a "
+                f"{at.name} row could be kept through either, and this version cannot "
+                "choose between them"
+            )
+        shared = self.dataset(meets[0])
+        if problem := self._not_a_property(m, shared, at):
+            raise PlanError(f"{label} {problem}")
+        on_shared = self._semi_join(shared, self.dataset(m), filters, used, extra)
+        return self._semi_join_to(at, shared, on_shared)
+
+    def _unlinked(self, label: str, m: str, root: OssieDataset, near: set[str]) -> str:
+        """Why a filter on ``m`` keeps no ``root`` row, with each fact a filter could
+        name to link them, as _split_filters would plan it: which one does is a
+        choice of meaning, so the question names it. The example filter keeps
+        every row of the fact that references a root row, or the dataset S it
+        meets the root at."""
+        examples = {}  # dataset -> a filter on it that drops none of its rows that count
+        for d in self.model.datasets:
+            if d.name in near or d.name == m:
+                continue
+            if paths := self._paths(d.name, root.name):
+                ok = len(paths) == 1
+            else:
+                meets = self._meets(d.name, near)
+                if len(meets) != 1:
+                    continue
+                paths = self._paths(d.name, meets[0])
+                ok = self._one_way(d.name, root, self.dataset(meets[0]))
+            reach = self._reachable(d.name)
+            if m in reach:
+                ok = ok and len(self._paths(d.name, m)) == 1
+            else:
+                meets = self._meets(m, reach)
+                ok = ok and len(meets) == 1 and self._one_way(m, self.dataset(d.name), meets[0])
+            if ok:
+                examples[d.name] = f"{d.name}.{paths[0][0].from_columns[0]} IS NOT NULL"
+        message = (
+            f"{label} reads {m}, which {root.name} does not join to and which does not "
+            f"reach {root.name} through many-to-one relationships"
+        )
+        if not examples:
+            return message
+        via = sorted(examples)
+        which = "the dataset that links" if len(via) == 1 else "one of the datasets that link"
+        return (
+            f"{message}; name {which} them ({', '.join(via)}) in a filter, such as "
+            f"{' or '.join(examples[d] for d in via)}"
+        )
+
+    def _one_way(self, m: str, at: OssieDataset, shared: OssieDataset | str) -> bool:
+        """Whether _through plans ``m`` meeting ``at`` at ``shared``: one path each
+        way, and ``m``'s rows properties of ``shared``'s."""
+        shared = self.dataset(shared) if isinstance(shared, str) else shared
+        return (
+            len(self._paths(m, shared.name)) == 1
+            and len(self._paths(at.name, shared.name)) == 1
+            and self._not_a_property(m, shared, at) is None
+        )
 
     def _meets(self, start: str, near: set[str]) -> list[str]:
         """Where the relationships from ``start`` first reach a dataset of ``near``:
@@ -1111,10 +1192,16 @@ class Planner:
         return cond
 
     def _semi_join(
-        self, root: OssieDataset, m: OssieDataset, filters: list[exp.Expression], used: set[str]
+        self,
+        root: OssieDataset,
+        m: OssieDataset,
+        filters: list[exp.Expression],
+        used: set[str],
+        extra: list[exp.Expression] | None = None,
     ) -> exp.Expression:
-        """root's key IN the keys of ``m`` rows that pass ``filters``, one IN per
-        relationship on the one path from ``m`` to ``root``."""
+        """root's key IN the keys of ``m`` rows that pass ``filters`` and ``extra``,
+        semi-joins of ``m``'s own, one IN per relationship on the one path from
+        ``m`` to ``root``."""
         paths = self._paths(m.name, root.name)
         if len(paths) > 1:
             raise PlanError(_ambiguous(m.name, root.name, paths))
@@ -1128,6 +1215,8 @@ class Planner:
         sub = sub.where(exp.and_(*filters))
         if dict_keys:
             sub = sub.transform(lambda n: self._dict_get(n, dict_keys))
+        if extra:  # after the transform: their subqueries read datasets of their own
+            sub = sub.where(exp.and_(*extra))
         for before, r in zip(path, path[1:], strict=False):
             at = self.dataset(r.from_dataset)
             sub = (

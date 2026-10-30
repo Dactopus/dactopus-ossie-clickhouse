@@ -560,17 +560,70 @@ order_lines.product_id IN (SELECT products.product_id FROM products
   rows are. Refused questions can be answered later without breaking an
   answer; the other way round, a wider rule narrowed later would.
 - A dimension of M stays refused: by category, a line would count once
-  per category. A root two steps away from M through a fact
-  (`orders.order_count` by the categories of its lines) is refused, as
-  before. No hint names the fact, since nothing reaches M, and naming it
-  in a filter of its own does not answer the question yet; that, and
-  whether the fact must be named, is open in #69.
+  per category.
 
 The data in `tests/test_semi_join.py` has an item with two matching tags,
 two tag filters passed by different rows, a tag of an item that does not
 exist, a line on the order of a missing customer and NULL keys: a join, a
 subquery that skips the shared dataset, and one that skips the orders on
 the way each give another answer.
+
+### Through a fact the question names
+
+"Orders with a line in Clothing" has a root two steps from M: orders do
+not reach products, and the categories meet nothing orders reach. A fact
+reaches both, the order lines, but the fact is a choice of meaning. With
+`refund_lines -> orders` and `refund_lines -> products` next to the order
+lines, the same words through refunds count the orders where Clothing was
+refunded, a smaller number. A planner that took the only fact a model
+has would answer the refunds one without a word in a model that relates
+only refunds, and adding the order lines later would turn an answer into
+a refusal. So the question names the fact with a filter on it, as a
+filter on `items` for customers already must (above):
+
+```
+-m orders.order_count -f "order_lines.order_id IS NOT NULL" -f "product_categories.category = 'Clothing'"
+```
+
+The filter on the lines makes them M of a semi-join to orders, and the
+filter on categories joins that subquery as a filter of the question over
+the lines, through `products` as in the previous section:
+
+```sql
+orders.order_id IN (SELECT order_lines.order_id FROM order_lines
+  WHERE order_lines.order_id IS NOT NULL AND order_lines.product_id IN
+    (SELECT products.product_id FROM products WHERE products.product_id IN
+      (SELECT product_categories.product_id FROM product_categories
+        WHERE product_categories.category = 'Clothing')))
+```
+
+- One line passes every filter on the lines and has a product in the
+  category, as one joined row would: `-f "order_lines.quantity > 1"`
+  keeps orders with a line of more than one item in Clothing, not orders
+  with a large line and another line in Clothing.
+- `order_lines.order_id IS NOT NULL` drops no line that could keep an
+  order, since a line without an order keeps none. It does bind: every
+  filter on a dataset the lines reach, `orders.status = 'paid'` too, then
+  holds for the same line, as a filter on the lines always makes it, and
+  an order without lines no longer passes it. A question without the
+  fact is refused with each dataset a filter could name to link them, as
+  the planner would plan it, with such a filter on each as an example.
+  A fact that meets the root at a shared dataset counts too
+  (`favorites (customer_id, item_id)` for orders through customers), and
+  one with two paths to the root, or one that M meets at two datasets,
+  is left out, since naming it would be refused.
+- A filter dataset that meets two named facts (`order_lines` and
+  `refund_lines` both filtered) is refused with both named, since an
+  order could be kept through either. The rules of the previous section
+  hold inside the fact's subquery: one meeting dataset, a dataset of
+  properties.
+- Customers by the categories of their orders' lines work the same way,
+  one `IN` more.
+
+`tests/test_semi_join.py` compares these with DuckDB running `EXISTS` on
+the data above, which adds an order with a large line of an untagged item
+and a small line of a tagged one: a join, a subquery that skips the
+products, and one subquery per filter each give another answer.
 
 ## The model's time zone, UTC by default
 

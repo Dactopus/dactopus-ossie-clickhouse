@@ -7,6 +7,21 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- A filter on a dataset that meets the root nowhere is answered through a
+  fact another filter names (closes #69). `-m orders.order_count -f
+  "order_lines.order_id IS NOT NULL" -f "product_categories.category =
+  'Clothing'"` counts the orders with a line in Clothing, each order
+  once; 0.12.0 refused it with or without the filter on the lines. The
+  filters on the lines and on the categories hold for one line. The fact
+  is named, never picked by the planner, since refund lines could link
+  orders and products too and mean other orders. Without it the question
+  is refused with each fact the planner would accept named and a filter
+  on it that keeps all its rows; a filter on a dataset the fact reaches,
+  such as `orders.status`, then holds for the same line. A filter dataset
+  that meets two named facts is refused with both named.
+
 ## [0.12.0] - 2026-10-27
 
 ### Changed

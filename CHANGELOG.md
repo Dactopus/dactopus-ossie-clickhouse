@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-10-30
+
 ### Added
 
 - A filter on a dataset that meets the root nowhere is answered through a

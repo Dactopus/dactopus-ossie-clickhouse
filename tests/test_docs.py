@@ -5,7 +5,6 @@ import json
 import re
 from pathlib import Path
 
-import clickhouse_connect
 import pytest
 from sqlglot import exp
 
@@ -75,10 +74,8 @@ def test_page_quotes_what_a_user_without_revenue_gets():
     assert STEPS[7][2] == refusal(ex, QUESTION)
 
 
-def test_page_figures_come_from_the_ga4_sample(clickhouse):
-    if not clickhouse.query("EXISTS TABLE dactopus.purchases").result_rows[0][0]:
-        pytest.skip("GA4 sample not loaded into the database dactopus (see dactopus-data-models)")
-    ex = Executor(clickhouse_connect.get_client(dsn=clickhouse.url, database="dactopus"), MODEL)
+def test_page_figures_come_from_the_ga4_sample(dactopus):
+    ex = Executor(dactopus, MODEL)
     month, source_medium, currency, revenue, purchases = ex.execute(QUESTION).rows[0]
     row = f"{month:%B %Y}, {source_medium}, {currency}: revenue {revenue:,.0f}"
     assert f"{row} from {purchases} purchases" in STEPS[5][1]

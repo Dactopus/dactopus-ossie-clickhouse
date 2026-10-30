@@ -1,7 +1,6 @@
 """Executor against a ClickHouse test database with a ReplacingMergeTree fact
 table and a dictionary dimension, created here."""
 
-import os
 import re
 import socket
 from pathlib import Path
@@ -22,10 +21,15 @@ from dactopus_ossie_clickhouse.planner import (
     Query,
 )
 from dactopus_ossie_clickhouse.translate import parse
-from tests.conftest import FakeClickHouse
+from tests.conftest import FakeClickHouse, dictionary_credentials, server_url
 
 FIXTURE = Path(__file__).parent / "fixtures" / "history.yaml"
-SETUP = """
+# The server loads a dictionary as the source's USER, default without a password.
+COUNTRY_SOURCE = (
+    f"SOURCE(CLICKHOUSE(TABLE 'country_src' DB 'ossie_test' {dictionary_credentials()})) "
+    "LAYOUT(COMPLEX_KEY_HASHED()) LIFETIME(0)"
+)
+SETUP = f"""
 CREATE DATABASE IF NOT EXISTS ossie_test;
 DROP DICTIONARY IF EXISTS ossie_test.country;
 DROP DICTIONARY IF EXISTS ossie_test.`country names`;
@@ -40,11 +44,11 @@ INSERT INTO ossie_test.orders VALUES (1, 15, 'DE', 2);
 CREATE TABLE ossie_test.country_src (code String, name String) ENGINE = Memory;
 INSERT INTO ossie_test.country_src VALUES ('DE', 'Germany'), ('FR', 'France');
 CREATE DICTIONARY ossie_test.country (code String, name String) PRIMARY KEY code
-  SOURCE(CLICKHOUSE(TABLE 'country_src' DB 'ossie_test')) LAYOUT(COMPLEX_KEY_HASHED()) LIFETIME(0);
+  {COUNTRY_SOURCE};
 CREATE DICTIONARY ossie_test.`country names` (code String, name String) PRIMARY KEY code
-  SOURCE(CLICKHOUSE(TABLE 'country_src' DB 'ossie_test')) LAYOUT(COMPLEX_KEY_HASHED()) LIFETIME(0);
+  {COUNTRY_SOURCE};
 CREATE DICTIONARY ossie_test.`country.v2` (code String, name String) PRIMARY KEY code
-  SOURCE(CLICKHOUSE(TABLE 'country_src' DB 'ossie_test')) LAYOUT(COMPLEX_KEY_HASHED()) LIFETIME(0);
+  {COUNTRY_SOURCE};
 """
 
 
@@ -322,13 +326,13 @@ def test_check_reports_database_level_problems(ex, tmp_path):
     problems = Executor(ex.client, load_model(p)).check()
     assert any("column 'amnt' (field 'amount') not in ossie_test.orders" in x for x in problems)
     assert any("source 'ossie_test.countries' not found" in x for x in problems)
-    assert main(["validate", str(p), "--url", ex.client.url]) == 1
+    assert main(["validate", str(p), "--url", server_url()]) == 1
 
 
 def test_bare_source_reads_the_url_database(ex, tmp_path, capsys):
     p = tmp_path / "bare.yaml"
     p.write_text(FIXTURE.read_text().replace("source: ossie_test.", "source: "))
-    url = f"{ex.client.url}/ossie_test"
+    url = server_url("ossie_test")
     assert main(["validate", str(p), "--url", url]) == 0
     assert capsys.readouterr().out.endswith(f" against {ex.client.url} (database ossie_test)\n")
     assert main(["query", str(p), "-m", "revenue", "-d", "country.name", "--url", url]) == 0
@@ -336,9 +340,7 @@ def test_bare_source_reads_the_url_database(ex, tmp_path, capsys):
     # A database without the tables: the refusal names it.
     ex.client.command("CREATE DATABASE IF NOT EXISTS ossie_empty")
     try:
-        assert (
-            main(["query", str(p), "-m", "revenue", "--url", f"{ex.client.url}/ossie_empty"]) == 1
-        )
+        assert main(["query", str(p), "-m", "revenue", "--url", server_url("ossie_empty")]) == 1
     finally:
         ex.client.command("DROP DATABASE ossie_empty")
     assert "(database ossie_empty); check" in capsys.readouterr().err
@@ -382,7 +384,7 @@ def test_cli_query(ex, capsys):
                 "-d",
                 "country.name",
                 "--url",
-                ex.client.url,
+                server_url(),
                 "--json",
             ]
         )
@@ -390,9 +392,9 @@ def test_cli_query(ex, capsys):
     )
     out = capsys.readouterr().out
     assert '"revenue": 15.0' in out and '"name": null' in out
-    assert main(["query", str(FIXTURE), "-m", "revenue", "--url", ex.client.url]) == 0
+    assert main(["query", str(FIXTURE), "-m", "revenue", "--url", server_url()]) == 0
     assert capsys.readouterr().out == "revenue\n65.0\n"
-    assert main(["sql", str(FIXTURE), "-m", "revenue", "--url", ex.client.url]) == 0
+    assert main(["sql", str(FIXTURE), "-m", "revenue", "--url", server_url()]) == 0
     assert "FINAL" in capsys.readouterr().out
 
 
@@ -466,7 +468,7 @@ def test_functions_outside_the_spec_run_as_written_or_are_hidden(ex, tmp_path, c
         other.planner.sql(Query(("big_upper",)))
     # only a server can tell: validate reports them with --url, and nothing without
     assert main(["validate", str(p)]) == 0
-    assert main(["validate", str(p), "--url", ex.client.url]) == 1
+    assert main(["validate", str(p), "--url", server_url()]) == 1
     err = capsys.readouterr().err
     assert (
         "field orders.label: calls NO_SUCH_FUNCTION(), a function this ClickHouse server "
@@ -519,7 +521,7 @@ def test_untranslatable_expressions_are_hidden_and_reported(ex, tmp_path, capsys
         with pytest.raises(PlanError, match="unknown metric"):
             other.planner.sql(Query((name,)))
     # validate names each one, with or without a server
-    for args in (["validate", str(p)], ["validate", str(p), "--url", ex.client.url]):
+    for args in (["validate", str(p)], ["validate", str(p), "--url", server_url()]):
         assert main(args) == 1
         err = capsys.readouterr().err
         assert "field orders.e_count: cannot parse" in err
@@ -539,7 +541,7 @@ def test_a_key_field_that_does_not_translate_hides_its_relationship(ex, tmp_path
         other.planner.sql(Query(("revenue",), ("orders.country_code",)))
     with pytest.raises(PlanError, match="not joined"):
         other.planner.sql(Query(("revenue",), ("country.name",)))
-    assert main(["validate", str(p), "--url", ex.client.url]) == 1
+    assert main(["validate", str(p), "--url", server_url()]) == 1
     assert "field orders.country_code: cannot parse" in capsys.readouterr().err
 
 
@@ -660,14 +662,8 @@ def test_refused_connection_is_one_line(capsys):
     )
 
 
-def _server_url(clickhouse, user: str | None = None, path: str = "") -> str:
-    parts = urlsplit(os.environ.get("OSSIE_CLICKHOUSE_URL", clickhouse.url))
-    netloc = parts.netloc if user is None else f"{user}@{parts.netloc.rpartition('@')[2]}"
-    return f"{parts.scheme}://{netloc}/{path}"
-
-
 def test_unknown_user_is_named(clickhouse, capsys):
-    url = _server_url(clickhouse, user="ossie_no_such_user:secret")
+    url = server_url(user="ossie_no_such_user:secret")
     err = _connect_error(capsys, url)
     host = urlsplit(url).netloc.rpartition("@")[2]
     assert err == (
@@ -677,5 +673,5 @@ def test_unknown_user_is_named(clickhouse, capsys):
 
 
 def test_unknown_database_is_named(clickhouse, capsys):
-    err = _connect_error(capsys, _server_url(clickhouse, path="ossie_no_such_db"))
+    err = _connect_error(capsys, server_url("ossie_no_such_db"))
     assert "has no database ossie_no_such_db; check the database in the URL's path" in err

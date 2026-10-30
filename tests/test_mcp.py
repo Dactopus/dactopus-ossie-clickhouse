@@ -4,6 +4,7 @@ import pytest
 
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.mcp_server import describe, instructions, search, summary
+from tests.conftest import server_url
 from tests.test_model import FIXTURE
 
 MODEL = load_model(FIXTURE)
@@ -163,7 +164,7 @@ def test_serve_names_the_database_on_stderr(tpcds, monkeypatch, capsys):
     from dactopus_ossie_clickhouse.cli import main
 
     monkeypatch.setattr(MCPServer, "run", lambda self: None)
-    assert main(["serve", str(FIXTURE), "--url", tpcds.url]) == 0
+    assert main(["serve", str(FIXTURE), "--url", server_url()]) == 0
     out = capsys.readouterr()
     assert out.out == ""  # stdout carries the protocol
     assert out.err.endswith(f"on {tpcds.url} (database tpcds)\n")

@@ -11,6 +11,7 @@ from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import Query
+from tests.conftest import server_url
 
 COLUMNS = {
     "t": "Nullable(Time)",
@@ -112,7 +113,7 @@ async def test_cli_json_and_mcp_show_the_same_values(clickhouse, model, shown, c
 
     from dactopus_ossie_clickhouse.mcp_server import build_server
 
-    args = ["query", str(model), "--url", clickhouse.url, "--json"]
+    args = ["query", str(model), "--url", server_url(), "--json"]
     assert main([*args, *(a for d in DIMENSIONS for a in ("-d", d))]) == 0
     cli = [list(r.values()) for r in json.loads(capsys.readouterr().out)]
     async with Client(build_server(load_model(model), lambda: clickhouse)) as c:

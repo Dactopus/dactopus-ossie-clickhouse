@@ -20,7 +20,6 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
-import clickhouse_connect
 import pytest
 from ossie import OssieDocument
 
@@ -909,16 +908,13 @@ def test_the_question_of_issue_10_has_sql():
     )
 
 
-def test_the_question_of_issue_10_on_the_ga4_sample(clickhouse):
+def test_the_question_of_issue_10_on_the_ga4_sample(dactopus):
     """As many sessions as a join counts with uniqExact; fewer than has_purchase,
     which counts purchases without a revenue too."""
-    if not clickhouse.query("EXISTS TABLE dactopus.purchases").result_rows[0][0]:
-        pytest.skip("GA4 sample not loaded into the database dactopus (see dactopus-data-models)")
-    client = clickhouse_connect.get_client(dsn=clickhouse.url, database="dactopus")
-    [[sessions]] = Executor(client, WEB).execute(SESSIONS_WITH_REVENUE).rows
-    [[joined]] = client.query(
+    [[sessions]] = Executor(dactopus, WEB).execute(SESSIONS_WITH_REVENUE).rows
+    [[joined]] = dactopus.query(
         "SELECT uniqExact(s.session_key) FROM sessions s INNER JOIN purchases p "
         "ON p.session_key = s.session_key WHERE p.revenue > 0"
     ).result_rows
-    [[flagged]] = client.query("SELECT countIf(has_purchase = 1) FROM sessions").result_rows
+    [[flagged]] = dactopus.query("SELECT countIf(has_purchase = 1) FROM sessions").result_rows
     assert sessions == joined == 4446 < flagged

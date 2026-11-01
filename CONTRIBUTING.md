@@ -126,8 +126,9 @@ pull request:
 
 Small and focused. Say which spec section a semantic decision rests on.
 CI runs lint, format check, `scripts/vendor_ossie.py --check` and the
-test suite against a ClickHouse service. By submitting a contribution you agree it is licensed under the
-Apache License 2.0, like the rest of the project.
+test suite against a ClickHouse service, and builds the package. By
+submitting a contribution you agree it is licensed under the Apache
+License 2.0, like the rest of the project.
 
 ## Releasing
 
@@ -147,12 +148,21 @@ SQLGlot release and drops the rewrites that release made redundant
    the version the MCP server reports match the tag.
 3. Push, wait for the three required CI jobs, merge with "Rebase and
    merge", the only method the repository allows.
-4. Tag the commit on `main`, never one on the branch: rebasing changes the
-   hashes. The release notes are the changelog section plus the install
-   line pinned to the tag.
+4. Rehearse on `main`: run the Publish workflow by hand. It uploads the
+   build to [TestPyPI](https://test.pypi.org/project/dactopus-ossie-clickhouse/)
+   as `X.Y.Z.devN`; install that from there and look at the page. PyPI takes
+   each version once, so whatever goes wrong is fixed here, before the tag.
+5. Tag the commit on `main`, never one on the branch: rebasing changes the
+   hashes. Publishing the release on GitHub runs the Publish workflow,
+   which checks that the tag is the version in `pyproject.toml` and uploads
+   to PyPI. The release notes are the changelog section plus the install
+   line pinned to the version.
 
 ```bash
 git switch main && git pull --ff-only
+gh workflow run publish.yml --ref main   # step 4, TestPyPI
+pip install --index-url https://test.pypi.org/simple/ \
+  --extra-index-url https://pypi.org/simple/ "dactopus-ossie-clickhouse[mcp]==X.Y.Z.devN"
 git tag -a vX.Y.Z -m "dactopus-ossie-clickhouse X.Y.Z" && git push origin vX.Y.Z
-gh release create vX.Y.Z --title X.Y.Z --notes-file notes.md
+gh release create vX.Y.Z --title X.Y.Z --notes-file notes.md   # publishes to PyPI
 ```

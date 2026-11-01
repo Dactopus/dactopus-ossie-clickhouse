@@ -49,3 +49,17 @@ jobs:
             curl -sS --fail-with-body http://127.0.0.1:8123 --data-binary "CREATE TABLE tpcds.$t ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM file('tpcds/$t.parquet', Parquet)"
           done
       - run: uv run pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - run: uvx twine check --strict dist/*  # the README is the PyPI page
+      - name: The wheel works on its own, outside the checkout
+        run: |
+          uv venv "$RUNNER_TEMP/wheel"
+          uv pip install --python "$RUNNER_TEMP/wheel" dist/*.whl
+          cd "$RUNNER_TEMP" && wheel/bin/dactopus-ossie-clickhouse sql \
+            "$GITHUB_WORKSPACE/tests/fixtures/tpcds.yaml" -m total_sales -d item.i_brand

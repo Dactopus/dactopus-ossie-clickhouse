@@ -34,6 +34,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/Dactopus/dactopus-ossie-clickhouse"
 Issues = "https://github.com/Dactopus/dactopus-ossie-clickhouse/issues"
+Changelog = "https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 mcp = ["mcp>=2,<3"]

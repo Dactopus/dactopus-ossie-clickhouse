@@ -300,8 +300,9 @@ package level only when a module outgrows one file.
 
 ## Repository status
 
-Released versions are in [CHANGELOG.md](CHANGELOG.md); the package is
-installed from git until it is published to PyPI. Decisions with their
+Released versions are in [CHANGELOG.md](CHANGELOG.md) and on PyPI, where
+a release on GitHub publishes them (`.github/workflows/publish.yml`). Links
+in README.md are absolute: it is the PyPI page. Decisions with their
 evidence are in [docs/design.md](docs/design.md).
 Pull requests are merged with rebase; releases follow
 [CONTRIBUTING.md](CONTRIBUTING.md#releasing).

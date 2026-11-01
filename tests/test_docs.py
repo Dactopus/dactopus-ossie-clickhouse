@@ -1,4 +1,5 @@
-"""docs/index.html quotes what the planner writes; these keep the quotes true."""
+"""docs/index.html quotes what the planner writes; these keep the quotes true. README.md is
+the PyPI page, which resolves no relative link."""
 
 import html
 import json
@@ -79,3 +80,12 @@ def test_page_figures_come_from_the_ga4_sample(dactopus):
     month, source_medium, currency, revenue, purchases = ex.execute(QUESTION).rows[0]
     row = f"{month:%B %Y}, {source_medium}, {currency}: revenue {revenue:,.0f}"
     assert f"{row} from {purchases} purchases" in STEPS[5][1]
+
+
+def test_readme_links_work_on_pypi():
+    # PyPI keeps a version's page as uploaded, so a relative link there stays broken.
+    readme = (ROOT / "README.md").read_text()
+    targets = re.findall(r"\]\(([^)\s]+)\)", readme)
+    targets += re.findall(r'(?:src|srcset|href)="([^"\s]+)', readme)
+    assert targets
+    assert [t for t in targets if not t.startswith(("https://", "#"))] == []

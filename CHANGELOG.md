@@ -13,8 +13,8 @@ a minor release may change the Python API.
 
 - The package carries a copy of `apache-ossie` at Ossie's commit
   `fab4f63`, in `dactopus_ossie_clickhouse._vendor.ossie`, in place of a
-  git dependency on it. It has no git dependency left and can be
-  published to PyPI. `load_model` returns the copy's `OssieDocument`, a
+  git dependency on it, so that the package can be on PyPI.
+  `load_model` returns the copy's `OssieDocument`, a
   class distinct from an installed apache-ossie's: import the types from
   `dactopus_ossie_clickhouse._vendor.ossie`, not `ossie`. `Executor`
   refuses a document built with an installed apache-ossie, whose code is
@@ -28,6 +28,12 @@ a minor release may change the Python API.
 
 ### Added
 
+- On PyPI (closes #3): `pip install "dactopus-ossie-clickhouse[mcp]"`.
+  A release on GitHub publishes its tag (`.github/workflows/publish.yml`,
+  trusted publishing); run by hand, the workflow uploads a dev version to
+  TestPyPI as a rehearsal. CI builds the package, checks that its README
+  renders as the PyPI page, and runs the wheel outside the checkout. The
+  README's links and images are absolute, so they work on PyPI.
 - The query compliance cases of apache/ossie (`compliance/query`, merged
   there on 2026-10-30) run against ClickHouse in `tests/test_compliance.py`
   on a checkout at `OSSIE_REPO`, each case as the question its `AGG()`

@@ -2,12 +2,8 @@
 
 [![CI](https://github.com/Dactopus/dactopus-ossie-clickhouse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Dactopus/dactopus-ossie-clickhouse/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/Dactopus/dactopus-ossie-clickhouse)](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/LICENSE)
-[![Release](https://img.shields.io/github/v/release/Dactopus/dactopus-ossie-clickhouse)](https://github.com/Dactopus/dactopus-ossie-clickhouse/releases)
+[![PyPI](https://img.shields.io/pypi/v/dactopus-ossie-clickhouse)](https://pypi.org/project/dactopus-ossie-clickhouse/)
 [![Python](https://img.shields.io/python/required-version-toml?tomlFilePath=https%3A%2F%2Fraw.githubusercontent.com%2FDactopus%2Fdactopus-ossie-clickhouse%2Fmain%2Fpyproject.toml)](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/pyproject.toml)
-<!-- On PyPI this README becomes the package page: swap the Release badge for
-     https://img.shields.io/pypi/v/dactopus-ossie-clickhouse linked to the PyPI page, and
-     make relative links and images absolute, as the badges' are; PyPI does not
-     resolve them. -->
 
 An implementation of the [Apache Ossie](https://github.com/apache/ossie)
 semantic model standard for [ClickHouse](https://clickhouse.com/docs). It reads an Ossie description of
@@ -30,31 +26,31 @@ resolution) so that neither the model author nor the agent has to.
 
 ## Install
 
-Python 3.11 or later. Not on PyPI yet; install from GitHub:
+Python 3.11 or later:
 
 ```bash
-pip install "dactopus-ossie-clickhouse[mcp] @ git+https://github.com/Dactopus/dactopus-ossie-clickhouse"
+pip install "dactopus-ossie-clickhouse[mcp]"
 ```
 
 Leave out `[mcp]` to skip the MCP server and its SDK; the library and the
 CLI work without them.
 
 Until 0.4.0 the package and its command were `ossie-clickhouse` and the
-module `ossie_clickhouse`; the [changelog](CHANGELOG.md) says what to
+module `ossie_clickhouse`; the [changelog](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md) says what to
 change.
 
 ## Quick start
 
 Point it at a model and a ClickHouse. The
 [TPC-DS reference model](https://github.com/apache/ossie/blob/main/examples/tpcds_semantic_model.yaml)
-from the Ossie repository is in [tests/fixtures/tpcds.yaml](tests/fixtures/tpcds.yaml).
+from the Ossie repository is in [tests/fixtures/tpcds.yaml](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/tests/fixtures/tpcds.yaml).
 ClickHouse credentials go in the URL or in `OSSIE_CLICKHOUSE_URL`
 (default `http://127.0.0.1:8123`). `https://` connects with TLS on any
 port, `http://` without it; no other scheme is accepted. A database in the URL path
 (`.../analytics`) is where a model's sources without a database are read.
 `--time-zone` or `OSSIE_CLICKHOUSE_TIME_ZONE` names the zone of today and
 of times without an offset when the deployment's differs from the model's
-([Time zone](docs/model-authoring.md#time-zone)).
+([Time zone](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#time-zone)).
 
 ```bash
 dactopus-ossie-clickhouse validate model.yaml --url http://user:password@host:8123
@@ -84,7 +80,7 @@ installed `ossie`. The other modules are internal.
 
 ## How a question becomes SQL
 
-<a href="https://dactopus.github.io/dactopus-ossie-clickhouse/"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/architecture.svg#dark"><img src="docs/architecture.svg#light" width="680" alt="How dactopus-ossie-clickhouse answers a question: an AI agent asks through the MCP server or the CLI; the Ossie model is cut down to what the connected ClickHouse user may read, as system tables show, and a policy file may hide more; the planner and translator write one SELECT or refuse; the executor runs it in ClickHouse as that user."></picture></a>
+<a href="https://dactopus.github.io/dactopus-ossie-clickhouse/"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Dactopus/dactopus-ossie-clickhouse/main/docs/architecture.svg#dark"><img src="https://raw.githubusercontent.com/Dactopus/dactopus-ossie-clickhouse/main/docs/architecture.svg#light" width="680" alt="How dactopus-ossie-clickhouse answers a question: an AI agent asks through the MCP server or the CLI; the Ossie model is cut down to what the connected ClickHouse user may read, as system tables show, and a policy file may hide more; the planner and translator write one SELECT or refuse; the executor runs it in ClickHouse as that user."></picture></a>
 
 Click the diagram for the [interactive version](https://dactopus.github.io/dactopus-ossie-clickhouse/):
 one question from an agent followed to its SQL, line by line, and two
@@ -106,15 +102,15 @@ questions it refuses.
   the root references, such as order lines whose product is in a
   category, and, with the order lines named in a filter, orders with a
   line in a category
-  ([semi-joins](docs/design.md#semi-joins-for-filters-on-the-many-side)).
+  ([semi-joins](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#semi-joins-for-filters-on-the-many-side)).
 - Metrics of different facts, such as revenue and returns by region, are
   each computed from their own root and merged on the dimensions
-  ([stitching](docs/design.md#stitch-metrics-of-several-facts)): every
+  ([stitching](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#stitch-metrics-of-several-facts)): every
   region of either fact appears, and a fact without rows in a region
   gives NULL for a sum and 0 for a count.
 - A metric declared on a dataset (`datasets[].metrics`) is asked for as
   `dataset.metric` and computed over that dataset's rows, `COUNT(*)`
-  included ([model authoring](docs/model-authoring.md#metrics-on-a-dataset)).
+  included ([model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#metrics-on-a-dataset)).
 - Filters over fields go to `WHERE`; filters that name a metric or contain
   an aggregate (`total_sales > 1000000`) go to `HAVING`, and may only use
   the question's own dimensions besides aggregates. A window metric
@@ -160,19 +156,19 @@ Question options for `sql` and `query`: `-m metric` (repeatable;
 name or an aggregate means `HAVING`), `-o "name [desc]"`, `-l limit`.
 `--url` and `--policy` apply to anything that talks to ClickHouse.
 `<model>...` is one Ossie file or several read as one model, such as one
-file per subject area ([docs/model-authoring.md](docs/model-authoring.md#several-files)).
+file per subject area ([docs/model-authoring.md](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#several-files)).
 
 ## Documentation
 
-- [Model authoring for ClickHouse](docs/model-authoring.md): sources,
+- [Model authoring for ClickHouse](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md): sources,
   keys, expressions, deduplication, dictionaries, validation.
-- [Access control](docs/access-control.md): ClickHouse users, roles and
+- [Access control](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/access-control.md): ClickHouse users, roles and
   row policies decide; the policy file hides more.
-- [MCP setup](docs/mcp-setup.md): Claude Desktop, Claude Code and other
+- [MCP setup](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/mcp-setup.md): Claude Desktop, Claude Code and other
   stdio MCP clients.
-- [Design decisions](docs/design.md): what was measured or evaluated, and
+- [Design decisions](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md): what was measured or evaluated, and
   the remote server design that waits for demand.
-- [Changelog](CHANGELOG.md) and [contributing](CONTRIBUTING.md).
+- [Changelog](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md) and [contributing](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CONTRIBUTING.md).
 
 ## What it is not
 
@@ -190,10 +186,10 @@ data must already be in ClickHouse.
 - Metrics are computed over the root's rows. A question whose metric
   would count a joined dataset's rows repeatedly, or only those the root
   references, is refused with a message, not answered with a wrong
-  number; see [model authoring](docs/model-authoring.md#keys-decide-which-joins-are-allowed).
+  number; see [model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#keys-decide-which-joins-are-allowed).
 - Joins are many-to-one only, inferred from primary and unique keys.
 - No time grain and no derived-dimension syntax: declare a field per
-  grain or band (see [model authoring](docs/model-authoring.md)). The
+  grain or band (see [model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md)). The
   spec has no such attributes yet, and this project does not invent them.
 - A metric cannot reference another metric by name; repeat the expression.
 
@@ -206,13 +202,13 @@ ClickHouse 26.x. Until the major version is
 1, a minor release may change the Python API; the CLI and the MCP tools
 are the stable surface.
 
-Where it goes from here: PyPI; the
+Where it goes from here: the
 upstream Ossie SQL dialect and compliance suite once they merge;
 metrics that read both sides of a one-to-many relationship, `source` as a query
 and a remote multi-user MCP server on the first real request. Ask for one
 in the [issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues).
 
-[`research/`](research/) holds the experiments behind some decisions in this
+[`research/`](https://github.com/Dactopus/dactopus-ossie-clickhouse/tree/main/research) holds the experiments behind some decisions in this
 code and the data we share with the Apache Ossie community; nothing there is
 part of the library.
 

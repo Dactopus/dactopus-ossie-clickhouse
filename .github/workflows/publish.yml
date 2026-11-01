@@ -1,0 +1,63 @@
+name: Publish
+
+# A release on GitHub publishes its tag to PyPI. Run by hand, the same build goes to
+# TestPyPI under a dev version (X.Y.Z.devN, N the run number, since an index takes
+# each version once): a rehearsal on main before the tag. Both indexes trust this
+# workflow and its environment (trusted publishing), so no token is stored here.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: The tag is the version in pyproject.toml
+        if: github.event_name == 'release'
+        run: test "$GITHUB_REF_NAME" = "v$(uv version --short)"
+      - name: A dev version for TestPyPI
+        if: github.event_name == 'workflow_dispatch'
+        run: uv version --frozen "$(uv version --short).dev$GITHUB_RUN_NUMBER"
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/dactopus-ossie-clickhouse/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/dactopus-ossie-clickhouse/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

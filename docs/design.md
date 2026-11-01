@@ -113,6 +113,33 @@ spec differ, the test pins the spec's value with a section reference:
 cumulative share reaches `p` (ClickHouse's `quantileExact` picks one too
 high whenever `p * n` is whole).
 
+## Questions are the only query input
+
+The spec has two query surfaces. The Semantic Query Interface takes a
+question: metrics, dimensions and filters by name, what the CLI and the
+`query` MCP tool accept. The Relational Query Interface (apache/ossie#354)
+takes SQL over the model's datasets as relations, with `AGG(metric)` for
+a measure. Decision of 2026-11-01: this executor compiles questions
+straight into ClickHouse SQL and does not read `AGG()` SQL. One input
+grammar keeps one planner, the one place where every ClickHouse trait
+(`FINAL`, dictionaries, the model's zone, semi-joins) is applied; a
+second grammar would need the same rules a second time or a rewriter of
+layer-2 SQL into questions, which the spec's own reference rewriter
+(apache/ossie#502) is meant to be.
+
+Compliance is shown on results. The spec's query compliance cases
+(`compliance/query` in apache/ossie, since apache/ossie#632) ship the
+SCOTT data, a model with dataset metrics and, per case, an `AGG()` query
+with its expected result as standard SQL over literals.
+`tests/test_compliance.py` loads the data through DuckDB into ClickHouse,
+reads the model as it is, runs each case as the question it asks and
+compares by the suite's README: columns by position, rows as multisets,
+exact numerics equal, approximate ones within 1e-9. The weekly workflow
+runs it on Ossie's `main`, so a case added upstream fails there until its
+question is written here. The suite demands standard SQL semantics, which
+every generated query already sets: `SUM` over no rows is NULL
+(`aggregate_functions_null_for_empty = 1`) and `COUNT` is 0.
+
 ## Exact percentiles
 
 The spec's percentile functions are exact, and `APPROX_PERCENTILE` is the

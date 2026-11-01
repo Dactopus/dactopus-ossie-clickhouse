@@ -7,6 +7,18 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- The query compliance cases of apache/ossie (`compliance/query`, merged
+  there on 2026-10-30) run against ClickHouse in `tests/test_compliance.py`
+  on a checkout at `OSSIE_REPO`, each case as the question its `AGG()`
+  query asks, with the results compared by the suite's rules. Case A1
+  passes, and so does `SUM` over no rows as NULL with `COUNT` 0. The
+  weekly workflow runs the cases on Ossie's `main`; a case added there
+  fails the run until its question is written here. The executor stays a
+  compiler of questions and does not read layer-2 SQL (`docs/design.md`,
+  "Questions are the only query input").
+
 ## [0.12.1] - 2026-10-30
 
 ### Added

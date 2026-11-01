@@ -201,7 +201,8 @@ data must already be in ClickHouse.
 
 Pre-release. The supported Ossie schema version is pinned (`0.2.0.dev0`)
 and checked on load, because the standard is still moving. Tested against
-the TPC-DS reference model on ClickHouse 26.x. Until the major version is
+the TPC-DS reference model and the spec's query compliance cases on
+ClickHouse 26.x. Until the major version is
 1, a minor release may change the Python API; the CLI and the MCP tools
 are the stable surface.
 

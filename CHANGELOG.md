@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-01
+
 ### Changed
 
 - The package carries a copy of `apache-ossie` at Ossie's commit
@@ -21,6 +23,7 @@ a minor release may change the Python API.
   reaches PyPI"). Since `d13bb6a`, the commit 0.12.1 pinned, Ossie's
   package has added the `CLICKHOUSE`, `TRINO` and `SPARQL` dialects and
   four vendor names, nothing else.
+- `sqlglot>=30.27`, the current release; it makes no rewrite redundant.
 
 ### Added
 

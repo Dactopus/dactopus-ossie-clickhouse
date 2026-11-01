@@ -42,8 +42,8 @@ jobs:
           --health-cmd "wget -qO- http://localhost:8123/ping || exit 1"
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - name: Install the newest SQLGlot
         if: matrix.upstream == 'sqlglot'
@@ -77,8 +77,8 @@ jobs:
       matrix:
         upstream: [sqlglot, ossie]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - name: Install the newest SQLGlot
         if: matrix.upstream == 'sqlglot'

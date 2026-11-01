@@ -52,7 +52,7 @@ jobs:
         run: |
           uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
           git clone -q --depth 1 --filter=blob:none --sparse https://github.com/apache/ossie.git "$RUNNER_TEMP/ossie"
-          git -C "$RUNNER_TEMP/ossie" sparse-checkout set compliance/query examples
+          git -C "$RUNNER_TEMP/ossie" sparse-checkout set compliance/query
           echo "OSSIE_REPO=$RUNNER_TEMP/ossie" >> "$GITHUB_ENV"
       - run: uv pip freeze | grep -E "^(sqlglot|apache-ossie)[ =]"  # with the Ossie commit
       - name: Load the TPC-DS reference data (see CONTRIBUTING.md)

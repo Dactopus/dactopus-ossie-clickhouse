@@ -24,6 +24,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+import sqlglot
 
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.model import load_model
@@ -93,13 +94,15 @@ def expected(scott_duck, case: str):
 
 def values_match(actual, wanted) -> bool:
     """README, "Comparing results": NULL matches NULL, exact numerics are equal,
-    an approximate one within 1e-9 relative (1e-9 absolute near zero)."""
+    an approximate one within 1e-9 relative (1e-9 absolute near zero). Whether a
+    value is approximate is the expected literal's call: a float returned for an
+    exact one must equal it exactly."""
     if actual is None or wanted is None:
         return actual is None and wanted is None
-    if isinstance(actual, float) or isinstance(wanted, float):
-        a, e = float(actual), float(wanted)
-        return math.isfinite(a) and abs(a - e) <= 1e-9 * max(abs(a), abs(e), 1)
-    if isinstance(actual, (int, Decimal)) and isinstance(wanted, (int, Decimal)):
+    if isinstance(wanted, float) and isinstance(actual, (int, float, Decimal)):
+        a = float(actual)
+        return math.isfinite(a) and abs(a - wanted) <= 1e-9 * max(abs(a), abs(wanted), 1)
+    if isinstance(actual, (int, float, Decimal)) and isinstance(wanted, (int, Decimal)):
         return Decimal(actual) == Decimal(wanted)
     return actual == wanted
 
@@ -143,7 +146,8 @@ def test_case(ex, scott_duck, case):
     # The case aliases each AGG(m) as m; this executor names a column dataset.metric.
     names = [c.lower().rpartition(".")[2] for c in result.columns]
     assert names == [c.lower() for c in columns]
-    ordered = re.search(r"^\s*ORDER\s+BY\b", query_sql, re.IGNORECASE | re.MULTILINE) is not None
+    # The query's own ORDER BY, not one in a window or a subquery.
+    ordered = sqlglot.parse_one(query_sql).args.get("order") is not None
     assert rows_match(result.rows, rows, ordered), (result.rows, rows, result.sql)
 
 

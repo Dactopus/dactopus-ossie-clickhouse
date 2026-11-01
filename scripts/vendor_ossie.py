@@ -68,9 +68,12 @@ def copy(checkout: Path) -> dict[str, str]:
     ]
     if other:
         raise SystemExit(f"{PACKAGE} has {other}, not modules: teach this script about them")
-    files = {p.name: relative(p.read_text(), p.name) for p in sorted(package.glob("*.py"))}
+    files = {
+        p.name: relative(p.read_text(encoding="utf-8"), p.name)
+        for p in sorted(package.glob("*.py"))
+    }
     for name in ("LICENSE", "NOTICE"):
-        files[name] = (checkout / name).read_text()
+        files[name] = (checkout / name).read_text(encoding="utf-8")
     return files
 
 
@@ -79,14 +82,21 @@ def pin_line(commit: str) -> str:
 
 
 def pinned() -> str:
-    match = re.fullmatch(r"apache-ossie @ git\+\S+@([0-9a-f]{40})#\S+\n", PIN.read_text())
+    match = re.fullmatch(
+        r"apache-ossie @ git\+\S+@([0-9a-f]{40})#\S+\n", PIN.read_text(encoding="utf-8")
+    )
     if not match:
         raise SystemExit(f"{PIN.name}: not one line of the form {pin_line('<commit>')!r}")
     return match[1]
 
 
+def present() -> list[Path]:
+    """The copy's files; dotfiles such as .DS_Store, and __pycache__, are not upstream's."""
+    return sorted(p for p in TARGET.iterdir() if p.is_file() and not p.name.startswith("."))
+
+
 def current() -> dict[str, str]:
-    return {p.name: p.read_text() for p in sorted(TARGET.iterdir()) if p.name != "__pycache__"}
+    return {p.name: p.read_text(encoding="utf-8") for p in present()}
 
 
 def main() -> None:
@@ -111,11 +121,12 @@ def main() -> None:
         return
 
     TARGET.mkdir(parents=True, exist_ok=True)
-    for name in current().keys() - files.keys():
-        (TARGET / name).unlink()
+    for p in present():
+        if p.name not in files:
+            p.unlink()
     for name, text in files.items():
-        (TARGET / name).write_text(text)
-    PIN.write_text(pin_line(commit))
+        (TARGET / name).write_text(text, encoding="utf-8")
+    PIN.write_text(pin_line(commit), encoding="utf-8")
     print(f"{SHOWN} is apache/ossie {commit[:7]}")
 
 

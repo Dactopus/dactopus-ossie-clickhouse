@@ -16,8 +16,9 @@ a minor release may change the Python API.
   git dependency on it. It has no git dependency left and can be
   published to PyPI. `load_model` returns the copy's `OssieDocument`, a
   class distinct from an installed apache-ossie's: import the types from
-  `dactopus_ossie_clickhouse._vendor.ossie`, not `ossie`. An apache-ossie
-  installed next to the package is never read. pydantic is now a direct
+  `dactopus_ossie_clickhouse._vendor.ossie`, not `ossie`. `Executor`
+  refuses a document built with an installed apache-ossie, whose code is
+  never imported. pydantic is now a direct
   dependency. `scripts/vendor_ossie.py` moves the copy, and CI checks that
   it is upstream's (`docs/design.md`, "apache-ossie is vendored until it
   reaches PyPI"). Since `d13bb6a`, the commit 0.12.1 pinned, Ossie's

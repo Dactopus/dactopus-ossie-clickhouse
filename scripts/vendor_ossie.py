@@ -4,7 +4,7 @@ apache-ossie is not on PyPI, and PyPI refuses a package that depends on a git
 reference, so this package carries a copy (docs/design.md, "apache-ossie is
 vendored until it reaches PyPI"). The copy is upstream's python/src/ossie at one
 commit, with LICENSE and NOTICE, and one change: the package's imports of itself
-are relative, so the copy never reads an apache-ossie installed next to it.
+are relative, so no code of an apache-ossie installed next to it is imported.
 vendor.txt names the commit.
 
     python scripts/vendor_ossie.py <commit>  # replace the copy with that commit's
@@ -61,9 +61,13 @@ def relative(source: str, name: str) -> str:
 
 def copy(checkout: Path) -> dict[str, str]:
     package = checkout / PACKAGE
-    nested = [p.name for p in package.iterdir() if p.is_dir() and p.name != "__pycache__"]
-    if nested:
-        raise SystemExit(f"{PACKAGE} has subpackages {nested}: teach this script about them")
+    other = [
+        p.name
+        for p in package.iterdir()
+        if p.name != "__pycache__" and (p.is_dir() or p.suffix != ".py")
+    ]
+    if other:
+        raise SystemExit(f"{PACKAGE} has {other}, not modules: teach this script about them")
     files = {p.name: relative(p.read_text(), p.name) for p in sorted(package.glob("*.py"))}
     for name in ("LICENSE", "NOTICE"):
         files[name] = (checkout / name).read_text()

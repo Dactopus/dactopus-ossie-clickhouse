@@ -18,9 +18,9 @@ from urllib.parse import SplitResult, unquote, urlsplit
 
 import clickhouse_connect
 from clickhouse_connect.driver.exceptions import ClickHouseError, OperationalError
-from ossie import OssieDataset, OssieDocument
 from sqlglot import exp
 
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDataset, OssieDocument
 from dactopus_ossie_clickhouse.access import Hidden, Policy, restrict
 from dactopus_ossie_clickhouse.model import all_metrics, overrides, time_zone
 from dactopus_ossie_clickhouse.planner import (

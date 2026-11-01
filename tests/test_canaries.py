@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 import sqlglot
-from ossie import OssieDocument
 from sqlglot import exp
 
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.model import SUPPORTED_VERSION
 from dactopus_ossie_clickhouse.translate import _ANONYMOUS, _ZONED, OssieSQL, parse
 

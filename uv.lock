@@ -30,15 +30,6 @@ wheels = [
 ]
 
 [[package]]
-name = "apache-ossie"
-version = "0.2.0.dev0"
-source = { git = "https://github.com/apache/ossie.git?subdirectory=python&rev=d13bb6a#d13bb6a534a100e792a048dd7a14d4d37c723b2c" }
-dependencies = [
-    { name = "pydantic" },
-    { name = "pyyaml" },
-]
-
-[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -363,8 +354,8 @@ name = "dactopus-ossie-clickhouse"
 version = "0.12.1"
 source = { editable = "." }
 dependencies = [
-    { name = "apache-ossie" },
     { name = "clickhouse-connect" },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "sqlglot" },
 ]
@@ -384,9 +375,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "apache-ossie", git = "https://github.com/apache/ossie.git?subdirectory=python&rev=d13bb6a" },
     { name = "clickhouse-connect", specifier = ">=1,<2" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2,<3" },
+    { name = "pydantic", specifier = ">=2,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "sqlglot", specifier = ">=30.25,<31" },
 ]

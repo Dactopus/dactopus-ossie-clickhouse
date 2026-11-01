@@ -16,8 +16,7 @@ from collections.abc import Callable
 from importlib.metadata import version
 from typing import Any
 
-from ossie import OssieDocument
-
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
 from dactopus_ossie_clickhouse.model import all_metrics, time_zone

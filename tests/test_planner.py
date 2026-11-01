@@ -362,7 +362,7 @@ def _variant(mutate) -> Planner:
     """A planner over a copy of the fixture model changed by ``mutate(data)``."""
     import copy
 
-    from ossie import OssieDocument
+    from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 
     m = copy.deepcopy(MODEL.model_dump(by_alias=True))
     mutate(m)

@@ -82,8 +82,8 @@ OSSIE_REPO=../ossie uv run pytest tests/test_compliance.py tests/test_canaries.p
 ```
 
 ```bash
-uv run ruff check src tests research
-uv run ruff format src tests research
+uv run ruff check src tests research scripts
+uv run ruff format src tests research scripts
 ```
 
 ## Rules that shape the code
@@ -111,6 +111,7 @@ pull request:
 | Path | What |
 | --- | --- |
 | `src/dactopus_ossie_clickhouse/model.py` | Load and validate a model on top of `apache-ossie`. |
+| `src/dactopus_ossie_clickhouse/_vendor/ossie/` | A copy of [`apache-ossie`](https://github.com/apache/ossie/tree/main/python) until it is on PyPI; never edited by hand. |
 | `src/dactopus_ossie_clickhouse/translate.py` | Ossie expression to ClickHouse SQL, on the [SQLGlot](https://github.com/tobymao/sqlglot) AST. |
 | `src/dactopus_ossie_clickhouse/planner.py` | Question to one `SELECT`. |
 | `src/dactopus_ossie_clickhouse/executor.py` | Introspection, execution, result cleanup. |
@@ -119,12 +120,13 @@ pull request:
 | `src/dactopus_ossie_clickhouse/cli.py` | `dactopus-ossie-clickhouse` command. |
 | `tests/` | pytest; fixtures in `tests/fixtures/`. |
 | `research/` | Studies behind decisions, with data shared with Apache Ossie; not part of the package. |
+| `scripts/vendor_ossie.py` | Replace the `apache-ossie` copy with another commit's, or check it (`--check`, run by CI). |
 
 ## Pull requests
 
 Small and focused. Say which spec section a semantic decision rests on.
-CI runs lint, format check and the test suite against a ClickHouse
-service. By submitting a contribution you agree it is licensed under the
+CI runs lint, format check, `scripts/vendor_ossie.py --check` and the
+test suite against a ClickHouse service. By submitting a contribution you agree it is licensed under the
 Apache License 2.0, like the rest of the project.
 
 ## Releasing

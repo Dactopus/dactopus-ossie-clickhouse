@@ -13,9 +13,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
-from ossie import OssieDocument
 from sqlglot import exp
 
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.planner import PlanError
 from dactopus_ossie_clickhouse.translate import parse, pick_expression
 

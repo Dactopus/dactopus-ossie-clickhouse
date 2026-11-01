@@ -17,7 +17,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 
-from ossie import (
+from sqlglot import exp
+from sqlglot.dialects.clickhouse import ClickHouse
+
+from dactopus_ossie_clickhouse._vendor.ossie import (
     OssieDataset,
     OssieDataType,
     OssieDocument,
@@ -25,9 +28,6 @@ from ossie import (
     OssieMetric,
     OssieRelationship,
 )
-from sqlglot import exp
-from sqlglot.dialects.clickhouse import ClickHouse
-
 from dactopus_ossie_clickhouse.model import (
     all_metrics,
     covers_key,

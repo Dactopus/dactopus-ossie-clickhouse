@@ -1,6 +1,6 @@
 import pytest
-from ossie import OssieDialectExpression, OssieExpression
 
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDialectExpression, OssieExpression
 from dactopus_ossie_clickhouse.translate import (
     _CATALOG,
     _SIGNATURES,

@@ -30,9 +30,7 @@ resolution) so that neither the model author nor the agent has to.
 
 ## Install
 
-Python 3.11 or later. Not on PyPI yet: the `apache-ossie` package this
-builds on is a git dependency until upstream publishes it, and PyPI does
-not accept packages with git dependencies.
+Python 3.11 or later. Not on PyPI yet; install from GitHub:
 
 ```bash
 pip install "dactopus-ossie-clickhouse[mcp] @ git+https://github.com/Dactopus/dactopus-ossie-clickhouse"
@@ -206,7 +204,7 @@ ClickHouse 26.x. Until the major version is
 1, a minor release may change the Python API; the CLI and the MCP tools
 are the stable surface.
 
-Where it goes from here: PyPI once `apache-ossie` is published there; the
+Where it goes from here: PyPI; the
 upstream Ossie SQL dialect and compliance suite once they merge;
 metrics that read both sides of a one-to-many relationship, `source` as a query
 and a remote multi-user MCP server on the first real request. Ask for one

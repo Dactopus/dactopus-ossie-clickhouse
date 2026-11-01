@@ -7,6 +7,21 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- The package carries a copy of `apache-ossie` at Ossie's commit
+  `fab4f63`, in `dactopus_ossie_clickhouse._vendor.ossie`, in place of a
+  git dependency on it. It has no git dependency left and can be
+  published to PyPI. `load_model` returns the copy's `OssieDocument`, a
+  class distinct from an installed apache-ossie's: import the types from
+  `dactopus_ossie_clickhouse._vendor.ossie`, not `ossie`. An apache-ossie
+  installed next to the package is never read. pydantic is now a direct
+  dependency. `scripts/vendor_ossie.py` moves the copy, and CI checks that
+  it is upstream's (`docs/design.md`, "apache-ossie is vendored until it
+  reaches PyPI"). Since `d13bb6a`, the commit 0.12.1 pinned, Ossie's
+  package has added the `CLICKHOUSE`, `TRINO` and `SPARQL` dialects and
+  four vendor names, nothing else.
+
 ### Added
 
 - The query compliance cases of apache/ossie (`compliance/query`, merged

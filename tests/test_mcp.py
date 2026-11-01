@@ -89,7 +89,7 @@ def test_a_datasets_metric_is_named_as_a_question_asks_for_it():
 
 
 def test_ai_context_forms():
-    from ossie import OssieDocument
+    from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 
     data = MODEL.model_dump(by_alias=True)
     data["ai_context"] = "plain text instructions"
@@ -126,7 +126,7 @@ def test_describe_shows_the_expression_the_planner_runs():
     metric["expression"]["dialects"].insert(
         0, {"dialect": "SNOWFLAKE", "expression": "SUM(store_sales.ss_ext_sales_price):snow"}
     )
-    from ossie import OssieDocument
+    from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 
     m = describe(OssieDocument.model_validate(data), "total_sales")
     assert m["expression"] == "SUM(store_sales.ss_ext_sales_price)"

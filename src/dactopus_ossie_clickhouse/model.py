@@ -16,7 +16,9 @@ from functools import cache
 from pathlib import Path
 
 import yaml
-from ossie import (
+from pydantic import ValidationError
+
+from dactopus_ossie_clickhouse._vendor.ossie import (
     OssieAIContextObject,
     OssieCustomExtension,
     OssieDataset,
@@ -25,7 +27,6 @@ from ossie import (
     OssieMetric,
     OssieRelationship,
 )
-from pydantic import ValidationError
 
 SUPPORTED_VERSION = "0.2.0.dev0"
 # Dialects of a `dialects` entry this executor reads, in order of preference. The

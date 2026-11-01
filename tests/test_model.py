@@ -1,12 +1,15 @@
 import copy
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
-from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse import SUPPORTED_VERSION, ModelError, load_model
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.model import overrides, time_zone
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query
@@ -29,6 +32,26 @@ def test_reference_model_loads():
     doc = load_model(FIXTURE)
     assert doc.name == "tpcds_retail_model"
     assert len(doc.datasets) == 5 and len(doc.metrics) == 8
+
+
+def test_reads_the_vendored_ossie_only(tmp_path):
+    # An apache-ossie installed next to this package, of any version, is never read:
+    # the package carries its own copy (docs/design.md).
+    (tmp_path / "ossie").mkdir()
+    (tmp_path / "ossie" / "__init__.py").write_text("raise ImportError('installed ossie')\n")
+    code = (
+        "import sys\n"
+        "from dactopus_ossie_clickhouse import cli, load_model, mcp_server\n"
+        f"load_model({str(FIXTURE)!r})\n"
+        "assert 'ossie' not in sys.modules\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_json_loads(tmp_path, tpcds):

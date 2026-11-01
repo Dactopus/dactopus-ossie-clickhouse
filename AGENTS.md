@@ -61,8 +61,13 @@ Python library with a CLI entry point. The parts that constrain code:
 - **clickhouse-connect** over HTTP for execution.
 - **MCP SDK** only behind the `[mcp]` extra. The core library must import
   without it.
-- **apache-ossie** package (from the Ossie repository, git dependency until
-  published) for loading and validating models. Do not write a model loader:
+- **apache-ossie** package for loading and validating models, carried in
+  `src/dactopus_ossie_clickhouse/_vendor/ossie` until it is on PyPI, which
+  refuses a package with a git dependency (`docs/design.md`). Import it as
+  `dactopus_ossie_clickhouse._vendor.ossie`, never `ossie`. The copy is
+  upstream's at the commit in `_vendor/vendor.txt`, changed only by
+  `scripts/vendor_ossie.py` (its own imports made relative); never edit it
+  by hand, and CI checks it. Do not write a model loader:
   a file is read with `OssieDocument.from_ossie_yaml` or `from_ossie_json`,
   which also refuse a null property and a missing `version`;
   `model_validate` is for a document built in Python, such as the trimmed
@@ -184,9 +189,9 @@ because the spec and ClickHouse differ, comes with a canary in
 `tests/test_canaries.py`: SQLGlot's output without the rule, pinned, and the
 rule named in the message. So does a fact of Ossie a rule here depends on.
 Canaries pass on the lock; `.github/workflows/latest.yml` runs the suite
-weekly on the newest SQLGlot and on apache-ossie from `main`, canaries in a
-job of their own, so a red canary means a rule to revisit, not a broken
-answer.
+weekly on the newest SQLGlot and on apache-ossie from `main` (vendored for
+the run), canaries in a job of their own, so a red canary means a rule to
+revisit, not a broken answer.
 
 ## Known ClickHouse traits to handle
 
@@ -266,14 +271,16 @@ answer.
 Python 3.11+, managed with uv. Layout: `src/dactopus_ossie_clickhouse/` (library and
 CLI), `tests/` (pytest, fixtures in `tests/fixtures/`), `docs/`, `research/`
 (studies behind decisions and data for Apache Ossie; never imported by the
-library or tests, linted with the rest).
+library or tests, linted with the rest), `scripts/` (maintenance, such as
+`vendor_ossie.py`; not part of the package).
 
 ```bash
 uv sync                       # install with dev tools
 uv run pytest                 # tests; ClickHouse-dependent ones skip when no server
 uv run pytest -m "not integration"   # unit tests only
-uv run ruff check src tests research   # lint
-uv run ruff format src tests research  # format
+uv run ruff check src tests research scripts   # lint
+uv run ruff format src tests research scripts  # format
+uv run python scripts/vendor_ossie.py <full commit>  # move the apache-ossie copy
 uv run dactopus-ossie-clickhouse validate tests/fixtures/tpcds.yaml [--url http://127.0.0.1:8123]
 uv run dactopus-ossie-clickhouse sql tests/fixtures/tpcds.yaml -m total_sales -d item.i_brand
 uv run dactopus-ossie-clickhouse query tests/fixtures/tpcds.yaml -m total_sales -d item.i_brand --json
@@ -294,7 +301,7 @@ package level only when a module outgrows one file.
 ## Repository status
 
 Released versions are in [CHANGELOG.md](CHANGELOG.md); the package is
-installed from git until `apache-ossie` reaches PyPI. Decisions with their
+installed from git until it is published to PyPI. Decisions with their
 evidence are in [docs/design.md](docs/design.md).
 Pull requests are merged with rebase; releases follow
 [CONTRIBUTING.md](CONTRIBUTING.md#releasing).

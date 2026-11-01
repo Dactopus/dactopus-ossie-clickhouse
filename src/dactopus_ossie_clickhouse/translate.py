@@ -15,11 +15,11 @@ from decimal import Decimal
 
 import sqlglot
 import sqlglot.errors
-from ossie import OssieDocument, OssieExpression
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.parser import Parser
 
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument, OssieExpression
 from dactopus_ossie_clickhouse.model import (
     DEFAULT_TIME_ZONE,
     all_metrics,

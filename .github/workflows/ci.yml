@@ -34,8 +34,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --locked
-      - run: uv run ruff check src tests research
-      - run: uv run ruff format --check src tests research
+      - run: uv run ruff check src tests research scripts
+      - run: uv run ruff format --check src tests research scripts
+      - run: uv run python scripts/vendor_ossie.py --check  # _vendor/ossie is upstream's, unchanged
       - name: Load the TPC-DS reference data (see CONTRIBUTING.md)
         run: |
           sudo chmod a+rwx /tmp/tpcds  # docker made the bind mount root-owned

@@ -11,8 +11,8 @@ from decimal import Decimal
 
 import yaml
 from clickhouse_connect.driver.exceptions import ClickHouseError
-from ossie import OssieDocument
 
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.access import Policy
 from dactopus_ossie_clickhouse.executor import Executor, connect
 from dactopus_ossie_clickhouse.model import ModelError, all_metrics, join_problems, load_model

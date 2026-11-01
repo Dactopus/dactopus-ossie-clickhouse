@@ -11,9 +11,9 @@ SUM, 0 for COUNT (§6.11.5)."""
 from pathlib import Path
 
 import pytest
-from ossie import OssieDocument
 
 from dactopus_ossie_clickhouse import load_model
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import (
     Catalog,

@@ -811,7 +811,7 @@ that it, and the runner that depends on it, can go to PyPI.
   PyYAML, are direct dependencies here.
 - **The one change.** `scripts/vendor_ossie.py` makes the package's
   imports of itself relative, so no code of an `ossie` installed
-  next to it (`tests/test_model.py` checks that). CI runs the script with
+  next to it is imported (`tests/test_model.py` checks that). CI runs the script with
   `--check`, which fails on any other difference from upstream.
 - **What users see.** `load_model` returns
   `dactopus_ossie_clickhouse._vendor.ossie.OssieDocument`, a class distinct

@@ -60,6 +60,7 @@ jobs:
       - name: The wheel works on its own, outside the checkout
         run: |
           uv venv "$RUNNER_TEMP/wheel"
-          uv pip install --python "$RUNNER_TEMP/wheel" dist/*.whl
+          uv pip install --python "$RUNNER_TEMP/wheel" "$(ls dist/*.whl)[mcp]"
           cd "$RUNNER_TEMP" && wheel/bin/dactopus-ossie-clickhouse sql \
             "$GITHUB_WORKSPACE/tests/fixtures/tpcds.yaml" -m total_sales -d item.i_brand
+          wheel/bin/python -c "import dactopus_ossie_clickhouse.mcp_server"

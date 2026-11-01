@@ -150,7 +150,8 @@ SQLGlot release and drops the rewrites that release made redundant
    merge", the only method the repository allows.
 4. Rehearse on `main`: run the Publish workflow by hand. It uploads the
    build to [TestPyPI](https://test.pypi.org/project/dactopus-ossie-clickhouse/)
-   as `X.Y.Z.devN`; install that from there and look at the page. PyPI takes
+   as `X.Y.Z.devN`; install that from there, its dependencies from PyPI
+   (anyone may upload to TestPyPI, under any name), and look at the page. PyPI takes
    each version once, so whatever goes wrong is fixed here, before the tag.
 5. Tag the commit on `main`, never one on the branch: rebasing changes the
    hashes. Publishing the release on GitHub runs the Publish workflow,
@@ -161,8 +162,8 @@ SQLGlot release and drops the rewrites that release made redundant
 ```bash
 git switch main && git pull --ff-only
 gh workflow run publish.yml --ref main   # step 4, TestPyPI
-pip install --index-url https://test.pypi.org/simple/ \
-  --extra-index-url https://pypi.org/simple/ "dactopus-ossie-clickhouse[mcp]==X.Y.Z.devN"
+pip install --no-deps --index-url https://test.pypi.org/simple/ dactopus-ossie-clickhouse==X.Y.Z.devN
+pip install "dactopus-ossie-clickhouse[mcp]==X.Y.Z.devN"   # dependencies from PyPI
 git tag -a vX.Y.Z -m "dactopus-ossie-clickhouse X.Y.Z" && git push origin vX.Y.Z
 gh release create vX.Y.Z --title X.Y.Z --notes-file notes.md   # publishes to PyPI
 ```

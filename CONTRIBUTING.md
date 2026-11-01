@@ -146,7 +146,7 @@ SQLGlot release and drops the rewrites that release made redundant
    empty.
 2. Set `version` in `pyproject.toml` and run `uv lock`, so the package and
    the version the MCP server reports match the tag.
-3. Push, wait for the three required CI jobs, merge with "Rebase and
+3. Push, wait for the four required CI jobs, merge with "Rebase and
    merge", the only method the repository allows.
 4. Rehearse on `main`: run the Publish workflow by hand. It uploads the
    build to [TestPyPI](https://test.pypi.org/project/dactopus-ossie-clickhouse/)

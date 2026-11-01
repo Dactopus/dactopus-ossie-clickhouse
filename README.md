@@ -78,7 +78,9 @@ print(r.sql, r.columns, r.rows[:3])
 That is the Python API: `load_model` (its `time_zone` argument is the
 CLI's `--time-zone`), `executor.connect`,
 `executor.Executor` and `planner.Query`; a `PlanError` names the nearest
-known object. The other modules are internal.
+known object. `Executor` takes the document `load_model` returns, or one
+built with `dactopus_ossie_clickhouse._vendor.ossie`, never with an
+installed `ossie`. The other modules are internal.
 
 ## How a question becomes SQL
 

@@ -184,6 +184,14 @@ class Executor:
     """Runs as whoever the client is connected as; sees only what that user may read."""
 
     def __init__(self, client, model: OssieDocument, policy: Policy | None = None):
+        if not isinstance(model, OssieDocument):
+            # One built with an installed apache-ossie is another class: the isinstance
+            # checks of model.py would misread it silently (docs/design.md).
+            kind = f"{type(model).__module__}.{type(model).__qualname__}"
+            raise TypeError(
+                f"model is a {kind}: pass what load_model returns, or an OssieDocument "
+                "of dactopus_ossie_clickhouse._vendor.ossie"
+            )
         self.client = client
         self.full_model = model
         self.untranslatable_fields, self.untranslatable_metrics = untranslatable(model)

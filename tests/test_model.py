@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ import yaml
 from dactopus_ossie_clickhouse import SUPPORTED_VERSION, ModelError, load_model
 from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.cli import main
+from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.model import overrides, time_zone
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query
 
@@ -35,7 +37,8 @@ def test_reference_model_loads():
 
 
 def test_reads_the_vendored_ossie_only(tmp_path):
-    # An apache-ossie installed next to this package, of any version, is never read:
+    # No code of an apache-ossie installed next to this package, of any version, is
+    # imported:
     # the package carries its own copy (docs/design.md).
     (tmp_path / "ossie").mkdir()
     (tmp_path / "ossie" / "__init__.py").write_text("raise ImportError('installed ossie')\n")
@@ -52,6 +55,23 @@ def test_reads_the_vendored_ossie_only(tmp_path):
         env={**os.environ, "PYTHONPATH": str(tmp_path)},
     )
     assert done.returncode == 0, done.stderr
+
+
+def test_executor_refuses_an_installed_ossie_document(tmp_path, monkeypatch):
+    # The same code as another package, as an installed apache-ossie is: its classes are
+    # not ours, and model.py's isinstance checks would misread them.
+    vendored = Path(sys.modules[OssieDocument.__module__].__file__).parent
+    shutil.copytree(vendored, tmp_path / "ossie", ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.syspath_prepend(str(tmp_path))
+    try:
+        import ossie
+
+        doc = ossie.OssieDocument.from_ossie_yaml(FIXTURE.read_text())
+    finally:
+        for name in [n for n in sys.modules if n == "ossie" or n.startswith("ossie.")]:
+            del sys.modules[name]
+    with pytest.raises(TypeError, match=r"model is a ossie\.models\.OssieDocument: pass"):
+        Executor(None, doc)
 
 
 def test_json_loads(tmp_path, tpcds):

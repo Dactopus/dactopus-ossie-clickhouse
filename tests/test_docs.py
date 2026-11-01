@@ -85,7 +85,8 @@ def test_page_figures_come_from_the_ga4_sample(dactopus):
 def test_readme_links_work_on_pypi():
     # PyPI keeps a version's page as uploaded, so a relative link there stays broken.
     readme = (ROOT / "README.md").read_text()
-    targets = re.findall(r"\]\(([^)\s]+)\)", readme)
+    targets = re.findall(r"\]\(\s*<?([^)\s>]+)", readme)  # a title may follow the target
+    targets += re.findall(r"^ {0,3}\[[^\]]+\]:\s*<?([^\s>]+)", readme, re.MULTILINE)
     targets += re.findall(r'(?:src|srcset|href)="([^"\s]+)', readme)
     assert targets
     assert [t for t in targets if not t.startswith(("https://", "#"))] == []

@@ -69,6 +69,18 @@ for t in store_sales date_dim customer item store; do
 done
 ```
 
+Two tests read a checkout of [apache/ossie](https://github.com/apache/ossie)
+at `OSSIE_REPO` and skip without one: the canary that keeps
+`tests/fixtures/tpcds.yaml` equal to `examples/tpcds_semantic_model.yaml`,
+and `tests/test_compliance.py`, which runs the query compliance cases of
+`compliance/query` on the server (the SCOTT data goes into a database
+`scott`, dropped afterwards). The weekly workflow runs both on Ossie's
+`main`.
+
+```bash
+OSSIE_REPO=../ossie uv run pytest tests/test_compliance.py tests/test_canaries.py
+```
+
 ```bash
 uv run ruff check src tests research
 uv run ruff format src tests research

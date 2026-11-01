@@ -3,7 +3,9 @@ name: Latest upstream
 # Users install the newest SQLGlot the bounds allow, while CI runs the one in uv.lock;
 # Ossie's main is where the next pin comes from. Weekly, each of them over the lock:
 # tests say whether it breaks us, canaries (tests/test_canaries.py) whether a rule
-# here has lost its reason. The SQLGlot variant ignores the upper bound, so a red run
+# here has lost its reason. The Ossie variant also runs the query compliance cases of
+# Ossie's main on ClickHouse (tests/test_compliance.py), so a case added there fails
+# here until it is answered. The SQLGlot variant ignores the upper bound, so a red run
 # may also mean a new major version.
 
 on:
@@ -45,9 +47,13 @@ jobs:
       - name: Install the newest SQLGlot
         if: matrix.upstream == 'sqlglot'
         run: uv pip install -U sqlglot
-      - name: Install apache-ossie from main
+      - name: Install apache-ossie from main, check out its compliance cases
         if: matrix.upstream == 'ossie'
-        run: uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
+        run: |
+          uv pip install "apache-ossie @ git+https://github.com/apache/ossie.git@main#subdirectory=python"
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/apache/ossie.git "$RUNNER_TEMP/ossie"
+          git -C "$RUNNER_TEMP/ossie" sparse-checkout set compliance/query examples
+          echo "OSSIE_REPO=$RUNNER_TEMP/ossie" >> "$GITHUB_ENV"
       - run: uv pip freeze | grep -E "^(sqlglot|apache-ossie)[ =]"  # with the Ossie commit
       - name: Load the TPC-DS reference data (see CONTRIBUTING.md)
         run: |

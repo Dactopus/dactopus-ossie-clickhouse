@@ -168,7 +168,12 @@ opinion close to the spec's Postgres-like semantics, not as ground truth.
 Where DuckDB lacks a function or disagrees with the spec, the expected value
 is written by hand in the test with a reference to the spec section. The
 spec text wins over any engine. Replace hand-written expectations with the
-Ossie compliance suite (apache/ossie PR #237) once it exists. Integration tests run
+Ossie compliance suite (apache/ossie PR #237) once it exists. The query
+compliance cases of apache/ossie (`compliance/query`, SCOTT data) run in
+`tests/test_compliance.py` against a checkout at `OSSIE_REPO`, each case as
+the question its `AGG()` query asks, since this executor takes questions,
+not layer-2 SQL (`docs/design.md`); a case upstream adds fails the weekly
+run until its question is written there. Integration tests run
 against the TPC-DS reference model from the Ossie repository, loaded into a
 local ClickHouse; `tests/fixtures/tpcds.yaml` is an exact copy of its
 `examples/tpcds_semantic_model.yaml`. See [CONTRIBUTING.md](CONTRIBUTING.md)

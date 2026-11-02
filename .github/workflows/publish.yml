@@ -1,6 +1,7 @@
 name: Publish
 
-# A release on GitHub publishes its tag to PyPI. Run by hand, the same build goes to
+# A release on GitHub publishes its tag to PyPI, if the tag is the version in
+# pyproject.toml and its commit is on main. Run by hand, the same build goes to
 # TestPyPI under a dev version (X.Y.Z.devN, N the run number, since an index takes
 # each version once): a rehearsal on main before the tag. Both indexes trust this
 # workflow and its environment (trusted publishing), so no token is stored here.

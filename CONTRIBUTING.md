@@ -88,8 +88,9 @@ uv run ruff format src tests research scripts
 
 ## Rules that shape the code
 
-[AGENTS.md](AGENTS.md) is the full list; the ones that matter most for a
-pull request:
+[AGENTS.md](AGENTS.md) holds the rules an agent needs in every session,
+and [docs/design.md](docs/design.md) the decisions with their evidence;
+the ones that matter most for a pull request:
 
 - The [Ossie](https://github.com/apache/ossie) description is the single source of truth. Semantics that
   belong in the model are never hardcoded.

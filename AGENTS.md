@@ -1,308 +1,177 @@
 # AGENTS.md
 
-Guidance for AI coding agents working in this repository.
+Guidance for AI coding agents working in this repository. It holds what the
+code does not show. The rest is where it belongs: `README.md` describes
+the product, `docs/design.md` records each decision with its evidence,
+`docs/model-authoring.md` what a model author sees, `CONTRIBUTING.md` the
+setup, the layout and the release steps.
 
 ## Project
 
-dactopus-ossie-clickhouse is an open-source implementation of the
-[Apache Ossie](https://github.com/apache/ossie) semantic model standard for
-ClickHouse. It reads an Ossie data description, translates metric definitions
-into ClickHouse SQL, answers questions posed in business terms (metrics,
-dimensions, filters), and serves the description and queries to AI agents over
-MCP. See [README.md](README.md) for the full product description.
-
-Licensed under Apache 2.0.
+dactopus-ossie-clickhouse implements the
+[Apache Ossie](https://github.com/apache/ossie) semantic model standard
+for ClickHouse: it reads an Ossie description, translates metric
+definitions into ClickHouse SQL, answers questions posed in business
+terms (metrics, dimensions, filters), and serves the description and the
+queries to AI agents over MCP. Licensed under Apache 2.0.
 
 ## Language
 
-All text in this repository is in English only: code identifiers, comments,
-docstrings, commit messages, documentation, issues, and test names. Do not
-introduce text in any other language, even in examples or fixtures.
+All text in this repository is in English only: code identifiers,
+comments, docstrings, commit messages, documentation, issues and test
+names. Do not introduce text in any other language, even in examples or
+fixtures.
 
 ## Scope
 
-In scope:
-
-- Reading and validating Ossie descriptions.
-- Translating Ossie expressions into ClickHouse SQL, including ClickHouse
-  specifics the user must not have to think about: deduplication of tables that
-  keep change history, reference data stored in dictionaries, join resolution.
-- Executing queries against any ClickHouse (self-hosted or cloud).
-- Serving the model and accepting questions over MCP, with access controlled
-  by a local configuration.
-
-Out of scope, do not build:
-
-- Chat, charts, or any user interface.
-- Data loading, ETL, or warehouse features. Data is already in ClickHouse.
-- Dependencies beyond ClickHouse and the Ossie standard where avoidable.
+Do not build: chat, charts or any user interface; data loading, ETL or
+warehouse features (the data is already in ClickHouse); dependencies
+beyond ClickHouse and the Ossie standard where avoidable.
 
 ## Design principles
 
-- The Ossie description is the single source of truth. Never hardcode metric
-  or table semantics that belong in the model.
-- Follow the standard's semantics exactly. When ClickHouse behaviour differs
-  from the standard's assumptions, handle it in the translator, not by
-  changing what the standard means.
-- Every answer must be reproducible: the same question and the same model
+- The Ossie description is the single source of truth. Never hardcode
+  metric or table semantics that belong in the model.
+- Follow the standard's semantics exactly. When ClickHouse behaviour
+  differs from the standard's assumptions, handle it in the translator;
+  what the standard means stays. The spec text wins over any engine,
+  DuckDB and ClickHouse included.
+- Every answer is reproducible: the same question and the same model
   yield the same SQL.
 - Keep the public surface small. Prefer one obvious way to do each thing.
+- A decision that rests on a measurement or an evaluation goes into
+  `docs/design.md` with its evidence, so it is not relitigated without
+  new evidence. Why a rewrite in `translate.py` exists is in a comment at
+  the rewrite.
 
-## Stack
+## Rules the code does not show
 
-Python library with a CLI entry point. The parts that constrain code:
+Layers and boundaries:
 
-- **SQLGlot** for expression translation, parsing with its default dialect
-  until the upstream Ossie dialect (apache/ossie PR #222) lands. An
-  expression's `sql` (OSSIE_SQL_2026) comes first, then a `dialects` entry
-  in `OSSIE_SQL_2026`, then `ANSI_SQL`; `model.expression_text` is the one
-  place that picks. A dialect is any string in the schema; others are
-  opaque.
-- **clickhouse-connect** over HTTP for execution.
-- **MCP SDK** only behind the `[mcp]` extra. The core library must import
-  without it.
-- **apache-ossie** package for loading and validating models, carried in
-  `src/dactopus_ossie_clickhouse/_vendor/ossie` until it is on PyPI, which
-  refuses a package with a git dependency (`docs/design.md`). Import it as
+- Layers, lowest first: model loader, translator, planner, executor, MCP
+  adapter. A lower layer never imports a higher one.
+- The planner never talks to the database. It takes an optional `Catalog`
+  the executor built.
+- The MCP server (`mcp_server.py`, the `[mcp]` extra) is a thin adapter:
+  each tool is one library call, errors go back as results with an
+  `error` field, never as exceptions, and `client_factory` is the only
+  place that decides which ClickHouse connection a caller gets. The core
+  library must import without the MCP SDK.
+
+Access control:
+
+- Access control is ClickHouse's. Queries run as the connected user, and
+  the model is trimmed (`access.py`) to what `system.tables` and
+  `system.columns` reveal. The policy file only hides more; it never
+  grants. Nothing in this project authenticates.
+- A hidden object must never appear in SQL, errors or suggestions. A field
+  or metric whose expression does not translate, or that calls a function
+  the server lacks, is hidden the same way and reported by `validate`.
+
+The vendored Ossie package:
+
+- `apache-ossie` is carried in `src/dactopus_ossie_clickhouse/_vendor/ossie`
+  until it is on PyPI. Import it as
   `dactopus_ossie_clickhouse._vendor.ossie`, never `ossie`. The copy is
   upstream's at the commit in `_vendor/vendor.txt`, changed only by
-  `scripts/vendor_ossie.py` (its own imports made relative); never edit it
-  by hand, and CI checks it. Do not write a model loader:
-  a file is read with `OssieDocument.from_ossie_yaml` or `from_ossie_json`,
-  which also refuse a null property and a missing `version`;
-  `model_validate` is for a document built in Python, such as the trimmed
-  model in `access.py`. Several files are read that way one by one and
-  combined in `load_model` as a union; a name in two files is an error,
-  never a merge.
-- Supported Ossie schema version is pinned (`0.2.0.dev0`) and checked
+  `scripts/vendor_ossie.py`; never edit it by hand (CI checks).
+- Do not write a model loader. A file is read with
+  `OssieDocument.from_ossie_yaml` or `from_ossie_json`; `model_validate`
+  is for a document built in Python. `load_model` combines several files
+  as a union; a name in two files is an error, never a merge.
+- The supported Ossie schema version is pinned (`0.2.0.dev0`) and checked
   explicitly.
 
-## Architecture rules
+Translation:
 
-- Layering: model loader -> translator -> planner -> executor -> MCP adapter.
-  Lower layers never import higher ones.
-- The MCP server (`mcp_server.py`, `[mcp]` extra) is a thin adapter over
-  the library. No logic lives only in the MCP layer; each tool is one
-  library call, and errors go back as results with an `error` field, never
-  as exceptions, so suggestions reach the agent. Keep `client_factory` as
-  the only place that decides which ClickHouse connection a caller gets.
-- Access control is ClickHouse's. Queries run as the connected user; the
-  model is trimmed (`access.py`) to the sources and columns that user can
-  read, as revealed by `system.tables` and `system.columns`. A hidden object
-  must never appear in SQL, errors or suggestions. The optional policy file
-  only hides more; it never grants. Nothing in this project authenticates.
-  A field or metric whose expression does not translate is hidden the same
-  way (nothing proves it reads only visible columns) and reported by
-  `validate`; so is a metric the planner refuses in every question.
-- ClickHouse specifics come from introspecting `system.tables`,
-  `system.columns` and `system.dictionaries`, not from asking the user.
-  `ReplacingMergeTree` engines, `Replicated` and Cloud's `Shared` too, are
-  read with `FINAL` (measured faster than `argMax`), and so is a
-  `Distributed` table, materialized view or `Merge` table that reads one;
-  `FINAL` on one that reads a plain `MergeTree` is an error. When the table
-  read is hidden from the user, `validate` reports it and no `FINAL` is
-  added. Single-key dictionaries with `dictGetOrNull` instead of a join.
-  Overrides go in a dataset's `custom_extensions` under
-  `vendor_name: CLICKHOUSE` as JSON, currently `{"dedup": "none"}` or
-  `{"dedup": "final"}`; the model's own entry takes `{"time_zone": ...}`.
-  `check_model` refuses any other key or value and the entry anywhere but
-  a dataset or the model; `model._extension` is the one parser, behind
-  `overrides` and `time_zone`.
-- Metrics come at two levels (spec, "Metric Scoping", apache/ossie#591):
-  the model's `metrics`, named as declared, and a dataset's `metrics`,
-  named `dataset.metric` in questions, results, errors and the policy
-  file. Every layer lists them through `model.all_metrics`. A dataset's
-  metric reads its own fields by bare name (`Planner._own_field`) and
-  aggregates its dataset's rows, `COUNT(*)` included: the planner marks
-  each of its aggregates with the dataset in `meta`, which
-  `_aggregate_inputs` reads.
-- The planner never talks to the database; it takes an optional `Catalog`
-  the executor built. Keep that boundary.
-- Query planning is deterministic: datasets from `source`, joins from
-  `relationships`, one `SELECT` per question. Joins are `LEFT JOIN` from
-  one root dataset, along the one path of relationships to each dataset
-  the question touches (two paths are ambiguous, #246 §6.9), only along
-  relationships whose `to_columns` cover a primary or unique key of the
-  target. Keys and relationship columns name fields, not source columns
-  (apache/ossie#486): `load_model` checks them against the fields, and a
-  join or semi-join reads the fields' expressions (`Planner._keys`).
-  Generated SQL carries
-  `SETTINGS join_use_nulls = 1` so unmatched rows get NULL, not defaults,
-  `aggregate_functions_null_for_empty = 1` so an aggregate over no
-  rows is NULL, not 0 (counts stay 0), and `transform_null_in = 0` so a
-  NULL key matches nothing in `IN`.
-  A row filter on a dataset M that the root does not reach, but that
-  reaches the root, is a semi-join: the root's key `IN` the keys of M rows
-  that pass every filter on M and the datasets M reaches (one subquery,
-  planned as a question over M), one `IN` per relationship on the one path
-  from M. An M that does not reach the root meets it at S, the first
-  dataset on M's relationships the root reaches: M's subquery keeps S
-  rows, and the root's path to S is one `IN` per relationship, each
-  dataset read (`Planner._semi_join_to`); two such S are refused, and so
-  is an M whose path has a dataset no key of which holds its columns to
-  the next (`Planner._not_a_property`): its rows may be facts, not
-  properties of S. An M that meets nothing the root reaches is planned
-  the same way inside the subquery of the one fact another filter names
-  that M meets (`Planner._through`), never a fact the planner picks: a
-  question without one is refused with each fact it would accept named
-  (`Planner._unlinked`). Both
-  are tried only when the question is refused over the root of
-  everything it reads, from the root of its metrics, dimensions and
-  aggregate filters; a filter mixing both sides is refused.
-  Metrics run over the root's rows, so the planner refuses an aggregate
-  that reads only joined datasets unless repeats cannot change it or the
-  join is on a key of the root, an aggregate expression that reads no root
-  column at all, and a model's metric whose `COUNT(*)` no other aggregate
-  ties to one dataset (`docs/design.md`). Metrics no one root answers together
-  are stitched: each group of metrics planned from its own root, merged
-  with `UNION ALL` and `GROUP BY` on the dimensions (#246 section 6.6); a
-  metric missing from a group is its value over no rows.
-- Name resolution is case-insensitive (spec rule); emitted SQL uses physical
-  names exactly as the model writes them (ClickHouse is case-sensitive).
-- Planner errors name the nearest known object; agents recover from that.
-  A field asked for as a metric is named as a field, with the metrics
-  that read it (`Planner._field_not_metric`): by spelling, `dataset.field`
-  gets metrics over other fields (#66).
+- Expressions are parsed with SQLGlot's default dialect until the upstream
+  Ossie dialect lands. `model.expression_text` is the one place that picks
+  which of an expression's texts is read; a dialect name is any string.
+- `parse()` types only the spec's function catalog (`_CATALOG`). Any other
+  function is `exp.Anonymous` and reaches ClickHouse as written, so
+  SQLGlot never renames it. A rewritten function carries its spec
+  signature in `_SIGNATURES`, so a rewrite never drops an argument.
+- Rewrites work on the SQLGlot AST, never on SQL text. Emitted SQL uses
+  physical names as the model writes them; name resolution is
+  case-insensitive.
+- `rewrite_tree` parenthesizes every operator under another operator.
+  Code that puts an operator under another after `rewrite_tree`
+  parenthesizes it itself (`exp.and_` does).
+- ClickHouse specifics (`FINAL`, dictionaries, the server's functions)
+  come from introspecting `system.tables`, `system.columns`,
+  `system.dictionaries` and `system.functions`; the user is never asked.
+  Overrides live in a dataset's `custom_extensions` under
+  `vendor_name: CLICKHOUSE`, and `model._extension` is the one parser.
+- `CURRENT_*`, ClickHouse's `now()` and `today()`, timestamp literals and
+  `DATEDIFF` use the model's zone (`model.time_zone`, UTC by default),
+  never the server's zone or `session_timezone`.
+- NULLs sort last in both directions. Keep it when parsing switches to
+  the Ossie dialect.
+
+Planning:
+
+- Deterministic: datasets from `source`, joins from `relationships`, one
+  `SELECT` per question. `LEFT JOIN` from one root along the one path to
+  each dataset, only along relationships whose `to_columns` cover a key
+  of the target. Keys and relationship columns name fields, never source
+  columns. A row filter the root does not reach is a semi-join; metrics
+  no one root answers together are stitched. The rules and the refusals
+  are in `docs/design.md`; the code is `planner.py`.
+- The planner refuses a question it cannot answer with the right number:
+  an aggregate that repeats could change, an aggregate over aggregates,
+  two paths to one dataset. Errors name the nearest known object; agents
+  recover from that.
+- Metrics come at two levels, the model's and a dataset's, the latter
+  named `dataset.metric`. Every layer lists them through
+  `model.all_metrics`.
 
 ## Testing
 
-Translation tests compare values, not only that ClickHouse accepts the SQL:
-a translation that runs and returns the wrong value is the failure mode to
-guard against. Expected values come from DuckDB by default, as a second
-opinion close to the spec's Postgres-like semantics, not as ground truth.
-Where DuckDB lacks a function or disagrees with the spec, the expected value
-is written by hand in the test with a reference to the spec section. The
-spec text wins over any engine. Replace hand-written expectations with the
-Ossie compliance suite (apache/ossie PR #237) once it exists. The query
-compliance cases of apache/ossie (`compliance/query`, SCOTT data) run in
-`tests/test_compliance.py` against a checkout at `OSSIE_REPO`, each case as
-the question its `AGG()` query asks, since this executor takes questions,
-not layer-2 SQL (`docs/design.md`); a case upstream adds fails the weekly
-run until its question is written there. Integration tests run
-against the TPC-DS reference model from the Ossie repository, loaded into a
-local ClickHouse; `tests/fixtures/tpcds.yaml` is an exact copy of its
-`examples/tpcds_semantic_model.yaml`. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for setup.
-
-A rule in `translate.py` that exists only because of a gap in SQLGlot, not
-because the spec and ClickHouse differ, comes with a canary in
-`tests/test_canaries.py`: SQLGlot's output without the rule, pinned, and the
-rule named in the message. So does a fact of Ossie a rule here depends on.
-Canaries pass on the lock; `.github/workflows/latest.yml` runs the suite
-weekly on the newest SQLGlot and on apache-ossie from `main` (vendored for
-the run), canaries in a job of their own, so a red canary means a rule to
-revisit, not a broken answer.
-
-## Known ClickHouse traits to handle
-
-- Float division by zero and single-row `STDDEV`/`VARIANCE` yield `inf` or
-  `nan`, not `NULL`; the executor maps both to `None`.
-- A `DateTime` without a zone, `now()`, `today()` and `CAST('...' AS
-  DateTime)` take the server's zone. Answers must not: `CURRENT_*`,
-  ClickHouse's `now()`, `now64()`, `today()`, `yesterday()` and their
-  aliases without a zone, timestamp literals and `DATEDIFF` use the
-  model's zone (`model.time_zone`, UTC by default; `load_model(time_zone=...)`,
-  the CLI's `--time-zone`, replaces it), passed to `rewrite_tree`. So
-  does a string compared directly with a field or metric whose `datatype`
-  is `DateTime` or `DateTimeTz`: the planner makes it a `TIMESTAMP`
-  literal before inlining (`Planner._time_strings`), since ClickHouse
-  reads it in the column's zone. `dateDiff` miscounts hours
-  across two zones without it. Not `session_timezone`: calendar
-  functions of a column without a zone ignore it. Values are shown with
-  their offset from UTC.
-- Table names are `database.table`; Ossie `source` may have three parts,
-  or one: a bare table reads `currentDatabase()` (the URL's database, else
-  the user's default), and introspection asks the server for it. Parts
-  may be quoted (`` ` `` or `"`, a doubled quote inside); unquoted text
-  between dots is the name as written (`t$x`, `t#1`). `_parts` splits it
-  with regexes, not SQLGlot's tokenizer. A space or parenthesis outside
-  quotes, strings and comments marks a query, checked first so a query
-  is reported as one. Refused: `--`, `/*`, `;` or a stray quote outside
-  quotes, and `\` anywhere: ClickHouse reads it as an escape in quoted
-  names, and `_parts` does not decode escapes.
-- Spec functions ClickHouse lacks or answers differently are rewritten in
-  `translate.py`, on the SQLGlot AST, never on SQL text. Why each one
-  differs is in a comment at its rewrite; the larger decisions, with
-  evidence, are also in `docs/design.md`.
-- An aggregate over aggregates outside a window (`AVG(COUNT(x))`,
-  `AVG(SUM(x) OVER ())`, one in another's `FILTER`) is
-  `ILLEGAL_AGGREGATION` in ClickHouse, and #246 §4.5 defers it: the
-  planner refuses it (`_nested_aggregate`), so `validate` reports the
-  metric. `SUM(SUM(x)) OVER ()` passes.
-- ClickHouse's short aggregate names are approximate: `quantile`,
-  `median`, `uniq`. A spec function that is exact translates to an exact
-  one; only `APPROX_*` may use them.
-- NULLs sort last in both directions, ClickHouse's default (the spec
-  leaves it open, apache/ossie#498): `NULL_ORDERING` on the parser
-  dialect, `nulls_first=False` in the planner. Keep it when parsing
-  switches to the Ossie dialect. An explicit `NULLS FIRST | LAST` passes
-  through in a window's `ORDER BY` and is rejected elsewhere: the spec's
-  syntax has it only there.
-- SQLGlot adds no parentheses for precedence, and its Python operators
-  (`1 - p`) skip them when `p` is the same operator. `rewrite_tree`
-  parenthesizes every operator under another operator, so a rewrite builds
-  plain nodes and an inlined field or metric needs nothing. Code that puts
-  an operator under another after `rewrite_tree` parenthesizes it itself
-  (`exp.and_` does for `WHERE`, `HAVING` and `ON`).
-- A rewritten function, ours or SQLGlot's, gets its spec signature in
-  `_SIGNATURES`; `parse()` rejects other argument counts, so a rewrite
-  never drops an argument. A longer form that reaches ClickHouse whole
-  and means what it means in DuckDB, Snowflake or Postgres stays
-  (`FLOOR(x[, d])`), with a value test. A name there parses as a plain
-  call, never through SQLGlot's special syntax (`CEIL(x TO DAY)`), which
-  skips the check; `POSITION(substr IN str)` keeps its own, checked in
-  `_parse_position`.
-- `parse()` types only the spec's function catalog (`_CATALOG`); any
-  other function is `exp.Anonymous` and reaches ClickHouse as written, so
-  SQLGlot never renames it (`DAYOFWEEK` to `DAY_OF_WEEK`, which ClickHouse
-  lacks). The executor checks those names against `system.functions`,
-  combinators included, and hides a field or metric calling one the
-  server lacks; `validate --url` reports it. `Catalog.aggregate` tells
-  the planner which of them are aggregates, SQLGlot's list of ClickHouse
-  aggregates when there is no server's word
-  (`_known_clickhouse_aggregate`); `Planner._parse` types those
-  as `exp.AnonymousAggFunc`, so every `exp.AggFunc` check covers them.
-  Which ClickHouse aggregates repeats cannot change is a list in the
-  planner (`_CLICKHOUSE_REPEAT_SAFE`), checked on the server; their value
-  over no rows in a stitched question is a `WHERE FALSE` scalar subquery.
+- Every change to library code comes with a test.
+- Translation tests compare values, not only that ClickHouse accepts the
+  SQL: a translation that runs and returns the wrong value is the failure
+  mode to guard against. DuckDB gives the default expected value as a
+  second opinion. Where it lacks a function or disagrees with the spec,
+  the expected value is written by hand with a reference to the spec
+  section.
+- A rule in `translate.py` that exists only because of a gap in SQLGlot
+  comes with a canary in `tests/test_canaries.py`: SQLGlot's output
+  without the rule, pinned, and the rule named in the message. So does a
+  fact of Ossie a rule depends on. Canaries pass on the lock;
+  `.github/workflows/latest.yml` runs the suite weekly on the newest
+  SQLGlot and on apache-ossie from `main`, so a red canary means a rule
+  to revisit, not a broken answer.
+- Tests with the `clickhouse` fixture need a server at
+  `OSSIE_CLICKHOUSE_URL` (default `http://127.0.0.1:8123`) and skip
+  otherwise; access-control tests also need SQL access management on
+  the server. `tests/test_compliance.py` and the fixture canary need a
+  checkout of apache/ossie at `OSSIE_REPO`. `CONTRIBUTING.md` has the
+  setup.
+- `tests/fixtures/tpcds.yaml` is an exact copy of Ossie's
+  `examples/tpcds_semantic_model.yaml`; a canary checks it.
 
 ## Development
 
-Python 3.11+, managed with uv. Layout: `src/dactopus_ossie_clickhouse/` (library and
-CLI), `tests/` (pytest, fixtures in `tests/fixtures/`), `docs/`, `research/`
-(studies behind decisions and data for Apache Ossie; never imported by the
-library or tests, linted with the rest), `scripts/` (maintenance, such as
-`vendor_ossie.py`; not part of the package).
+Python 3.11+, managed with uv. `research/` holds studies behind decisions
+and is never imported by the library or tests; `scripts/` is maintenance,
+outside the package. Keep modules flat; add a package level only when a
+module outgrows one file.
 
 ```bash
-uv sync                       # install with dev tools
-uv run pytest                 # tests; ClickHouse-dependent ones skip when no server
-uv run pytest -m "not integration"   # unit tests only
-uv run ruff check src tests research scripts   # lint
-uv run ruff format src tests research scripts  # format
-uv run python scripts/vendor_ossie.py <full commit>  # move the apache-ossie copy
+uv sync                                        # install with dev tools
+uv run pytest                                  # ClickHouse-dependent tests skip without a server
+uv run pytest -m "not integration"             # unit tests only
+uv run ruff check src tests research scripts
+uv run ruff format src tests research scripts
+uv run python scripts/vendor_ossie.py <full commit>   # move the apache-ossie copy
 uv run dactopus-ossie-clickhouse validate tests/fixtures/tpcds.yaml [--url http://127.0.0.1:8123]
 uv run dactopus-ossie-clickhouse sql tests/fixtures/tpcds.yaml -m total_sales -d item.i_brand
-uv run dactopus-ossie-clickhouse query tests/fixtures/tpcds.yaml -m total_sales -d item.i_brand --json
-uv run dactopus-ossie-clickhouse query model.yaml -m revenue --url http://analyst:secret@host:8123 --policy policy.yaml
 uv run dactopus-ossie-clickhouse serve tests/fixtures/tpcds.yaml   # MCP over stdio
 ```
 
-Access-control tests create users and need SQL access management on the
-server (`access_management` for the connecting user; in the official Docker
-image `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1`). They skip otherwise.
-
-Tests that use the `clickhouse` fixture are integration tests: they need a
-server at `OSSIE_CLICKHOUSE_URL` (default `http://127.0.0.1:8123`) and skip
-otherwise. DuckDB supplies default expected values for comparisons and needs
-no server. Every change to library code comes with a test. Keep modules flat; add a
-package level only when a module outgrows one file.
-
 ## Repository status
 
-Released versions are in [CHANGELOG.md](CHANGELOG.md) and on PyPI, where
-a release on GitHub publishes them (`.github/workflows/publish.yml`). Links
-in README.md are absolute: it is the PyPI page. Decisions with their
-evidence are in [docs/design.md](docs/design.md).
-Pull requests are merged with rebase; releases follow
-[CONTRIBUTING.md](CONTRIBUTING.md#releasing).
+Released versions are in `CHANGELOG.md` and on PyPI, where a release on
+GitHub publishes them. `README.md` is the PyPI page, so its links are
+absolute. Pull requests are merged with rebase; releases follow
+`CONTRIBUTING.md`.

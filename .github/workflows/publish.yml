@@ -14,10 +14,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # the history of main, for the ancestry check below
       - uses: astral-sh/setup-uv@v7
       - name: The tag is the version in pyproject.toml
         if: github.event_name == 'release'
         run: test "$GITHUB_REF_NAME" = "v$(uv version --short)"
+      - name: The tagged commit is on main
+        if: github.event_name == 'release'
+        run: |
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "::error::$GITHUB_REF_NAME is not on main: tag the commit main got from the merge"
+            exit 1
+          }
       - name: A dev version for TestPyPI
         if: github.event_name == 'workflow_dispatch'
         run: uv version --frozen "$(uv version --short).dev$GITHUB_RUN_NUMBER"

@@ -35,10 +35,6 @@ pip install "dactopus-ossie-clickhouse[mcp]"
 Leave out `[mcp]` to skip the MCP server and its SDK; the library and the
 CLI work without them.
 
-Until 0.4.0 the package and its command were `ossie-clickhouse` and the
-module `ossie_clickhouse`; the [changelog](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md) says what to
-change.
-
 ## Quick start
 
 Point it at a model and a ClickHouse. The
@@ -195,18 +191,17 @@ data must already be in ClickHouse.
 
 ## Status
 
-Pre-release. The supported Ossie schema version is pinned (`0.2.0.dev0`)
-and checked on load, because the standard is still moving. Tested against
-the TPC-DS reference model and the spec's query compliance cases on
-ClickHouse 26.x. Until the major version is
-1, a minor release may change the Python API; the CLI and the MCP tools
-are the stable surface.
+Version 0.x. The supported Ossie schema version is pinned (`0.2.0.dev0`)
+and checked on load, because the standard is still moving. Until the
+major version is 1, a minor release may change the Python API; the CLI
+and the MCP tools are the stable surface. Tested against the TPC-DS
+reference model and the spec's query compliance cases on ClickHouse
+26.x, and weekly on the newest SQLGlot and on Ossie's `main`.
 
-Where it goes from here: the
-upstream Ossie SQL dialect and compliance suite once they merge;
-metrics that read both sides of a one-to-many relationship, `source` as a query
-and a remote multi-user MCP server on the first real request. Ask for one
-in the [issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues).
+What is designed and waits for a request, such as a remote multi-user
+MCP server, is in the
+[issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues)
+under `needs-demand`; ask there.
 
 [`research/`](https://github.com/Dactopus/dactopus-ossie-clickhouse/tree/main/research) holds the experiments behind some decisions in this
 code and the data we share with the Apache Ossie community; nothing there is

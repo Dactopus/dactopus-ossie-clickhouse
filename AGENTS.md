@@ -100,8 +100,9 @@ Translation:
 - ClickHouse specifics (`FINAL`, dictionaries, the server's functions)
   come from introspecting `system.tables`, `system.columns`,
   `system.dictionaries` and `system.functions`; the user is never asked.
-  Overrides live in a dataset's `custom_extensions` under
-  `vendor_name: CLICKHOUSE`, and `model._extension` is the one parser.
+  Overrides live in `custom_extensions` under `vendor_name: CLICKHOUSE`,
+  a dataset's (`dedup`) or the model's (`time_zone`); `model._extension`
+  is the one parser.
 - `CURRENT_*`, ClickHouse's `now()` and `today()`, timestamp literals and
   `DATEDIFF` use the model's zone (`model.time_zone`, UTC by default),
   never the server's zone or `session_timezone`.
@@ -166,6 +167,7 @@ uv run ruff format src tests research scripts
 uv run python scripts/vendor_ossie.py <full commit>   # move the apache-ossie copy
 uv run dactopus-ossie-clickhouse validate tests/fixtures/tpcds.yaml [--url http://127.0.0.1:8123]
 uv run dactopus-ossie-clickhouse sql tests/fixtures/tpcds.yaml -m total_sales -d item.i_brand
+uv run dactopus-ossie-clickhouse query tests/fixtures/tpcds.yaml -m total_sales -d item.i_brand --json
 uv run dactopus-ossie-clickhouse serve tests/fixtures/tpcds.yaml   # MCP over stdio
 ```
 

@@ -1,8 +1,9 @@
 # Design decisions
 
 Decisions that rest on a measurement or an evaluation, recorded so they are
-not relitigated without new evidence. The rules themselves are in
-[AGENTS.md](../AGENTS.md); the reasoning is here.
+not relitigated without new evidence. [AGENTS.md](../AGENTS.md) holds the
+rules an agent needs in every session; the detailed rules of the planner
+and the translator, with their reasoning, are here.
 
 ## `FINAL` instead of `argMax` for `ReplacingMergeTree` tables
 

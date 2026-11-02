@@ -200,7 +200,7 @@ reference model and the spec's query compliance cases on ClickHouse
 
 What is designed and waits for a request, such as a remote multi-user
 MCP server, is in the
-[issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues)
+[issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues?q=label%3Aneeds-demand)
 under `needs-demand`; ask there.
 
 [`research/`](https://github.com/Dactopus/dactopus-ossie-clickhouse/tree/main/research) holds the experiments behind some decisions in this

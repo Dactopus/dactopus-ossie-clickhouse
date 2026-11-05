@@ -173,14 +173,14 @@ datasets:
     primary_key: [order_id]
     fields:
       - name: order_id
-        expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}
+        expression: {sql: order_id}
       - name: amount
-        expression: {dialects: [{dialect: ANSI_SQL, expression: amount}]}
+        expression: {sql: amount}
     metrics:
       - name: revenue
-        expression: {dialects: [{dialect: ANSI_SQL, expression: SUM(amount)}]}
+        expression: {sql: SUM(amount)}
       - name: order_count
-        expression: {dialects: [{dialect: ANSI_SQL, expression: COUNT(*)}]}
+        expression: {sql: COUNT(*)}
 ```
 
 ```bash
@@ -274,16 +274,11 @@ what you need as fields:
 
 ```yaml
 - name: sale_month
-  expression:
-    dialects:
-      - dialect: ANSI_SQL
-        expression: DATE_TRUNC('month', ss_sold_date)
+  expression: {sql: "DATE_TRUNC('month', ss_sold_date)"}
   dimension: {is_time: true}
 - name: price_band
   expression:
-    dialects:
-      - dialect: ANSI_SQL
-        expression: CASE WHEN ss_sales_price < 10 THEN 'low' WHEN ss_sales_price < 100 THEN 'mid' ELSE 'high' END
+    sql: CASE WHEN ss_sales_price < 10 THEN 'low' WHEN ss_sales_price < 100 THEN 'mid' ELSE 'high' END
 ```
 
 A calendar table with year, month and day columns, as in TPC-DS, works

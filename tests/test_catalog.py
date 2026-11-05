@@ -220,10 +220,17 @@ def test_division_refuses_non_numbers(dividend, clickhouse):
         clickhouse.query(f"SELECT {to_clickhouse(f'{dividend} / 2')}")
 
 
+# Interpolated, as the spec's Percentile Functions say: over 10, 4, 2.5, 1 the
+# 0.9 position is 2.7, so 2.5 + 0.7 * (1 - 2.5) = 1.45. DuckDB 2.0 answers 1.44
+# for this DESC form over DECIMAL (1.5.6 answers 1.45, and so does the ASC form).
+PERCENTILE_BY_HAND = {("PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY x DESC)", "decimal"): 1.45}
+
+
 @pytest.mark.parametrize("base", PERCENTILE_BASES)
 @pytest.mark.parametrize("expr", PERCENTILES)
 def test_percentile_cont_is_exact(expr, base, clickhouse, duck):
-    check(expr, DUCK, clickhouse, duck, *PERCENTILE_BASES[base])
+    expected = PERCENTILE_BY_HAND.get((expr, base), DUCK)
+    check(expr, expected, clickhouse, duck, *PERCENTILE_BASES[base])
 
 
 @pytest.mark.parametrize("expr", PERCENTILES)

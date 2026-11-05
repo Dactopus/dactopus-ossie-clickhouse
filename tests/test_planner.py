@@ -475,7 +475,7 @@ def test_field_may_only_use_its_own_columns():
     def mutate(m):
         item = next(d for d in m["datasets"] if d["name"] == "item")
         brand = next(f for f in item["fields"] if f["name"] == "i_brand")
-        brand["expression"]["dialects"][0]["expression"] = "store.s_state"
+        brand["expression"]["sql"] = "store.s_state"
 
     with pytest.raises(PlanError, match="field item.i_brand references another dataset"):
         _variant(mutate).sql(Query(dimensions=("item.i_brand",)))

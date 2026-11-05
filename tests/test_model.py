@@ -197,40 +197,47 @@ def test_a_datasets_fields_and_metrics_share_one_namespace(tmp_path, tpcds):
     ]
 
 
+def _only_dax(node):
+    """``node``'s expression in a dialect nothing here reads, with no ``sql``."""
+    node["expression"] = {"dialects": [{"dialect": "DAX", "expression": "SUM([x])"}]}
+
+
 def test_a_datasets_metric_needs_a_supported_dialect(tmp_path, tpcds):
     sales = next(d for d in tpcds["datasets"] if d["name"] == "store_sales")
-    sales["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
+    _only_dax(sales["metrics"][0])
     assert problems_of(tmp_path, tpcds) == [
         "metric 'store_sales.total_quantity': no expression in a supported dialect "
         "(has DAX; need sql, or a dialect ANSI_SQL or OSSIE_SQL_2026)"
     ]
 
 
-def _to_sql(node):
-    """``node`` with every expression in the portable form: sql, no dialects."""
+def _to_dialects(node):
+    """``node`` with every expression in the ANSI_SQL dialect: dialects, no sql."""
     if isinstance(node, dict):
-        if "dialects" in node and set(node) <= {"dialects", "sql"}:
-            (entry,) = node["dialects"]
-            return {"sql": entry["expression"]}
-        return {k: _to_sql(v) for k, v in node.items()}
+        return {
+            k: (
+                {"dialects": [{"dialect": "ANSI_SQL", "expression": v["sql"]}]}
+                if k == "expression" and isinstance(v, dict) and set(v) == {"sql"}
+                else _to_dialects(v)
+            )
+            for k, v in node.items()
+        }
     if isinstance(node, list):
-        return [_to_sql(v) for v in node]
+        return [_to_dialects(v) for v in node]
     return node
 
 
-def test_expressions_in_sql_answer_as_dialects_do(tmp_path, tpcds):
-    portable = _to_sql(tpcds)
-    assert "dialects" not in json.dumps(portable)
+def test_expressions_in_dialects_answer_as_sql_does(tmp_path, tpcds):
+    legacy = _to_dialects(tpcds)
+    assert '"sql"' not in json.dumps(legacy)
     q = Query(metrics=("total_sales", "store_sales.total_quantity"), dimensions=("item.i_brand",))
-    assert Planner(load_model(write(tmp_path, portable))).sql(q) == Planner(
-        load_model(FIXTURE)
-    ).sql(q)
+    assert Planner(load_model(write(tmp_path, legacy))).sql(q) == Planner(load_model(FIXTURE)).sql(
+        q
+    )
 
 
 def test_sql_needs_no_supported_dialect(tmp_path, tpcds):
-    m = tpcds["metrics"][0]
-    m["expression"] = {"sql": m["expression"]["dialects"][0]["expression"]}
-    m["expression"]["dialects"] = [{"dialect": "DAX", "expression": "SUM([x])"}]
+    tpcds["metrics"][0]["expression"]["dialects"] = [{"dialect": "DAX", "expression": "SUM([x])"}]
     load_model(write(tmp_path, tpcds))
 
 
@@ -242,7 +249,7 @@ def test_a_model_metric_may_not_take_a_datasets_metric_name(tmp_path, tpcds):
 
 
 def test_unsupported_dialect_only(tmp_path, tpcds):
-    tpcds["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
+    _only_dax(tpcds["metrics"][0])
     ps = problems_of(tmp_path, tpcds)
     assert any("metric 'total_sales': no expression in a supported dialect" in p for p in ps)
 
@@ -261,7 +268,7 @@ def test_duplicate_in_another_case(tmp_path, tpcds):
 
 
 def test_all_problems_reported_at_once(tmp_path, tpcds):
-    tpcds["metrics"][0]["expression"]["dialects"][0]["dialect"] = "DAX"
+    _only_dax(tpcds["metrics"][0])
     tpcds["relationships"][0]["to"] = "nowhere"
     assert len(problems_of(tmp_path, tpcds)) == 2
 

@@ -123,9 +123,9 @@ def test_instructions_carry_the_model_instructions():
 def test_describe_shows_the_expression_the_planner_runs():
     data = MODEL.model_dump(by_alias=True)
     metric = next(m for m in data["metrics"] if m["name"] == "total_sales")
-    metric["expression"]["dialects"].insert(
-        0, {"dialect": "SNOWFLAKE", "expression": "SUM(store_sales.ss_ext_sales_price):snow"}
-    )
+    metric["expression"]["dialects"] = [
+        {"dialect": "SNOWFLAKE", "expression": "SUM(store_sales.ss_ext_sales_price):snow"}
+    ]
     from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 
     m = describe(OssieDocument.model_validate(data), "total_sales")

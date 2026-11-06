@@ -80,19 +80,37 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
 
     declared = {d.name: d for d in model.datasets}
 
+    # Per dataset, the fields of the full model that read a physical column, by the
+    # column's exact name (ClickHouse column names are case sensitive).
+    readers: dict[str, dict[str, set[str]]] = {}
+    for ds in model.datasets:
+        by_column: dict[str, set[str]] = {}
+        for f in ds.fields or []:
+            try:
+                tree = parse(pick_expression(f.expression))
+            except ValueError:
+                continue  # an untranslatable field reads nothing we can name
+            for c in tree.find_all(exp.Column):
+                if not c.table:
+                    by_column.setdefault(c.name, set()).add(f"{ds.name}.{f.name}".upper())
+        readers[ds.name] = by_column
+
     def refs(expression, scope: str | None = None) -> set[str]:
         """The fields an expression reads; a bare name is a field of ``scope``, the
-        dataset whose metric it is. Its ``source.column`` reads no field, unless the
-        dataset declares one named source (then the planner refuses the metric); a
-        source column the caller cannot read is hidden by Executor, as a metric."""
+        dataset whose metric it is. Its ``source.column`` reads every field of that
+        dataset whose expression reads the column, so hiding any of them hides the
+        metric; a column no field reads adds nothing (a column the caller cannot
+        read is hidden by Executor, as a metric). In a dataset that declares a field
+        named source the planner refuses the metric, and the qualifier is that field."""
         tree = parse(pick_expression(expression))
         from_source = bool(scope) and reads_source(declared[scope])
-        cols = [
-            c
-            for c in tree.find_all(exp.Column)
-            if not (from_source and c.table.upper() == SOURCE_QUALIFIER)
-        ]
-        return {f"{c.table or scope}.{c.name}".upper() for c in cols if c.table or scope}
+        found: set[str] = set()
+        for c in tree.find_all(exp.Column):
+            if from_source and c.table.upper() == SOURCE_QUALIFIER:
+                found |= readers[scope].get(c.name, set())
+            elif c.table or scope:
+                found.add(f"{c.table or scope}.{c.name}".upper())
+        return found
 
     def kept(name: str, expression, scope: str | None = None) -> bool:
         # By name first: a hidden metric may not parse (untranslatable).

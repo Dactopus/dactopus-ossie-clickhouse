@@ -73,6 +73,60 @@ def test_a_datasets_metric_goes_with_its_fields_or_its_name():
     ]
 
 
+def _source_metrics_model(tmp_path):
+    """The fixture with metrics over source columns in `customer`, and a field
+    that transforms a column."""
+    import yaml
+
+    data = yaml.safe_load((Path(__file__).parent / "fixtures" / "tpcds.yaml").read_text())
+    customer = next(d for d in data["datasets"] if d["name"] == "customer")
+    customer["fields"].append(
+        {"name": "email_lower", "expression": {"sql": "lower(c_email_address)"}}
+    )
+    customer["metrics"] = [
+        {"name": "emails", "expression": {"sql": "COUNT(DISTINCT source.c_email_address)"}},
+        {"name": "emails_upper", "expression": {"sql": "COUNT(DISTINCT SOURCE.c_email_address)"}},
+        {"name": "birth_years", "expression": {"sql": "COUNT(DISTINCT source.c_birth_year)"}},
+    ]
+    p = tmp_path / "m.yaml"
+    p.write_text(yaml.safe_dump(data, sort_keys=False))
+    return load_model(p)
+
+
+def _customer_metrics(m):
+    return {x.name for d in m.datasets if d.name == "customer" for x in d.metrics or []}
+
+
+def test_a_hidden_field_takes_the_metrics_that_read_its_column_as_source_column(tmp_path):
+    model = _source_metrics_model(tmp_path)
+    assert _customer_metrics(restrict(model, Hidden())) == {"emails", "emails_upper", "birth_years"}
+    m = restrict(model, Hidden(fields=frozenset({"customer.c_email_address"})))
+    assert _customer_metrics(m) == {"birth_years"}
+    assert "c_email_address" not in m.model_dump_json().lower().replace(
+        "lower(c_email_address)", ""
+    )
+
+
+def test_a_field_that_transforms_the_column_hides_the_metric_too(tmp_path):
+    model = _source_metrics_model(tmp_path)
+    m = restrict(model, Hidden(fields=frozenset({"CUSTOMER.EMAIL_LOWER"})))
+    assert _customer_metrics(m) == {"birth_years"}
+    # The other field stays: only a field that reads the column counts.
+    customer = next(d for d in m.datasets if d.name == "customer")
+    assert "c_email_address" in {f.name for f in customer.fields}
+
+
+def test_a_metric_over_a_source_column_no_field_reads_stays(tmp_path):
+    # No field of customer reads c_birth_year, so no hidden field can take its metric.
+    model = _source_metrics_model(tmp_path)
+    for hidden in ("customer.c_first_name", "customer.c_email_address", "item.i_item_id"):
+        m = restrict(model, Hidden(fields=frozenset({hidden})))
+        assert "birth_years" in _customer_metrics(m)
+    # Hidden by name it goes, like any metric.
+    m = restrict(model, Hidden(metrics=frozenset({"customer.birth_years"})))
+    assert _customer_metrics(m) == {"emails", "emails_upper"}
+
+
 def test_policy_matches_user_and_roles():
     p = Policy.load(POLICY)
     assert p.hidden_for("ossie_analyst", ["ossie_sales"]).metrics == {"spread"}

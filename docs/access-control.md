@@ -67,7 +67,11 @@ names it. Pass the file with `--policy policy.yaml`. Entries for the connected u
 each of its enabled roles are combined. The file only hides; it can never
 grant anything the database refuses. A hidden field takes with it what reads
 it: the metrics, the keys and the relationships that name it, so hiding a key
-field leaves its dataset unreachable by a join.
+field leaves its dataset unreachable by a join. A dataset metric that reads a
+column of the source as `source.column` goes with every field of its dataset
+whose expression reads that column, so hiding `customer.c_email_address` also
+hides `COUNT(DISTINCT source.c_email_address)`. The policy file hides objects
+of the model; the data in a column is protected by ClickHouse column grants.
 
 ## Validation runs with full rights
 

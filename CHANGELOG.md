@@ -19,8 +19,8 @@ a minor release may change the Python API.
   relationship still cannot reach source columns. `validate --url` checks
   the column, a metric over a column the connected user cannot read is
   hidden from them, and a policy file that hides a field also hides the
-  dataset metrics that read its column as `source.column` (`docs/design.md`, "Source columns in a dataset's
-  metric").
+  dataset metrics that read its column as `source.column`
+  (`docs/design.md`, "Source columns in a dataset's metric").
 
 ### Changed
 

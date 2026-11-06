@@ -24,8 +24,16 @@ from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
 from tests.test_model import FIXTURE as TPCDS
 from tests.test_planner import LISTED, _with_metrics
-from tests.test_stitch import COLUMNS
+from tests.test_stitch import COLUMNS as STITCH_COLUMNS
 from tests.test_stitch import FIXTURE as STITCH
+
+COLUMNS = {
+    **STITCH_COLUMNS,
+    "customers": (
+        "id Int32, region Nullable(String), segment String",
+        STITCH_COLUMNS["customers"][1],
+    ),
+}
 
 # Appendix B.1: customers C1..C4 as 1..4, orders O1..O4, returns R1 and R2.
 CUSTOMERS = (
@@ -43,6 +51,15 @@ EXT = {
 }
 
 
+# B1 and a customer whose region is NULL, with an order and a return: the NULL group
+# comes from the dimension's own dataset, and every branch has it.
+NUL = {
+    "customers": CUSTOMERS + ", (5, NULL, 'retail')",
+    "orders": ORDERS + ", (5, 5, 40.00, 'done')",
+    "returns": RETURNS + ", (3, 5, 7.00)",
+}
+
+
 def expression(sql: str) -> dict:
     return {"dialects": [{"dialect": "ANSI_SQL", "expression": sql}]}
 
@@ -57,6 +74,10 @@ def model_data(database: str) -> dict:
         {
             "name": "returns_per_order",
             "expression": expression("SUM(returns.amount) / COUNT(orders.id)"),
+        },
+        {
+            "name": "per_return_and_one",
+            "expression": expression("SUM(orders.amount) / (COUNT(returns.id) + 1)"),
         },
     ]
     return data
@@ -77,7 +98,7 @@ def models(clickhouse, tmp_path_factory):
     """Executors over B1 and EXT, each in a database of its own."""
     tmp = tmp_path_factory.mktemp("components")
     out = {}
-    for name, rows in (("b1", B1), ("ext", EXT)):
+    for name, rows in (("b1", B1), ("ext", EXT), ("nul", NUL)):
         database = f"ossie_components_{name}"
         clickhouse.command(f"CREATE DATABASE IF NOT EXISTS {database}")
         for table, (columns, _) in COLUMNS.items():
@@ -277,6 +298,34 @@ def test_no_dimension_and_a_filter_that_matches_nothing(models):
     assert models["ext"].execute(q).rows == [(None,)]
 
 
+def test_a_null_dimension_value_of_its_own_dataset_is_not_a_missing_branch_row(models, duck_for):
+    """Customer 5 has no region. Every branch has a NULL group but orders and returns
+    per customer: the returns branch has it too (a return of customer 5), so its COUNT
+    is 1 there, where a missing row would give 0 (section 5.5: a NULL group is not a
+    missing branch row)."""
+    ex = models["nul"]
+    q = Query(("per_return_and_one", "revenue_per_customer"), ("customers.region",))
+    got = ex.execute(q).rows
+    rows = {r[0]: r[1:] for r in got}
+    assert rows == {
+        "EAST": (175.0, 175.0),  # 350 / (1 return + 1); 350 / 2 customers
+        "WEST": (300.0, 300.0),  # no returns row: COUNT 0, 300 / 1
+        "NORTH": (None, None),  # a return and a customer, no orders
+        None: (20.0, 40.0),  # 40 / (1 return + 1); 40 / 1 customer
+    }
+    returns_count = (
+        "SELECT c.region, COUNT(x.id) AS returns_count FROM returns x "
+        "LEFT JOIN customers c ON x.customer_id = c.id GROUP BY c.region",
+        {"returns_count": "0"},
+    )
+    gold = reference(
+        {"orders": ORDERS_BRANCH, "returns": returns_count, "customers": CUSTOMERS_BRANCH},
+        "orders_sum * 1.0 / (returns_count + 1) AS per_return_and_one, "
+        f"{PER_CUSTOMER} AS per_customer",
+    )
+    same(got, duck_for(NUL).sql(gold).fetchall())
+
+
 # --- a filter on the many side is a semi-join in the branch ----------------------
 
 
@@ -358,8 +407,9 @@ def test_customer_lifetime_value_by_a_dimension_customer_does_not_reach(dimensio
     message = refusal(Planner(TPCDS_MODEL), Query(("customer_lifetime_value",), (dimension,)))
     assert f"dimension '{dimension}' cannot be with metric 'customer_lifetime_value'" in message
     assert f"customer does not reach {dataset}" in message
-    assert "define a metric of dataset store_sales, which reaches " in message
-    assert "COUNT(DISTINCT ss_customer_sk)" in message
+    assert (
+        "define a metric of dataset store_sales, such as COUNT(DISTINCT ss_customer_sk)" in message
+    )
 
 
 def test_customer_lifetime_value_filtered_on_a_dataset_customer_does_not_reach():
@@ -378,6 +428,115 @@ def test_a_dimension_one_component_reaches_and_another_does_not_names_the_second
     message = refusal(planner, Query(("store_productivity",), ("item.i_brand",)))
     assert "dimension 'item.i_brand' cannot be with metric 'store_productivity'" in message
     assert "reads store rows" in message
+
+
+def test_no_hint_when_the_relationship_to_the_counted_dataset_is_hidden():
+    """With ss_customer_sk hidden there is no relationship from store_sales to customer,
+    and no metric of store_sales counts customers."""
+    from dactopus_ossie_clickhouse.access import Hidden, restrict
+
+    model = restrict(TPCDS_MODEL, Hidden(fields=frozenset({"STORE_SALES.SS_CUSTOMER_SK"})))
+    message = refusal(Planner(model), Query(("customer_lifetime_value",), ("date_dim.d_year",)))
+    assert "customer does not reach date_dim" in message
+    assert "define a metric" not in message and "ss_customer_sk" not in message
+
+
+def test_no_hint_when_no_dataset_metric_can_read_the_counted_rows():
+    """store_productivity sums store rows; a metric of store_sales cannot read them."""
+    message = refusal(Planner(TPCDS_MODEL), Query(("store_productivity",), ("item.i_brand",)))
+    assert "store does not reach item" in message
+    assert "define a metric" not in message
+
+
+def test_a_filter_on_a_metric_beside_dimensions_it_cannot_reach_is_refused():
+    planner = Planner(TPCDS_MODEL)
+    message = refusal(
+        planner,
+        Query(("total_sales",), ("item.i_brand",), ("customer_lifetime_value > 1",)),
+    )
+    assert "dimension 'item.i_brand' cannot be with metric 'customer_lifetime_value'" in message
+    # by a field customer reaches, the filter is applied to the merged rows
+    sql = planner.sql(
+        Query(("total_sales",), ("customer.c_first_name",), ("customer_lifetime_value > 1",))
+    )
+    assert " UNION ALL " in sql
+    assert (
+        "HAVING (any(__m2) * 1.0) / CASE WHEN COUNT(__b1) > 0 THEN any(__m1) ELSE 0 END > 1" in sql
+    )
+
+
+def test_a_written_single_dataset_aggregate_filter_beside_a_split_metric_is_refused():
+    message = refusal(
+        Planner(TPCDS_MODEL),
+        Query(("customer_lifetime_value",), (), ("SUM(store_sales.ss_quantity) > 5",)),
+    )
+    assert "applies an aggregate function to metrics answered from different datasets" in message
+
+
+# --- mixed metrics and the home of a FILTER (apache/ossie#653, section 5.2) ----------
+
+CLV_PARTS = "SUM(store_sales.ss_ext_sales_price)"
+MIXED = {
+    # an aggregate over two datasets, and one over a dataset it does not read
+    "joined_per_customer": f"{LISTED} / COUNT(DISTINCT customer.c_customer_sk)",
+    "joined_per_staff": f"{LISTED} / MAX(store.s_number_employees)",
+    # a FILTER on another dataset does not make that dataset the home: the count is
+    # over customer rows, and one join would count the buyers only
+    "retail_per_customer": f"{CLV_PARTS} FILTER (WHERE customer.c_first_name = 'James') / "
+    "COUNT(DISTINCT customer.c_customer_sk)",
+    # an aggregate that reads no dataset has no home either
+    "per_filtered_count": f"{CLV_PARTS} / COUNT(*) FILTER (WHERE customer.c_first_name = 'James')",
+    "filtered_per_customer": "COUNT(*) FILTER (WHERE store_sales.ss_quantity > 1) / "
+    "COUNT(DISTINCT customer.c_customer_sk)",
+}
+ONE_ROOT = {
+    "joined_per_sale": f"{LISTED} / SUM(store_sales.ss_quantity)",
+    "joined_per_item": f"{LISTED} / MAX(item.i_current_price)",
+    "filtered_per_sale": f"{CLV_PARTS} FILTER (WHERE item.i_brand = 'x') / "
+    "SUM(store_sales.ss_quantity)",
+    "count_beside_sum": f"{CLV_PARTS} / COUNT(*)",
+    "count_filtered_beside_sum": f"{CLV_PARTS} / "
+    "COUNT(*) FILTER (WHERE store_sales.ss_quantity > 1)",
+    "count_filtered_alone": "COUNT(*) FILTER (WHERE store_sales.ss_quantity > 1)",
+}
+
+
+@pytest.mark.parametrize("name", MIXED)
+def test_a_mixed_metric_is_refused_in_every_question_and_reported(name):
+    planner = _with_metrics(**{name: MIXED[name]})
+    assert name in unanswerable_metrics(planner.model)
+    for dimensions in ((), ("item.i_brand",)):
+        message = refusal(planner, Query((name,), dimensions))
+        assert f"metric '{name}'" in message
+    assert ("reads a dataset the first does not" in unanswerable_metrics(planner.model)[name]) == (
+        name not in ("per_filtered_count", "filtered_per_customer")
+    )
+
+
+@pytest.mark.parametrize("name", ONE_ROOT)
+def test_a_metric_whose_aggregates_stay_within_one_root_is_planned_as_before(name):
+    planner = _with_metrics(**{name: ONE_ROOT[name]})
+    assert name not in unanswerable_metrics(planner.model)
+    sql = planner.sql(Query((name,), ("item.i_brand",)))
+    assert " UNION ALL " not in sql and sql.count("FROM") == 1
+
+
+def test_a_written_filter_that_would_split_or_mix_is_refused_whatever_else_it_holds():
+    planner = _with_metrics()
+    parts = "SUM(store_sales.ss_ext_sales_price) / COUNT(DISTINCT customer.c_customer_sk) > 5"
+    mixed = f"{LISTED} / COUNT(DISTINCT customer.c_customer_sk) > 5"
+    for condition in (parts, f"{parts} AND COUNT(*) > 0", mixed, f"{mixed} AND COUNT(*) > 0"):
+        message = refusal(planner, Query(("total_sales",), ("item.i_brand",), (condition,)))
+        assert f"filter {condition!r}" in message
+    # one dataset, with an aggregate that names none, is answered as before
+    sql = planner.sql(
+        Query(
+            ("total_sales",),
+            ("item.i_brand",),
+            ("SUM(store_sales.ss_quantity) > 5 AND COUNT(*) > 0",),
+        )
+    )
+    assert "HAVING" in sql and "UNION ALL" not in sql
 
 
 # --- unchanged (point 3) ------------------------------------------------------------
@@ -497,8 +656,31 @@ def test_customer_lifetime_value_is_total_sales_over_the_customer_count(tpcds, t
     assert float(sales) / count == pytest.approx(clv, rel=1e-9)
 
 
+def _expected(sales: dict, counts: dict) -> dict:
+    """Every key of either branch: sales over its count (NULL without a count or without
+    sales), and the sales."""
+    out = {}
+    for key in set(sales) | set(counts):
+        total, n = sales.get(key), counts.get(key, 0)
+        ratio = None if total is None or n == 0 else float(total) / n
+        out[key] = (ratio, None if total is None else float(total))
+    return out
+
+
+def _compare(got: list[tuple], expected: dict) -> None:
+    assert len(got) == len(expected) and len({r[0] for r in got}) == len(got)
+    for key, ratio, total in got:
+        want_ratio, want_total = expected[key]
+        for have, want in ((ratio, want_ratio), (total, want_total)):
+            if want is None:
+                assert have is None, (key, have)
+            else:
+                assert float(have) == pytest.approx(want, rel=1e-9), key
+
+
 def test_customer_lifetime_value_by_first_name_is_each_sum_over_its_own_count(tpcds):
-    """Each branch on its own, merged here by key (a NULL name is a key)."""
+    """Each branch on its own, merged here by key; a NULL name is a key, and so is a name
+    only one branch has."""
     ex = Executor(tpcds, TPCDS_MODEL)
     got = ex.execute(Query(("customer_lifetime_value", "total_sales"), ("customer.c_first_name",)))
     sales = dict(
@@ -514,15 +696,8 @@ def test_customer_lifetime_value_by_first_name_is_each_sum_over_its_own_count(tp
             "GROUP BY c_first_name"
         ).result_rows
     )
-    keys = set(sales) | set(counts)
-    assert len(got.rows) == len(keys) and len(got.rows) > 1
-    for name, ratio, total in got.rows:
-        assert (total is None) == (name not in sales)
-        if total is not None:
-            assert float(sales[name]) == pytest.approx(float(total), rel=1e-9)
-            assert float(sales[name]) / counts[name] == pytest.approx(float(ratio), rel=1e-9)
-        else:
-            assert ratio is None
+    assert len(set(counts) - set(sales)) > 0  # names of customers who bought nothing
+    _compare(got.rows, _expected(sales, counts))
 
 
 def test_customer_lifetime_value_filtered_on_the_many_side_divides_by_customers_with_such_a_sale(
@@ -544,15 +719,21 @@ def test_customer_lifetime_value_filtered_on_the_many_side_divides_by_customers_
 
 def test_store_productivity_is_answered_by_state(tpcds):
     """Sales per employee: each state's sales over its stores' staff, where the
-    employees were once summed per sale."""
+    employees were once summed per sale. Every key of either branch, the NULL group
+    of sales without a store included."""
     ex = Executor(tpcds, TPCDS_MODEL)
-    got = {r[0]: r[1] for r in ex.execute(Query(("store_productivity",), ("store.s_state",))).rows}
-    gold = tpcds.query(
-        """SELECT sales.s_state, toFloat64(sales.total) / staff.n FROM
-             (SELECT st.s_state AS s_state, SUM(ss.ss_ext_sales_price) AS total
-              FROM tpcds.store_sales ss LEFT JOIN tpcds.store st ON ss.ss_store_sk = st.s_store_sk
-              GROUP BY st.s_state) sales
-             JOIN (SELECT s_state, SUM(s_number_employees) AS n FROM tpcds.store
-                   GROUP BY s_state) staff ON sales.s_state = staff.s_state"""
-    ).result_rows
-    assert gold and all(float(v) == pytest.approx(got[k], rel=1e-9) for k, v in gold)
+    got = ex.execute(Query(("store_productivity", "total_sales"), ("store.s_state",))).rows
+    sales = dict(
+        tpcds.query(
+            "SELECT st.s_state, SUM(ss.ss_ext_sales_price) FROM tpcds.store_sales ss "
+            "LEFT JOIN tpcds.store st ON ss.ss_store_sk = st.s_store_sk "
+            "GROUP BY st.s_state SETTINGS join_use_nulls = 1"
+        ).result_rows
+    )
+    staff = dict(
+        tpcds.query(
+            "SELECT s_state, SUM(s_number_employees) FROM tpcds.store GROUP BY s_state"
+        ).result_rows
+    )
+    assert None in sales and None not in staff  # the NULL group is the sales branch's alone
+    _compare(got, _expected(sales, staff))

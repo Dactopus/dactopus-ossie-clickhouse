@@ -622,6 +622,10 @@ def test_every_metric_executes(metric, tpcds):
 # An aggregate over sales and items: its arguments read two datasets, so a metric with it
 # is planned over one join. Metrics whose aggregates each read one dataset are split.
 LISTED = "SUM(store_sales.ss_quantity * item.i_current_price)"
+# The same over sales and stores. Next to an aggregate over the stores alone it is planned
+# over one join, since every dataset of the second is read by the first (a dataset the
+# first does not read would be refused, tests/test_components.py).
+OVER_STORE = "SUM(store_sales.ss_quantity * store.s_number_employees)"
 
 
 def _with_metrics(**expressions: str) -> Planner:
@@ -716,13 +720,14 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     planner = _with_metrics(
         headcount="SUM(store.s_number_employees)",
         customers="COUNT(DISTINCT customer.c_customer_sk)",
-        productivity_at_list_price=f"{LISTED} / NULLIF(SUM(store.s_number_employees), 0)",
-        sales_per_median_staff=f"{LISTED} / APPROX_PERCENTILE(store.s_number_employees, 0.5)",
-        sales_per_nonzero_median_staff=f"{LISTED} / "
+        productivity_at_list_price=f"{OVER_STORE} / NULLIF(SUM(store.s_number_employees), 0)",
+        sales_per_median_staff=f"{OVER_STORE} / APPROX_PERCENTILE(store.s_number_employees, 0.5)",
+        sales_per_nonzero_median_staff=f"{OVER_STORE} / "
         "NULLIFZERO(APPROX_PERCENTILE(store.s_number_employees, 0.5))",
         cnt="COUNT(*)",
         tn_stores="COUNT(*) FILTER (WHERE store.s_state = 'TN')",
-        extra_staff=f"{LISTED} / SUM(store_extra.s_number_employees)",
+        extra_staff="SUM(store_sales.ss_quantity * store_extra.s_number_employees) / "
+        "SUM(store_extra.s_number_employees)",
     )
     with pytest.raises(PlanError) as e:
         planner.sql(query)
@@ -754,8 +759,8 @@ def test_server_aggregates_outside_the_spec_are_checked_as_aggregates(catalog):
     """countIf is an aggregate to ClickHouse, not to the spec: the planner refuses
     it over repeated rows and filters on it in HAVING, with or without a server."""
     planner = _with_metrics(
-        big_store_sales=f"{LISTED} / countIf(store.s_number_employees > 10)",
-        quoted=f'{LISTED} / "countIf"(store.s_number_employees > 10)',
+        big_store_sales=f"{OVER_STORE} / countIf(store.s_number_employees > 10)",
+        quoted=f'{OVER_STORE} / "countIf"(store.s_number_employees > 10)',
     )
     planner.catalog = catalog
     having = Query(
@@ -775,7 +780,7 @@ def test_server_aggregates_outside_the_spec_are_checked_as_aggregates(catalog):
 def test_the_server_names_aggregates_sqlglot_does_not_know(name):
     """An aggregate SQLGlot's list lacks, user-defined or built in, is one only
     on the server's word."""
-    planner = _with_metrics(per_store=f"{LISTED} / {name}(store.s_store_sk)")
+    planner = _with_metrics(per_store=f"{OVER_STORE} / {name}(store.s_store_sk)")
     query = Query(metrics=("per_store",))
     assert f"{name}(store.s_store_sk)" in planner.sql(query)
     planner.catalog = Catalog(aggregate=lambda n: n == name)
@@ -815,7 +820,7 @@ def test_a_plain_dict_catalog_still_plans():
 def test_clickhouse_aggregates_that_repeats_do_not_change(aggregate, safe):
     """Over sales rows, each store repeats once per sale: only an aggregate repeats
     cannot change may read store columns alone."""
-    planner = _with_metrics(per_store=f"{LISTED} / {aggregate}")
+    planner = _with_metrics(per_store=f"{OVER_STORE} / {aggregate}")
     planner.catalog = Catalog(aggregate=lambda name: True)
     query = Query(metrics=("per_store",))
     if safe:
@@ -956,8 +961,8 @@ def test_one_to_one_through_a_path():
              "from_columns": ["s_store_sk"], "to_columns": ["s_store_sk"]}
         )  # fmt: skip
         e = (
-            "SUM(store.s_number_employees * store_area.s_number_employees) - "
-            "SUM(area_copy.s_number_employees)"
+            "SUM(store.s_number_employees * store_area.s_number_employees * "
+            "area_copy.s_number_employees) - SUM(area_copy.s_number_employees)"
         )
         m["metrics"].append(
             {"name": "gap", "expression": {"dialects": [{"dialect": "ANSI_SQL", "expression": e}]}}
@@ -1005,8 +1010,8 @@ def test_dictionary_on_a_path():
 def test_allows_aggregates_that_read_root_rows(metrics, dimensions):
     planner = _with_metrics(
         revenue_at_list_price="SUM(store_sales.ss_quantity * item.i_current_price)",
-        sales_per_largest_staff=f"{LISTED} / MAX(store.s_number_employees)",
-        sales_per_median_distinct_staff=f"{LISTED} / MEDIAN(DISTINCT store.s_number_employees)",
+        sales_per_largest_staff=f"{OVER_STORE} / MAX(store.s_number_employees)",
+        sales_per_median_distinct_staff=f"{OVER_STORE} / MEDIAN(DISTINCT store.s_number_employees)",
         average_sale="SUM(store_sales.ss_ext_sales_price) / COUNT(*)",
         bulk_sales="COUNT(*) FILTER (WHERE store_sales.ss_quantity > 50)",
         bulk_median_quantity="PERCENTILE_DISC(0.5) WITHIN GROUP "
@@ -1028,10 +1033,10 @@ def test_unanswerable_metrics():
         typo="SUM(store.s_number_employes)",
         cnt="COUNT(*)",
         one_to_one="SUM(store.s_number_employees) / SUM(store_extra.s_number_employees)",
-        repeats=f"{LISTED} / SUM(store.s_number_employees)",
+        mixed=f"{LISTED} / COUNT(DISTINCT customer.c_customer_sk)",
     )
     found = unanswerable_metrics(planner.model)
-    assert "count repeated rows" in found["repeats"]
+    assert "reads a dataset the first does not" in found["mixed"]
     assert "unknown field 'store.s_number_employes'" in found["typo"]
     assert "uses COUNT(*), which reads no column" in found["cnt"]
     assert "one_to_one" not in found

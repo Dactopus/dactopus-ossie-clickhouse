@@ -238,6 +238,42 @@ def _aggregate_inputs(tree: exp.Expression) -> Inputs:
     return list(found.values())
 
 
+Reads = list[tuple[exp.AggFunc, set[str], set[str]]]
+
+
+def _aggregate_reads(tree: exp.Expression) -> Reads:
+    """Each aggregate with the datasets its arguments read and, apart, the datasets
+    its FILTER (WHERE ...) reads. The home of a component comes from the arguments
+    only (apache/ossie#653, section 5.2: the FILTER "does not determine the home
+    dataset")."""
+    found: dict[int, tuple[exp.AggFunc, set[str], set[str]]] = {
+        id(a): (a, set(), set()) for a in tree.find_all(exp.AggFunc) if not _window_function(a)
+    }
+    for col in tree.find_all(exp.Column):
+        node, in_filter = col.parent, False
+        while node is not None and id(node) not in found:
+            if isinstance(node, exp.Filter) and id(node.this) in found:
+                node, in_filter = node.this, True
+            else:
+                node = node.parent
+        if node is not None:
+            found[id(node)][2 if in_filter else 1].add(col.table)
+    return list(found.values())
+
+
+def _mixed(reads: Reads) -> tuple[exp.AggFunc, exp.AggFunc] | None:
+    """An aggregate that reads several datasets, or filters on another, and another
+    aggregate whose arguments read a dataset it does not read. Section 5.2 rejects
+    the first (deferred), and one join would count the second's dataset over
+    the first's rows."""
+    for agg, args, filtered in reads:
+        if len(args) > 1 or (args and not filtered <= args):
+            for other, theirs, _ in reads:
+                if other is not agg and theirs and not theirs <= args:
+                    return agg, other
+    return None
+
+
 def _window_function(agg: exp.AggFunc) -> bool:
     parent = agg.parent
     while isinstance(parent, exp.RespectNulls | exp.IgnoreNulls | exp.Filter):
@@ -739,10 +775,12 @@ class Planner:
                 agg.meta["dataset"] = scope.name
             return tree
         if len(self.model.datasets) > 1:
-            inputs = _aggregate_inputs(tree)
-            unnamed = [agg for agg, ds in inputs if not ds]
-            if unnamed and len(_homes(inputs)) != 1:
+            reads = _aggregate_reads(tree)
+            homes = _homes(_aggregate_inputs(tree))
+            unnamed = [agg for agg, args, _ in reads if not args]
+            if unnamed and len(homes) != 1:
                 agg = unnamed[0]
+                filtered = isinstance(agg.parent, exp.Filter)
                 why = (
                     "count rows of whichever dataset a question is answered over; count a "
                     "column of the dataset it means, such as COUNT(dataset.key)"
@@ -753,9 +791,28 @@ class Planner:
                 )
                 raise PlanError(
                     f"metric {m.name!r} uses {agg.sql('clickhouse')}, which reads no "
-                    f"column, so it would {why}"
+                    f"column{', and a FILTER names no dataset' if filtered else ''}, so it "
+                    f"would {why}"
                 )
+            if pair := _mixed(reads):
+                raise PlanError(self._mixed_message(f"metric {m.name!r}", *pair))
         return tree
+
+    @staticmethod
+    def _mixed_message(what: str, agg: exp.AggFunc, other: exp.AggFunc) -> str:
+        """Why ``what`` is refused for an aggregate that reads several datasets (or
+        filters on another) next to one over a dataset it does not read."""
+        first = _component_node(agg).sql("clickhouse")
+        second = _component_node(other).sql("clickhouse")
+        return (
+            f"{what} applies {first}, which reads several datasets or filters on another, "
+            f"next to {second}, which reads a dataset the first does not. The first is "
+            "computed over one join of its datasets, so the second would count the rows "
+            "of its dataset as that join repeats them; Layer 3 (apache/ossie#653, "
+            "section 5.2) rejects the first. Split it into two metrics, or declare the "
+            "metric on the dataset it means (a dataset's metric reads only that "
+            "dataset's rows)"
+        )
 
     def _split(
         self, m: OssieMetric, tree: exp.Expression
@@ -770,14 +827,16 @@ class Planner:
         dataset's metric is one component whatever its expression. A metric with
         an aggregate that reads several datasets (SUM(lines.qty * products.price),
         or a FILTER on another dataset) is not split, which #653 defers and
-        refuses: it is planned as before. Refused when split: a column
+        refuses: it is planned as before, unless another aggregate reads a
+        dataset it does not (_mixed). An aggregate's FILTER does not give its
+        home. Refused when split: a column
         outside every aggregate, and a window function (deferred)."""
         if m.name.upper() in self._scopes:
             return None
-        inputs = _aggregate_inputs(tree)
-        if not inputs or any(len(ds) != 1 for _, ds in inputs):
+        reads = _aggregate_reads(tree)
+        if not reads or any(len(args) != 1 or not filtered <= args for _, args, filtered in reads):
             return None
-        if len({next(iter(ds)) for _, ds in inputs}) < 2:
+        if len({next(iter(args)) for _, args, _ in reads}) < 2:
             return None
         if loose := _loose_column(tree):
             raise PlanError(
@@ -792,7 +851,7 @@ class Planner:
                 "datasets; this version cannot answer it (the spec defers it). Put the "
                 "window in a metric of one dataset, or ask for each part on its own"
             )
-        return [(_component_node(agg), next(iter(ds))) for agg, ds in inputs]
+        return [(_component_node(agg), next(iter(args))) for agg, args, _ in reads]
 
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
@@ -1367,21 +1426,27 @@ class Planner:
         return _in(self._keys(root, path[-1].to_columns), sub)
 
     def _written_aggregates(self, f: str) -> None:
-        """Refuse a filter that writes aggregates over different datasets, such as
-        ``SUM(a.x) / COUNT(DISTINCT b.k) > 5``: over one join, ``b`` would be
-        counted over the rows ``a`` references. A metric of the model that does
-        the same is answered by components; a filter names it."""
-        written = _aggregate_inputs(self._parse(f))
-        if any(len(ds) != 1 for _, ds in written):
-            return
-        homes = sorted({self.dataset(next(iter(ds))).name for _, ds in written})
-        if len(homes) > 1:
-            raise PlanError(
-                f"filter {f!r} applies aggregates of {' and '.join(homes)} rows in one "
-                "expression, which one SELECT over joined rows would count over the rows "
-                "of only one of them; name a metric of the model that does this, or filter "
-                "on an aggregate of one dataset"
-            )
+        """Refuse a filter that writes aggregates the way a split or a mixed metric
+        is written, such as ``SUM(a.x) / COUNT(DISTINCT b.k) > 5``: over one join,
+        ``b`` would be counted over the rows ``a`` references. A metric of the
+        model that does the same is answered by components; a filter names it.
+        An aggregate that names no dataset (``COUNT(*)``) does not lift the check."""
+        reads: Reads = [
+            (agg, {self.dataset(t).name for t in args}, {self.dataset(t).name for t in filtered})
+            for agg, args, filtered in _aggregate_reads(self._parse(f))
+        ]
+        if pair := _mixed(reads):
+            raise PlanError(self._mixed_message(f"filter {f!r}", *pair))
+        named = [(agg, next(iter(args))) for agg, args, filtered in reads if args]
+        if all(len(args) == 1 and filtered <= args for _, args, filtered in reads if args):
+            homes = sorted({home for _, home in named})
+            if len(homes) > 1:
+                raise PlanError(
+                    f"filter {f!r} applies aggregates of {' and '.join(homes)} rows in one "
+                    "expression, which one SELECT over joined rows would count over the rows "
+                    "of only one of them; name a metric of the model that does this, or "
+                    "filter on an aggregate of one dataset"
+                )
 
     def _merge_names(self, q: Query, having: list[str]) -> tuple[list[str], list[exp.Expression]]:
         """The metrics a stitched question answers, selected or only named in an
@@ -1616,7 +1681,7 @@ class Planner:
                     return PlanError(f"dimension {d!r} cannot be with {what}: {e_d}")
                 return PlanError(
                     f"dimension {d!r} cannot be with {what} because {u.home} does not reach "
-                    f"{ds} through many-to-one relationships. {self._other_home(u, units, ds)}"
+                    f"{ds} through many-to-one relationships.{self._other_home(u, units, ds)}"
                 )
         for f in where:
             try:
@@ -1626,28 +1691,33 @@ class Planner:
         return PlanError(f"dimensions and row filters cannot be with {what}: {first}")
 
     def _other_home(self, u: _Unit, units: list[_Unit], target: str) -> str:
-        """What would answer a question by ``target``: a metric of a dataset that
-        reaches it and that the metric's other aggregates read, counting the rows
-        of ``u.home`` that its rows reference."""
+        """What would answer a question by ``target``, or "" when nothing the planner
+        can see does. Only a count of the distinct keys of ``u.home`` has an
+        equivalent among a dataset's metrics, which read that dataset's own fields:
+        COUNT(DISTINCT <the field of dataset R that references the key>), for a
+        dataset R that reaches ``target`` and that the metric's other aggregates
+        read, through one visible relationship from R to ``u.home``."""
+        agg = u.tree
+        if not (isinstance(agg, exp.Count) and isinstance(agg.this, exp.Distinct)):
+            return ""
+        if len(agg.this.expressions) != 1:
+            return ""
+        counted = agg.this.expressions[0].sql()
         homes = sorted({o.home for o in units if o.metric == u.metric and o.component} - {u.home})
-        reaching = [h for h in homes if target in self._reachable(h)]
-        if not reaching:
-            return f"No other dataset of metric {u.metric!r} reaches {target}."
-        r = reaching[0]
-        link = [
-            rel
-            for rel in self._outgoing(r)
-            if rel.to.upper() == u.home.upper() and len(rel.from_columns) == 1
-        ]
-        agg = u.tree.this if isinstance(u.tree, exp.Filter) else u.tree
-        example = ""
-        if len(link) == 1 and isinstance(agg, exp.Count) and isinstance(agg.this, exp.Distinct):
-            example = f", such as COUNT(DISTINCT {link[0].from_columns[0]})"
-        return (
-            f"To ask for it by {target}, define a metric of dataset {r}, which reaches "
-            f"{target}{example}; it counts the {u.home} rows that {r} rows reference, "
-            f"not every {u.home} row."
-        )
+        for r in homes:
+            if target not in self._reachable(r):
+                continue
+            link = [rel for rel in self._outgoing(r) if rel.to.upper() == u.home.upper()]
+            if len(link) != 1 or len(link[0].from_columns) != 1:
+                continue
+            keys = self._keys(self.dataset(u.home), link[0].to_columns)
+            if len(keys) == 1 and keys[0].sql() == counted:
+                return (
+                    f" To ask for it by {target}, define a metric of dataset {r}, such as "
+                    f"COUNT(DISTINCT {link[0].from_columns[0]}): it counts the {u.home} rows "
+                    f"that {r} rows reference."
+                )
+        return ""
 
     def _order(self, q: Query, selects: list[exp.Expression]) -> list[exp.Expression]:
         """ORDER BY over selected aliases; names are metrics, dataset.field, or field names.

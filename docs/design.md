@@ -589,35 +589,37 @@ Cases, against #653:
 | A model's metric whose aggregates read different single datasets | Components, one branch per home | Section 5.2 |
 | A model's metric whose aggregates read one dataset | One branch, planned as a whole: the SQL of 0.13.0 | Same, one component per aggregate in one branch |
 | A dataset's metric | One component whatever its expression | Same |
-| An aggregate whose arguments read several datasets, such as `SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another dataset | Not split. The metric is planned as a whole, over one join, as in 0.13.0 | Refused, deferred (`E_AMBIGUOUS_MEASURE_GRAIN`) |
-| A metric with such an aggregate and a single-dataset aggregate over another dataset | Open, see below. Not split for now: the second aggregate is read over the join's rows, and refused unless repeats cannot change it (`MAX`, `DISTINCT`) | Refused |
-| An aggregate that reads no dataset, `COUNT(*)` | Counts the rows of the one dataset the metric's other aggregates read, as before; refused when they read several | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| An aggregate whose arguments read several datasets, such as `SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another dataset, in a metric whose other aggregates read only datasets it reads | Not split. The metric is planned as a whole, over one join, as in 0.13.0 | Refused, deferred (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| The same, next to an aggregate whose arguments read a dataset it does not read: `SUM(lines.qty * products.price) / COUNT(DISTINCT customers.id)`, `SUM(orders.amount) FILTER (WHERE customers.segment = 'retail') / COUNT(DISTINCT customers.id)` | Refused in every question and reported by `validate` | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| An aggregate whose arguments read no dataset, `COUNT(*)`, with or without a `FILTER` | Counts the rows of the one dataset that every aggregate of the metric, `FILTER`s included, reads, as before; refused when they read several | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
 | A column outside every aggregate, in a metric of components | Refused | Refused (`E_UNAGGREGATED_FINER_GRAIN_REFERENCE`) |
 | A column outside every aggregate, in a metric of one dataset | Sent as written, which ClickHouse accepts only for a dimension of the question | Refused |
 | A window function in a metric of components | Refused | Refused (`E_DEFERRED_WINDOWED_METRIC`) |
 | A window function in a metric of one dataset | Answered, in the same `SELECT` | Refused |
-| Aggregates of different datasets written into a question's filter, `SUM(a.x) / COUNT(DISTINCT b.k) > 5` | Refused; name a metric | No such filter |
+| Aggregates written into a question's filter that would be split or mixed as in a metric, `SUM(a.x) / COUNT(DISTINCT b.k) > 5`, with or without a `COUNT(*)` beside them | Refused; name a metric | No such filter |
 
 The rows with a departure share a reason: `query` is not a Layer 3
 binding. Its questions carry several filters, aggregate filters, sorting
 and limits, which #653 leaves out (sections 3.2 and 3.4, Appendix A), so
 the executor answers some questions the spec refuses, where the spec
-defers a case or rejects it as unsupported. Where the spec decides what
-the value is, its semantics win: the first rows, and the reachability
-below.
+defers a case or rejects it as unsupported and one join gives the right
+value. Where one join would give a wrong value, the metric is refused.
+The home of a component comes from its arguments only (section 5.2: the
+`FILTER` "does not determine the home dataset"), so a `FILTER` on another
+dataset never makes that dataset a home.
 
-The mixed row is open. A metric such as `SUM(lines.qty * products.price)
-/ MAX(store.employees)` has an aggregate section 5.2 defers and one it
-names: the second would be evaluated over `store` rows. The planner
-splits a metric only when every aggregate of it reads one dataset, so
-this one is planned as a whole, and the `MAX` reads the stores the lines
-reference. Two readings of the brief for this change fit it: the spec
-defers the metric, so today's answer stays, or one join makes a component
-count rows of another dataset, so it is refused. Undecided. The tests
-that pin the current answer, in `tests/test_planner.py`:
-`test_allows_aggregates_that_read_root_rows`,
-`test_one_to_one_through_a_path`, and the repeat-safe rows of
-`test_clickhouse_aggregates_that_repeats_do_not_change`.
+A metric with an aggregate over several datasets (or a `FILTER` on another)
+and an aggregate over a dataset the first does not read is refused. Section
+5.2 rejects the first aggregate as deferred, and the plan 0.13.0 used, one
+join of the first's datasets, would count the second's dataset over the
+first's rows, the plan section 5.2 names wrong. For example,
+`SUM(orders.amount) FILTER (WHERE customers.segment = 'retail') /
+COUNT(DISTINCT customers.id)` divided by the customers with an order
+(650 / 3 on the data of Appendix B.1). The message suggests a metric
+declared on the dataset, or two metrics. "Another aggregate reads a dataset
+the first does not" means a dataset outside the datasets the first one's
+arguments read: `SUM(lines.qty * products.price) / SUM(lines.qty)` or
+`/ MAX(products.price)` stay within them and are planned as before.
 
 ### Reachability
 

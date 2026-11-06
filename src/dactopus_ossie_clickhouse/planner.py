@@ -13,7 +13,7 @@ names the nearest supported thing.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
 
@@ -75,17 +75,33 @@ class TableInfo:
     columns: frozenset[str]
     dedup: bool = False  # ReplacingMergeTree and not overridden: read with FINAL
     dictionary_key: str | None = None  # single-key dictionary: read with dictGetOrNull
+    # Column name -> type, as system.columns gives it; empty when not read. Types the NULL
+    # of an unmatched row in a deduplicated join (Planner._unmatched).
+    types: Mapping[str, str] = field(default_factory=dict, compare=False)
+
+    def type_of(self, column: str) -> str | None:
+        """The type of ``column``, its name matched in any case."""
+        if column in self.types:
+            return self.types[column]
+        return next((t for n, t in self.types.items() if n.upper() == column.upper()), None)
 
 
 class Catalog(dict[str, TableInfo]):
     """What the executor learned from the server: TableInfo by dataset name, and
     ``aggregate``, whether a function outside the spec is an aggregate (None when
     system.functions could not be read: the planner then asks
-    _known_clickhouse_aggregate)."""
+    _known_clickhouse_aggregate), and ``nullable_tuple``, whether this server makes a
+    tuple Nullable in a LEFT JOIN's unmatched rows (Planner._unmatched)."""
 
-    def __init__(self, tables=(), aggregate: Callable[[str], bool] | None = None):
+    def __init__(
+        self,
+        tables=(),
+        aggregate: Callable[[str], bool] | None = None,
+        nullable_tuple: bool = False,
+    ):
         super().__init__(tables)
         self.aggregate = aggregate
+        self.nullable_tuple = nullable_tuple
 
 
 def _known_clickhouse_aggregate(name: str) -> bool:
@@ -325,10 +341,33 @@ class _Unit:
     key: frozenset[str]  # the datasets whose rows it aggregates: its branch
     metric: str  # the metric the unit belongs to
     home: str = ""  # a component's dataset; empty for a whole metric
+    carry: frozenset[str] = frozenset()  # what it reads from the one side, Planner._carry
 
     @property
     def component(self) -> bool:
         return bool(self.home)
+
+
+@dataclass(eq=False)
+class _Subtree:
+    """What a root joins first and everything reachable from it along the planned
+    joins, read once as a derived table (Planner._dedup)."""
+
+    first: OssieRelationship  # the root's relationship to the subtree's first dataset
+    rest: list[OssieRelationship]  # the other joins of the subtree, nearest first
+    datasets: set[str]  # upper-cased names of all its datasets
+
+
+# What an unmatched row of a LEFT JOIN with join_use_nulls = 1 holds, by type (ClickHouse
+# 26.9): a type that cannot be Nullable gets its default value, the arrays among them (the
+# geo types are arrays); a Variant or Dynamic is NULL already, and its default is NULL. A
+# tuple, a Point and a JSON are NULL on a server that makes them Nullable inside a join
+# (Catalog.nullable_tuple) and take the default on one that does not. Anything else is NULL.
+_DEFAULT_TYPES = (
+    "Array(", "Map(", "Ring", "Polygon", "MultiPolygon", "LineString", "MultiLineString",
+    "AggregateFunction(", "Variant(", "Dynamic", "Object(",
+)  # fmt: skip
+_TUPLE_TYPES = ("Tuple(", "Point", "JSON")
 
 
 def _nested_aggregate(tree: exp.Expression) -> str | None:
@@ -637,8 +676,10 @@ class Planner:
         used: set[str],
         metrics: bool = False,
         scope: OssieDataset | None = None,
+        parsed: exp.Expression | None = None,
     ) -> exp.Expression:
         """Parse an expression, inline `dataset.field` references, qualify columns.
+        ``parsed`` is a tree already parsed from ``expression`` (a part of a filter).
 
         With ``metrics``, a metric's name inlines that metric's expression
         (filters may say ``total_sales > 1000`` or ``store_sales.total_quantity > 5``).
@@ -647,11 +688,14 @@ class Planner:
         Records the datasets touched in ``used`` (by model name); with ``scope``,
         _metric_tree records it, since COUNT(*) reads no field.
         """
-        try:
-            tree = self._parse(expression)
-        except ValueError as e:
-            raise PlanError(str(e)) from e
-        self._time_strings(tree, metrics, scope)
+        if parsed is not None:
+            tree = parsed
+        else:
+            try:
+                tree = self._parse(expression)
+            except ValueError as e:
+                raise PlanError(str(e)) from e
+            self._time_strings(tree, metrics, scope)
 
         def inline(node: exp.Expression) -> exp.Expression:
             if not isinstance(node, exp.Column):
@@ -870,8 +914,10 @@ class Planner:
         dataset it does not (_mixed). An aggregate's FILTER does not give its
         home. Refused when split: a window function (deferred). _metric_tree has
         refused a column outside every aggregate, split or not."""
-        if m.name.upper() in self._scopes or not self._split_homes(tree):
+        if m.name.upper() in self._scopes:
             return None
+        if not self._split_homes(tree):
+            return self._split_carries(m, tree)
         reads = _aggregate_reads(tree)
         if tree.find(exp.Window):
             raise PlanError(
@@ -880,6 +926,110 @@ class Planner:
                 "window in a metric of one dataset, or ask for each part on its own"
             )
         return [(_component_node(agg), next(iter(args))) for agg, args, _ in reads]
+
+    def _carry(self, node: exp.Expression) -> frozenset[str]:
+        """What an aggregate (with its FILTER) reads from datasets other than its root,
+        as the largest expressions that read only those: ``customers.region = 'WEST'`` in
+        ``SUM(orders.amount) FILTER (WHERE customers.region = 'WEST')``, or
+        ``customers.weight`` in ``SUM(orders.amount * customers.weight)``. _dedup carries
+        these in the derived table of the one side, where they keep apart the copies of
+        a key, for every aggregate of the SELECT: aggregates with other values go to
+        other SELECTs (_stitch)."""
+        datasets = {
+            self._datasets[c.table.upper()].name
+            for c in node.find_all(exp.Column)
+            if c.table.upper() in self._datasets
+        }
+        if len(datasets) < 2:
+            return frozenset()
+        try:
+            root = self._root(datasets).name.upper()
+        except PlanError:
+            return frozenset()
+        parts: set[str] = set()
+
+        def visit(n: exp.Expression) -> None:
+            if isinstance(n, exp.Condition) and not n.find(exp.AggFunc, exp.Window, exp.Select):
+                tables = {c.table.upper() for c in n.find_all(exp.Column)}
+                if tables and root not in tables:
+                    if not all(self._one_row_per_dataset(root, t) for t in tables):
+                        parts.add(n.sql("clickhouse"))
+                    return
+            for child in n.iter_expressions():
+                visit(child)
+
+        visit(node)
+        return frozenset(parts)
+
+    def _one_row_per_dataset(self, root: str, name: str) -> bool:
+        """Whether every relationship on the one path from ``root`` to ``name`` joins a
+        dictionary on its key: no copies to keep apart, so nothing to carry."""
+        paths = self._paths(root, name)
+        return len(paths) == 1 and all(self._one_row_per_key(r) for r in paths[0])
+
+    def _unit_root(self, u: _Unit) -> str | None:
+        """The dataset whose rows a unit aggregates, None if it has no one."""
+        if u.home:
+            return u.home
+        try:
+            return self._root({self.dataset(d).name for d in u.key}).name if u.key else None
+        except PlanError:
+            return None
+
+    def _carries(self, trees: list[exp.Expression]) -> list[tuple[exp.AggFunc, frozenset[str]]]:
+        """Each aggregate of ``trees`` that is not a window function, with its _carry."""
+        return [
+            (agg, self._carry(_component_node(agg)))
+            for tree in trees
+            for agg in tree.find_all(exp.AggFunc)
+            if not _window_function(agg)
+        ]
+
+    def _carries_clash(self, trees: list[exp.Expression]) -> bool:
+        """Whether the aggregates of ``trees`` carry values that keep apart copies of a key
+        for an aggregate that counts repeated rows and does not carry them itself."""
+        found = self._carries(trees)
+        return any(
+            not carried <= mine
+            for agg, mine in found
+            if not _repeat_safe(agg)
+            for _, carried in found
+        )
+
+    def _split_carries(
+        self, m: OssieMetric, tree: exp.Expression
+    ) -> list[tuple[exp.Expression, str]] | None:
+        """The components of a model's metric whose aggregates read one root's datasets
+        but need other values from the one side (``SUM(x) FILTER (WHERE d.a = 1) /
+        SUM(x)``): each is evaluated in a SELECT of its own, since a value carried for
+        one would keep apart copies of a key that the other must count once. None when
+        they need the same values, or none of them counts repeated rows."""
+        reads = _aggregate_reads(tree)
+        if not self._carries_clash([tree]):
+            return None
+        if tree.find(exp.Window):
+            raise PlanError(
+                f"metric {m.name!r} is a window function over aggregates that read different "
+                "values of a dataset they join to (a FILTER on it, or its column in an "
+                "argument), which must be answered apart; this version cannot answer it. Put "
+                "the window in a metric of one dataset, or ask for each part on its own"
+            )
+        names = {d for _, args, filtered in reads for d in args | filtered}
+        try:
+            whole = self._root({self.dataset(d).name for d in names}).name
+        except PlanError:
+            return None
+        out = []
+        for agg, args, filtered in reads:
+            own = {self.dataset(d).name for d in args | filtered if d}
+            try:
+                home = self._root(own).name if own else whole
+            except PlanError:
+                return None
+            if home != whole:
+                return None  # an aggregate over other rows than the root's: refused as before
+            out.append((_component_node(agg), home))
+        return out
 
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
@@ -1141,11 +1291,22 @@ class Planner:
                 "they aggregate; read a column of the dataset meant, such as "
                 "COUNT(dataset.key)"
             )
+        if root is not None and not nested and self._carries_clash([*selects, *having]):
+            # The question is answered over one root, but its aggregates need other values
+            # from the one side (_carry): one SELECT for each set of values.
+            # One metric alone that needs several, or an aggregate written in a filter, stays
+            # in one SELECT (docs/design.md, "A key stored twice on the one side").
+            stitched = self._stitch(q, row_filters, aggregate_filters)
+            if stitched is not None:
+                return stitched
+        subtrees: list[_Subtree] | None = None
         if root is None:
             # Reads no dataset (the current time): one row, without FROM.
             sel, dict_keys = exp.select(*selects), {}
         else:
-            sel, dict_keys = self._from(exp.select(*selects), root, used)
+            if self._duplicate_sensitive([*selects, *having]):
+                subtrees = []
+            sel, dict_keys = self._from(exp.select(*selects), root, used, subtrees)
         if where:
             sel = sel.where(exp.and_(*where))
         if group:
@@ -1156,6 +1317,8 @@ class Planner:
             sel = sel.order_by(*order)
         if q.limit is not None:
             sel = sel.limit(q.limit)
+        if root is not None and subtrees:
+            sel = self._dedup(sel, root, subtrees)
         if dict_keys:
             sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
         if semi_joins:  # after the transform: their subqueries read datasets of their own
@@ -1164,32 +1327,220 @@ class Planner:
         return sel
 
     def _from(
-        self, sel: exp.Select, root: OssieDataset, used: set[str]
+        self,
+        sel: exp.Select,
+        root: OssieDataset,
+        used: set[str],
+        subtrees: list[_Subtree] | None = None,
     ) -> tuple[exp.Select, dict[str, exp.Expression]]:
         """FROM ``root`` with a LEFT JOIN to each used dataset, and the dictionary
         datasets read with dictGetOrNull instead, by dataset name -> key expression;
-        the caller rewrites their columns once the SELECT is complete."""
+        the caller rewrites their columns once the SELECT is complete.
+
+        With ``subtrees`` (a list to fill), the datasets the root joins through one
+        first relationship whose rows may repeat a key are not joined: they are
+        left in ``subtrees`` for _dedup to join as a derived table."""
         sel = sel.from_(self._table(root))
-        dict_keys: dict[str, exp.Expression] = {}
         joins = self._joins(root, used)
+        if subtrees is not None:
+            joins = self._subtrees(root, joins, subtrees)
+        return self._join_all(sel, joins)
+
+    def _join_all(
+        self, sel: exp.Select, joins: list[OssieRelationship]
+    ) -> tuple[exp.Select, dict[str, exp.Expression]]:
+        """``sel`` with a LEFT JOIN along each of ``joins``, nearest first; see _from."""
+        dict_keys: dict[str, exp.Expression] = {}
         joined_from = {r.from_dataset.upper() for r in joins}
         for r in joins:
             source, target = self.dataset(r.from_dataset), self.dataset(r.to)
-            info = (self.catalog or {}).get(target.name)
             froms, tos = self._keys(source, r.from_columns), self._keys(target, r.to_columns)
-            if (
-                info
-                and info.dictionary_key
-                and len(tos) == 1
-                and isinstance(tos[0], exp.Column)
-                and tos[0].name.upper() == info.dictionary_key.upper()
-                and target.name.upper() not in joined_from  # nothing joins on from it
-            ):
-                dict_keys[target.name] = froms[0]
+            if self._is_dictionary_key(target, tos) and target.name.upper() not in joined_from:
+                dict_keys[target.name] = froms[0]  # nothing joins on from it
                 continue
             on = exp.and_(*(exp.EQ(this=a, expression=b) for a, b in zip(froms, tos, strict=True)))
             sel = sel.join(self._table(target), on=on, join_type="left")
         return sel, dict_keys
+
+    def _is_dictionary_key(self, target: OssieDataset, tos: list[exp.Expression]) -> bool:
+        """Whether a relationship's key into ``target`` is its dictionary's one key: one
+        row for each key by construction."""
+        info = (self.catalog or {}).get(target.name)
+        return bool(
+            info
+            and info.dictionary_key
+            and len(tos) == 1
+            and isinstance(tos[0], exp.Column)
+            and tos[0].name.upper() == info.dictionary_key.upper()
+        )
+
+    def _one_row_per_key(self, r: OssieRelationship) -> bool:
+        """Whether a dictionary holds one row for each key ``r`` joins on: the key is the
+        dictionary's, or a superset of it."""
+        target = self.dataset(r.to)
+        info = (self.catalog or {}).get(target.name)
+        if not (info and info.dictionary_key):
+            return False
+        return any(
+            isinstance(t, exp.Column) and t.name.upper() == info.dictionary_key.upper()
+            for t in self._keys(target, r.to_columns)
+        )
+
+    # --- repeated keys on the one side ----------------------------------------
+
+    @staticmethod
+    def _duplicate_sensitive(trees: list[exp.Expression]) -> bool:
+        """Whether an aggregate of ``trees`` changes when an input row repeats."""
+        return any(
+            not _window_function(agg) and not _repeat_safe(agg)
+            for tree in trees
+            for agg in tree.find_all(exp.AggFunc)
+        )
+
+    def _subtrees(
+        self, root: OssieDataset, joins: list[OssieRelationship], found: list[_Subtree]
+    ) -> list[OssieRelationship]:
+        """Split ``joins`` by the first relationship from ``root`` they go through. A
+        group whose every key is a dictionary's one key is left as it is and returned
+        (the dictionary has one row for each key); the rest are appended to ``found``.
+
+        ClickHouse does not enforce the uniqueness of a key the model declares, so a
+        dataset on the one side can hold a key twice, and a plain LEFT JOIN would
+        count the root row once for each (docs/design.md, "Many-to-one inferred from
+        keys")."""
+        first_of: dict[str, OssieRelationship] = {}
+        groups: dict[str, list[OssieRelationship]] = {}
+        for r in joins:
+            head = (
+                r
+                if r.from_dataset.upper() == root.name.upper()
+                else first_of.get(r.from_dataset.upper())
+            )
+            if head is None:  # joins that do not start at the root: leave as they are
+                return joins
+            first_of[r.to.upper()] = head
+            groups.setdefault(head.name, []).append(r)
+        plain: list[OssieRelationship] = []
+        for group in groups.values():
+            unique = all(self._one_row_per_key(r) for r in group)
+            if unique:
+                plain += group
+            else:
+                found.append(_Subtree(group[0], group[1:], {r.to.upper() for r in group}))
+        return sorted(plain, key=joins.index)
+
+    def _dedup(self, sel: exp.Select, root: OssieDataset, subtrees: list[_Subtree]) -> exp.Select:
+        """Join each subtree as ``(SELECT DISTINCT key, values ... ) AS first_dataset``.
+
+        The values are what the question reads from the subtree: each largest
+        expression of the question that reads columns of one subtree and nothing
+        else (a dimension, a filter, an aggregate's argument, a part of an
+        expression that also reads other datasets) is computed inside, so two rows of
+        the subtree that differ in a column the question never reads collapse into one,
+        and a root row counts once for each distinct value it matches. That is the plan of
+        Layer 2 (apache/ossie#653 section 4; relational_semantics.md section 8.1: "a
+        home row counts once in each group it matches after the filter"). A filter is
+        carried as a value, never applied inside: a root row with no match has NULL for
+        the subtree's columns and a filter may pass it (``region IS NULL``). ``__m`` is 1
+        in a row that matched, so ``__m IS NULL`` finds the root rows that matched
+        nothing, which take the expression over NULL columns (_unmatched). Over grouped
+        rows (HAVING, the clause of a window) only a GROUP BY key is carried as a whole."""
+        owner = {d: i for i, s in enumerate(subtrees) for d in s.datasets}
+        values: list[dict[str, tuple[str, exp.Expression]]] = [{} for _ in subtrees]
+        matched = [False] * len(subtrees)  # whether the SELECT reads __m of the subtree
+
+        def owned(node: exp.Expression) -> set[int | None]:
+            return {owner.get(c.table.upper()) for c in node.find_all(exp.Column)}
+
+        group = sel.args.get("group")
+        grouped = {e.sql("clickhouse") for e in group.expressions} if group else set()
+
+        def before_grouping(node: exp.Expression) -> bool:
+            """Whether ``node`` is evaluated on joined rows (WHERE, an aggregate's
+            arguments and FILTER, GROUP BY) and not on grouped ones."""
+            parent = node.parent
+            while parent is not None:
+                if isinstance(parent, exp.Where | exp.Group) or (
+                    isinstance(parent, exp.AggFunc) and not _window_function(parent)
+                ):
+                    return True
+                parent = parent.parent
+            return False
+
+        def carry(node: exp.Expression) -> exp.Expression:
+            if not isinstance(node, exp.Condition) or isinstance(node, exp.Subquery):
+                return node
+            own = owned(node)
+            if len(own) != 1 or None in own or node.find(exp.AggFunc, exp.Window, exp.Select):
+                return node
+            # Over grouped rows (the SELECT list outside aggregates, HAVING, the clause of a
+            # window) only a GROUP BY expression may be read, and as the same carried
+            # expression, so ClickHouse finds it among the keys; the parts of anything
+            # else are carried one by one.
+            if not before_grouping(node) and node.sql("clickhouse") not in grouped:
+                return node
+            i = next(iter(own))
+            name = values[i].setdefault(
+                node.sql("clickhouse"), (f"__e{len(values[i]) + 1}", node.copy())
+            )[0]
+            table = self.dataset(subtrees[i].first.to).name
+            if isinstance(node, exp.Column):
+                # A root row that matched nothing gets what a plain LEFT JOIN gives it:
+                # NULL, or the default of a type that cannot be NULL.
+                return exp.column(name, table=table)
+            matched[i] = True
+            unmatched = node.copy().transform(
+                lambda n: self._unmatched(n) if isinstance(n, exp.Column) else n
+            )
+            return exp.If(
+                this=exp.Is(this=exp.column("__m", table=table), expression=exp.Null()),
+                true=unmatched,
+                false=exp.column(name, table=table),
+            )
+
+        sel = sel.transform(carry)
+        for i, s in enumerate(subtrees):
+            target = self.dataset(s.first.to)
+            keys = self._keys(target, s.first.to_columns)
+            cols = [k.as_(f"__k{j}") for j, k in enumerate(keys)]
+            cols += [e.as_(name) for name, e in values[i].values()]
+            if matched[i]:
+                cols.append(exp.Literal.number(1).as_("__m"))
+            inner = exp.select(*cols, copy=False).distinct().from_(self._table(target))
+            inner, dict_keys = self._join_all(inner, s.rest)
+            if dict_keys:
+                inner = inner.transform(lambda n, d=dict_keys: self._dict_get(n, d))
+            froms = self._keys(root, s.first.from_columns)
+            on = exp.and_(
+                *(
+                    exp.EQ(this=a, expression=exp.column(f"__k{j}", table=target.name))
+                    for j, a in enumerate(froms)
+                )
+            )
+            sel = sel.join(inner.subquery(target.name), on=on, join_type="left")
+        return sel
+
+    def _unmatched(self, col: exp.Column) -> exp.Expression:
+        """What a column of a LEFT JOIN holds in a root row that matched nothing: NULL,
+        typed as the column is when the catalog knows it (a function such as
+        ``has`` refuses an untyped NULL), or its type's default when the type cannot be
+        Nullable (an array, a map)."""
+        ds = self._datasets.get(col.table.upper())
+        info = (self.catalog or {}).get(ds.name) if ds else None
+        kind = info.type_of(col.name) if info else None
+        if not kind:
+            return exp.Null()
+        while kind.startswith("LowCardinality(") and kind.endswith(")"):
+            kind = kind[len("LowCardinality(") : -1]
+        literal = exp.Literal.string(kind)
+        nullable_tuple = getattr(self.catalog, "nullable_tuple", False)
+        if kind.startswith(_DEFAULT_TYPES) or (
+            kind.startswith(_TUPLE_TYPES) and not nullable_tuple
+        ):
+            return exp.Anonymous(this="defaultValueOfTypeName", expressions=[literal])
+        if not kind.startswith("Nullable("):
+            literal = exp.Literal.string(f"Nullable({kind})")
+        return exp.Anonymous(this="CAST", expressions=[exp.Null(), literal])
 
     def _split_filters(
         self,
@@ -1568,23 +1919,51 @@ class Planner:
             parts = self._split(m, tree)
             if parts is None:
                 key = frozenset(_homes(_aggregate_inputs(tree)))
-                units.append(_Unit(n, tree, f"metric {n!r}", key, n))
+                carry = frozenset().union(*(c for _, c in self._carries([tree])))
+                units.append(_Unit(n, tree, f"metric {n!r}", key, n, carry=carry))
                 continue
             standing = []
             for node, home in parts:
                 alias = f"__c{len(units)}"
-                units.append(_Unit(alias, node.copy(), f"metric {n!r}", frozenset({home}), n, home))
+                carry = self._carry(node)
+                label = f"metric {n!r}"
+                units.append(_Unit(alias, node.copy(), label, frozenset({home}), n, home, carry))
                 standing.append((node, alias))
             for node, alias in standing:  # after the copies: the nodes are disjoint
                 node.replace(exp.column(alias))
             outer[n] = tree
-        groups: dict[frozenset[str], list[_Unit]] = {}
+        # When every unit is answered over one root (they differ only in what they need from
+        # the one side), an aggregate written in a filter over that root is a unit too, in
+        # the SELECT of the units that need the same values; the filter is applied to the
+        # merged rows. Over the rows of other datasets it is refused below.
+        roots = {self._unit_root(u) for u in units}
+        for f, tree in zip(having, having_trees, strict=True):
+            for agg in [a for a in tree.find_all(exp.AggFunc) if not _window_function(a)]:
+                node = _component_node(agg)
+                comp = rewrite_tree(self.resolve(f, set(), parsed=node.copy()), self._zone)
+                read = {
+                    self.dataset(c.table).name
+                    for c in comp.find_all(exp.Column)
+                    if c.table.upper() in self._datasets
+                }
+                try:
+                    home = self._root(read).name if read else None
+                except PlanError:
+                    home = None
+                if home is None or roots != {home}:
+                    continue  # refused below, as before
+                alias = f"__w{len(units)}"
+                carry = self._carry(comp)
+                units.append(_Unit(alias, comp, f"filter {f!r}", frozenset(read), "", home, carry))
+                node.replace(exp.column(alias))
+        # By the datasets a unit aggregates and the values it needs from the one side.
+        groups: dict[tuple[frozenset[str], frozenset[str]], list[_Unit]] = {}
         for u in units:
-            groups.setdefault(u.key, []).append(u)
-        if len(groups) > 1 and frozenset() in groups:
+            groups.setdefault((u.key, u.carry), []).append(u)
+        if len(groups) > 1 and (frozenset(), frozenset()) in groups:
             # A metric that reads no dataset (the current time) takes its value in any
             # group; a group of its own would add a row for every dimension value.
-            loose = groups.pop(frozenset())
+            loose = groups.pop((frozenset(), frozenset()))
             next(iter(groups.values())).extend(loose)
         if len(groups) < 2:
             return None
@@ -1609,10 +1988,17 @@ class Planner:
                 raise self._branch_error(members, units, q.dimensions, where, e) from None
         for n, tree in metric_trees.items():
             if n not in outer and tree.find(exp.Window):
+                if len(roots) == 1:
+                    why = (
+                        "metrics that need other values of the repeated rows of a dataset "
+                        "they join to (a FILTER on it, or its column in an argument), which "
+                        "are answered apart"
+                    )
+                else:
+                    why = "metrics that are answered from different datasets"
                 raise PlanError(
-                    f"metric {n!r} is a window over the merged rows of metrics that are "
-                    "answered from different datasets; this version cannot answer it, "
-                    "ask for it in its own question"
+                    f"metric {n!r} is a window over the merged rows of {why}; this version "
+                    "cannot answer it, ask for it in its own question"
                 )
         for f, tree in zip(having, having_trees, strict=True):
             if tree.find(exp.AggFunc):
@@ -1677,6 +2063,8 @@ class Planner:
             by_ref = {ref.upper(): name for ref, name in zip(q.dimensions, dims, strict=True)}
 
             def to_merged(node: exp.Expression) -> exp.Expression:
+                if isinstance(node, exp.Column) and not node.table and node.name in by_alias:
+                    return by_alias[node.name].copy()  # an aggregate written in the filter
                 if isinstance(node, exp.Column) and (m := self._named_metric(node)):
                     return values[m.name].copy()
                 if isinstance(node, exp.Column):

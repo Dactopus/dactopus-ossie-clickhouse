@@ -89,7 +89,10 @@ questions it refuses.
 - Datasets come from `source`, joins from `relationships`. One root
   dataset, `LEFT JOIN` to the dimensions the question touches, only along
   relationships whose `to_columns` cover a primary or unique key of the
-  target (many-to-one). `SETTINGS`
+  target (many-to-one). ClickHouse does not enforce that a key is unique,
+  so when an aggregate counts rows, each joined dataset is read as a
+  derived table of the distinct values the question asks of it, and a row
+  of the root counts once in each group it matches. `SETTINGS`
   [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls)
   so unmatched rows get NULL, not ClickHouse defaults, and
   [`aggregate_functions_null_for_empty = 1`](https://clickhouse.com/docs/operations/settings/settings#aggregate_functions_null_for_empty)

@@ -118,7 +118,11 @@ Planning:
   `SELECT` per question. `LEFT JOIN` from one root along the one path to
   each dataset, only along relationships whose `to_columns` cover a key
   of the target. Keys and relationship columns name fields, never source
-  columns. A row filter the root does not reach is a semi-join; metrics
+  columns. A joined subtree is read as a derived table of the distinct
+  values the question asks of it (ClickHouse does not enforce key
+  uniqueness), unless every aggregate is repeat-safe or the subtree is
+  dictionaries (`Planner._dedup`; `docs/design.md`, "A key stored twice on
+  the one side"). A row filter the root does not reach is a semi-join; metrics
   no one root answers together are stitched. A model's metric whose
   aggregates each read a different dataset is split into components, one
   per aggregate, answered over their own dataset's rows and stitched

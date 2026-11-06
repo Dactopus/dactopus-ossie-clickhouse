@@ -625,7 +625,7 @@ def test_cli_several_files(tmp_path, tpcds, capsys):
     assert pair[:-1] == single[:-1]
     assert pair[-1] == f"{a}, {b}: 1 problem(s)"
     assert main(["sql", str(a), str(b), "-m", "total_sales", "-d", "store.s_state"]) == 0
-    assert "LEFT JOIN tpcds.store AS store" in capsys.readouterr().out  # joins across files
+    assert "FROM tpcds.store AS store" in capsys.readouterr().out  # joins across files
 
 
 def test_unreadable(tmp_path):

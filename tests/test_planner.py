@@ -139,27 +139,37 @@ def test_dimension_filter_join_snapshot():
             limit=10,
         )
     )
+    # Each joined dataset is read once for each distinct value the question reads from
+    # it (docs/design.md, "Many-to-one inferred from keys"): a repeated key counts once.
     assert sql == (
-        "SELECT item.i_brand AS i_brand, "
+        "SELECT item.__e1 AS i_brand, "
         "SUM(store_sales.ss_ext_sales_price) AS total_sales, "
         "SUM(store_sales.ss_net_profit) AS total_profit "
         "FROM tpcds.store_sales AS store_sales "
-        "LEFT JOIN tpcds.date_dim AS date_dim ON store_sales.ss_sold_date_sk = date_dim.d_date_sk "
-        "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.i_item_sk "
-        "WHERE date_dim.d_year = 1998 "
-        "GROUP BY item.i_brand ORDER BY total_sales DESC, i_brand ASC LIMIT 10 " + SETTINGS
+        "LEFT JOIN (SELECT DISTINCT date_dim.d_date_sk AS __k0, "
+        "date_dim.d_year = 1998 AS __e1, 1 AS __m FROM tpcds.date_dim AS date_dim) AS date_dim "
+        "ON store_sales.ss_sold_date_sk = date_dim.__k0 "
+        "LEFT JOIN (SELECT DISTINCT item.i_item_sk AS __k0, item.i_brand AS __e1 "
+        "FROM tpcds.item AS item) AS item ON store_sales.ss_item_sk = item.__k0 "
+        "WHERE CASE WHEN date_dim.__m IS NULL THEN NULL = 1998 ELSE date_dim.__e1 END "
+        "GROUP BY item.__e1 ORDER BY total_sales DESC, i_brand ASC LIMIT 10 " + SETTINGS
     )
 
 
 def test_field_expression_is_inlined_and_qualified():
     sql = P.sql(Query(dimensions=("customer.customer_full_name",), metrics=("total_sales",)))
     expr = "customer.c_first_name || ' ' || customer.c_last_name"
-    assert f"{expr} AS customer_full_name" in sql and f"GROUP BY {expr}" in sql
+    # Read inside the derived table; a row that matched no customer reads the expression
+    # over NULL columns.
+    assert f"{expr} AS __e1" in sql
+    unmatched = "CASE WHEN customer.__m IS NULL THEN NULL || ' ' || NULL ELSE customer.__e1 END"
+    assert f"{unmatched} AS customer_full_name" in sql and f"GROUP BY {unmatched}" in sql
 
 
 def test_case_insensitive_resolution_keeps_physical_case():
     sql = P.sql(Query(metrics=("TOTAL_SALES",), dimensions=("ITEM.I_BRAND",)))
-    assert "item.i_brand AS i_brand" in sql and "SUM(store_sales.ss_ext_sales_price)" in sql
+    assert "item.i_brand AS __e1" in sql and "item.__e1 AS i_brand" in sql
+    assert "SUM(store_sales.ss_ext_sales_price)" in sql
 
 
 def test_dimension_only_query():
@@ -169,7 +179,7 @@ def test_dimension_only_query():
 
 def test_window_metric_passes_through():
     sql = P.sql(Query(metrics=("cumulative_sales",), dimensions=("date_dim.d_date",)))
-    assert "SUM(SUM(store_sales.ss_ext_sales_price)) OVER (ORDER BY date_dim.d_date" in sql
+    assert "SUM(SUM(store_sales.ss_ext_sales_price)) OVER (ORDER BY date_dim.__e1" in sql
 
 
 def test_window_metric_keeps_nulls_clause():
@@ -216,7 +226,7 @@ def test_order_by():
         metrics=("total_sales",), dimensions=("item.i_brand",), order_by=("total_sales desc",)
     )
     assert P.sql(q).endswith(
-        "GROUP BY item.i_brand ORDER BY total_sales DESC, i_brand ASC " + SETTINGS
+        "GROUP BY item.__e1 ORDER BY total_sales DESC, i_brand ASC " + SETTINGS
     )
     q = Query(
         metrics=("total_sales",),
@@ -328,7 +338,12 @@ def test_filters_cannot_smuggle_statements(f):
 def test_filters_pass_functions_through():
     # Any function goes to ClickHouse as written; grants and quotas there are the boundary.
     sql = P.sql(Query(metrics=("total_sales",), filters=("toString(date_dim.d_year) = '1998'",)))
-    assert "WHERE toString(date_dim.d_year) = '1998'" in sql
+    assert "toString(date_dim.d_year) = '1998' AS __e1" in sql
+    # and the carried condition is what WHERE reads, over NULL columns for an unmatched row
+    assert (
+        "WHERE CASE WHEN date_dim.__m IS NULL THEN toString(NULL) = '1998' "
+        "ELSE date_dim.__e1 END" in sql
+    )
 
 
 def test_aggregate_filters_go_to_having():
@@ -344,7 +359,8 @@ def test_aggregate_filters_go_to_having():
         )
     )
     assert sql.endswith(
-        "WHERE date_dim.d_year = 1998 GROUP BY item.i_brand "
+        "WHERE CASE WHEN date_dim.__m IS NULL THEN NULL = 1998 ELSE date_dim.__e1 END "
+        "GROUP BY item.__e1 "
         "HAVING SUM(store_sales.ss_ext_sales_price) > 1000000 AND COUNT(*) > 10 "
         "ORDER BY total_sales DESC, i_brand ASC " + SETTINGS
     )
@@ -360,7 +376,10 @@ def test_aggregate_filters_go_to_having():
             filters=("total_sales > 1 AND customer.customer_full_name <> ''",),
         )
     )
-    assert "HAVING (SUM(store_sales.ss_ext_sales_price) > 1) AND ((customer.c_first_name" in sql
+    # Over grouped rows only the dimension may be read, as the GROUP BY expression is
+    # written, so ClickHouse finds it among the keys.
+    unmatched = "CASE WHEN customer.__m IS NULL THEN NULL || ' ' || NULL ELSE customer.__e1 END"
+    assert f"HAVING (SUM(store_sales.ss_ext_sales_price) > 1) AND (({unmatched}) <> '')" in sql
 
 
 def test_filter_on_unselected_metric_adds_its_join():
@@ -372,10 +391,15 @@ def test_filter_on_unselected_metric_adds_its_join():
             filters=("listed > 1",),
         )
     )
-    assert "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.i_item_sk" in sql
+    # The metric in the filter needs the item's price, which would keep apart copies of
+    # an item for total_sales: it is answered in a SELECT of its own, and filtered after.
+    assert (
+        "LEFT JOIN (SELECT DISTINCT item.i_item_sk AS __k0, item.i_current_price AS __e1 "
+        "FROM tpcds.item AS item) AS item ON store_sales.ss_item_sk = item.__k0"
+    ) in sql
+    assert " UNION ALL " in sql
     assert sql.endswith(
-        "GROUP BY store.s_state HAVING SUM(store_sales.ss_quantity * item.i_current_price) > 1 "
-        "ORDER BY total_sales DESC, s_state ASC " + SETTINGS
+        "GROUP BY s_state HAVING any(__m1) > 1 ORDER BY total_sales DESC, s_state ASC " + SETTINGS
     )
 
 
@@ -423,8 +447,9 @@ def test_join_on_superset_of_key():
         Query(metrics=("total_sales",), dimensions=("item.i_brand",))
     )
     assert (
-        "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.i_item_sk "
-        "AND store_sales.ss_store_sk = item.i_brand"
+        "(SELECT DISTINCT item.i_item_sk AS __k0, item.i_brand AS __k1, item.i_brand AS __e1 "
+        "FROM tpcds.item AS item) AS item ON store_sales.ss_item_sk = item.__k0 "
+        "AND store_sales.ss_store_sk = item.__k1"
     ) in sql
 
 
@@ -436,7 +461,7 @@ def test_join_on_superset_of_unique_key():
         item["unique_keys"] = [["i_item_sk"]]
 
     sql = _variant(mutate).sql(Query(metrics=("total_sales",), dimensions=("item.i_brand",)))
-    assert "LEFT JOIN tpcds.item AS item ON" in sql
+    assert "FROM tpcds.item AS item) AS item ON store_sales.ss_item_sk = item.__k0" in sql
 
 
 def test_dictionary_joined_on_superset_of_its_key_is_a_join():
@@ -522,10 +547,10 @@ def test_catalog_final_and_dictionary():
         "CASE WHEN dictHas('tpcds.item', store_sales.ss_item_sk) THEN store_sales.ss_item_sk "
         "ELSE NULL END ORDER BY total_sales DESC, i_brand ASC, i_item_sk ASC " + SETTINGS
     )
-    # A dictionary joined on something other than its key is a plain LEFT JOIN.
+    # A dictionary joined on something other than its key is a table, with rows to repeat.
     catalog["item"] = TableInfo("Dictionary", frozenset(), dictionary_key="i_item_id")
     sql = Planner(MODEL, catalog).sql(Query(metrics=("total_sales",), dimensions=("item.i_brand",)))
-    assert "LEFT JOIN tpcds.item AS item" in sql and "dictGet" not in sql
+    assert "FROM tpcds.item AS item) AS item ON" in sql and "dictGet" not in sql
 
 
 def test_two_relationships_to_the_same_dataset_are_ambiguous():
@@ -540,7 +565,7 @@ def test_two_relationships_to_the_same_dataset_are_ambiguous():
 def test_cli(capsys):
     assert main(["sql", str(FIXTURE), "-m", "total_sales", "-d", "item.i_brand", "-l", "5"]) == 0
     out = capsys.readouterr().out
-    assert out.startswith("SELECT\n") and "LEFT JOIN tpcds.item" in out
+    assert out.startswith("SELECT\n") and "FROM tpcds.item AS item" in out
     assert main(["sql", str(FIXTURE), "-m", "nope"]) == 1
     assert "unknown metric" in capsys.readouterr().err
 
@@ -824,7 +849,7 @@ def test_clickhouse_aggregates_that_repeats_do_not_change(aggregate, safe):
     planner.catalog = Catalog(aggregate=lambda name: True)
     query = Query(metrics=("per_store",))
     if safe:
-        assert "LEFT JOIN tpcds.store AS store" in planner.sql(query)
+        assert ") AS store ON store_sales.ss_store_sk = store.__k0" in planner.sql(query)
     else:
         with pytest.raises(PlanError, match="may read a joined dataset on their own"):
             planner.sql(query)
@@ -907,10 +932,13 @@ def test_path_of_two_relationships():
     """store_area is reached through store, which the query does not name
     (apache/ossie#653 section 4); values are compared in test_paths.py."""
     sql = _variant(_area).sql(Query(metrics=("total_sales",), dimensions=("store_area.s_state",)))
+    # The whole path is read inside one derived table (docs/design.md, "Many-to-one
+    # inferred from keys").
     assert (
-        "FROM tpcds.store_sales AS store_sales "
-        "LEFT JOIN tpcds.store AS store ON store_sales.ss_store_sk = store.s_store_sk "
-        "LEFT JOIN tpcds.store AS store_area ON store.s_store_sk = store_area.s_store_sk "
+        "FROM tpcds.store_sales AS store_sales LEFT JOIN (SELECT DISTINCT "
+        "store.s_store_sk AS __k0, store_area.s_state AS __e1 FROM tpcds.store AS store "
+        "LEFT JOIN tpcds.store AS store_area ON store.s_store_sk = store_area.s_store_sk) "
+        "AS store ON store_sales.ss_store_sk = store.__k0 "
     ) in sql
 
 
@@ -985,10 +1013,11 @@ def test_dictionary_on_a_path():
     query = Query(metrics=("total_sales",), dimensions=("store_area.s_state",))
     sql = Planner(planner.model, catalog).sql(query)
     assert "dictGetOrNull('tpcds.store', 's_state', store.s_store_sk)" in sql
-    assert "LEFT JOIN tpcds.store AS store ON" in sql and "AS store_area" not in sql
+    assert "FROM tpcds.store AS store) AS store ON" in sql and "AS store_area" not in sql
     catalog = Catalog({"store": TableInfo("Dictionary", frozenset(), dictionary_key="s_store_sk")})
     sql = Planner(planner.model, catalog).sql(query)
-    assert "dictGet" not in sql and "LEFT JOIN tpcds.store AS store ON" in sql
+    assert "dictGet" not in sql
+    assert "LEFT JOIN tpcds.store AS store_area ON store.s_store_sk = store_area.s_store_sk" in sql
 
 
 @pytest.mark.parametrize(
@@ -1165,37 +1194,40 @@ def _time_planner() -> Planner:
     ("condition", "expected"),
     [
         ("date_dim.d_date < '2026-09-01 00:00:00'",
-         "WHERE date_dim.d_date < toDateTime('2026-09-01 00:00:00', 'UTC')"),
+         "date_dim.d_date < toDateTime('2026-09-01 00:00:00', 'UTC') AS __e1"),
         ("'2026-09-01' > date_dim.d_date",
-         "WHERE toDateTime('2026-09-01', 'UTC') > date_dim.d_date"),
+         "toDateTime('2026-09-01', 'UTC') > date_dim.d_date AS __e1"),
         ("DATE_DIM.D_DATE BETWEEN '2026-09-01' AND '2026-09-02'",
-         "WHERE date_dim.d_date BETWEEN toDateTime('2026-09-01', 'UTC') "
-         "AND toDateTime('2026-09-02', 'UTC')"),
+         "date_dim.d_date BETWEEN toDateTime('2026-09-01', 'UTC') "
+         "AND toDateTime('2026-09-02', 'UTC') AS __e1"),
         ("date_dim.d_date NOT IN ('2026-09-01 10:00:00.5', '2026-09-02')",
-         "WHERE NOT (date_dim.d_date IN (toDateTime64('2026-09-01 10:00:00.5', 1, 'UTC'), "
-         "toDateTime('2026-09-02', 'UTC')))"),
+         "NOT (date_dim.d_date IN (toDateTime64('2026-09-01 10:00:00.5', 1, 'UTC'), "
+         "toDateTime('2026-09-02', 'UTC'))) AS __e1"),
         # The string on either side of BETWEEN and IN, parentheses around either.
         ("'2026-09-01' BETWEEN date_dim.d_date AND date_dim.d_date",
-         "WHERE toDateTime('2026-09-01', 'UTC') BETWEEN date_dim.d_date AND date_dim.d_date"),
+         "toDateTime('2026-09-01', 'UTC') BETWEEN date_dim.d_date AND date_dim.d_date AS __e1"),
         ("'2026-09-01' IN (date_dim.d_date)",
-         "WHERE toDateTime('2026-09-01', 'UTC') IN (date_dim.d_date)"),
+         "toDateTime('2026-09-01', 'UTC') IN (date_dim.d_date) AS __e1"),
         ("(date_dim.d_date) < ('2026-09-01')",
-         "WHERE (date_dim.d_date) < (toDateTime('2026-09-01', 'UTC'))"),
+         "(date_dim.d_date) < (toDateTime('2026-09-01', 'UTC')) AS __e1"),
         # An offset still names the instant, as in TIMESTAMP '...'.
         ("date_dim.d_date = '2026-09-01 00:00:00-04:00'",
-         "WHERE date_dim.d_date = toDateTime('2026-09-01 00:00:00-04:00', 'UTC')"),
+         "date_dim.d_date = toDateTime('2026-09-01 00:00:00-04:00', 'UTC') AS __e1"),
         # A metric of another dataset than total_sales: stitched, filtered after the merge.
         ("last_sale >= '2026-09-01'", "HAVING any(__m1) >= toDateTime('2026-09-01', 'UTC')"),
         # Not the field itself: its type is not known.
-        ("toDate(date_dim.d_date) = '2026-09-01'", "WHERE toDate(date_dim.d_date) = '2026-09-01'"),
+        ("toDate(date_dim.d_date) = '2026-09-01'",
+         "toDate(date_dim.d_date) = '2026-09-01' AS __e1"),
         ("date_dim.d_quarter_name = '2026-09-01'",
-         "WHERE date_dim.d_quarter_name = '2026-09-01'"),
+         "date_dim.d_quarter_name = '2026-09-01' AS __e1"),
     ],
 )  # fmt: skip
 def test_string_compared_with_a_time_is_read_in_the_model_zone(condition, expected):
     """As TIMESTAMP '...' is; ClickHouse reads a plain string in the column's zone (#58)."""
     sql = _time_planner().sql(Query(metrics=("total_sales",), filters=(condition,)))
     assert expected in sql
+    if expected.endswith(" AS __e1"):  # read inside the derived table, filtered in WHERE
+        assert sql.split(" WHERE ")[1].endswith(" ELSE date_dim.__e1 END " + SETTINGS)
 
 
 def test_string_compared_with_a_time_in_a_metric():
@@ -1210,4 +1242,5 @@ def test_string_compared_with_a_time_in_a_metric():
 def test_string_compared_with_a_date_is_kept():
     """A Date has no zone: the string stays a date."""
     sql = P.sql(Query(metrics=("total_sales",), filters=("date_dim.d_date < '2026-09-01'",)))
-    assert "WHERE date_dim.d_date < '2026-09-01'" in sql
+    assert "date_dim.d_date < '2026-09-01' AS __e1" in sql
+    assert " WHERE CASE WHEN date_dim.__m IS NULL THEN NULL < '2026-09-01' ELSE" in sql

@@ -220,11 +220,12 @@ def test_quoted_source(ex, tmp_path):
 
 @pytest.mark.parametrize("name", ["country names", "country.v2"])
 def test_dictionary_with_special_name(ex, tmp_path, name):
-    # dictGet* takes the name unquoted and cannot address one with a dot: join it.
+    # dictGet* takes the name unquoted and cannot address one with a dot: join it. The
+    # planner does not know its key then, so it reads the table once for each distinct value.
     q = _with_sources(ex, tmp_path, country=f"ossie_test.`{name}`")
     r = q.execute(Query(metrics=("revenue",), dimensions=("country.name",)))
     if "." in name:
-        assert f'LEFT JOIN ossie_test."{name}" AS country' in r.sql and "dictGet" not in r.sql
+        assert f'FROM ossie_test."{name}" AS country' in r.sql and "dictGet" not in r.sql
     else:
         assert f"dictGetOrNull('ossie_test.{name}', 'name'" in r.sql
     assert set(r.rows) == {(None, 30.0), ("France", 20.0), ("Germany", 15.0)}

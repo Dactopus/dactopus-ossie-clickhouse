@@ -54,10 +54,15 @@ tenant, and then the key is `[tenant_id, customer_id]`, not
 with that id. A key that is declared right but stored twice, such as one
 customer written two times, does not multiply the root's rows in a metric or
 a filter on one dataset: the planner reads the dataset as the distinct values
-the question asks of it. A row filter that reads the root and that dataset in
-one expression (`customers.weight > 0 OR orders.amount > 150`) can still count
-a root row once for each copy that differs in the part on the dataset
-(`docs/design.md`, "A key stored twice on the one side").
+the question asks of it. An expression that reads the root and that dataset
+together is answered when two copies cannot give it one result: a condition
+on the dataset joined to the rest with `AND`, `SUM(lines.qty *
+products.price * (1 - products.discount))`, a `FILTER` or a `CASE WHEN` on
+the dataset. Others, such as
+`customers.weight > 0 OR orders.amount > 150` or `SUM(GREATEST(orders.amount,
+customers.weight))`, would count a root row once for each copy, and are
+refused; `validate` reports such a metric (`docs/design.md`, "A key stored
+twice on the one side").
 
 ```yaml
 datasets:

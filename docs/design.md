@@ -408,9 +408,24 @@ LEFT JOIN (
   `FILTER` on another dataset read the subtree and something else. The parts
   that read only the subtree are carried (`customers.weight`; the condition of
   the `FILTER`, a boolean when it reads `customers` alone) and the expression
-  stays outside. When the carried part is all that varies, as in the two
-  examples, copies that differ in it are different rows of Layer 2's DISTINCT,
-  and the answer is Layer 2's.
+  stays outside. Copies that differ in a carried part are different rows, where
+  Layer 2's DISTINCT keeps the root row once for each value of the whole
+  argument. The two agree when each value of the part gives its own result, or a
+  result the aggregate cannot be changed by, which the planner checks on the path
+  from the part to the argument or condition (`_blend`, `_injective`):
+  - A condition (a row filter, a `FILTER`): the part is a conjunct, joined only
+    with `AND`. Only the copies that pass it remain, and a carried condition has
+    one value that passes.
+  - An argument with one part, reached through `+`, `-`, a unary minus, and in
+    `SUM` also `*` and `/`: the other side is then zero for copies with the same
+    result, which adds nothing.
+  - A `CASE` with one `WHEN`, or an `IF`, whose condition is such a conjunct and
+    whose other result is NULL (or 0 in `SUM`): it is a `FILTER`.
+  - Several factors of a product, or terms of a sum, that read only the subtree:
+    they are gathered first into one operand (`_regroup`), so `SUM(lines.qty *
+    products.price * (1 - products.discount))` carries `products.price * (1 -
+    products.discount)` as one value, and copies with the same product collapse
+    as in Layer 2. Products and sums are only reordered; `/` is not.
 - Aggregates that need other values. A carried value keeps apart the copies of a
   key for every aggregate of its SELECT, so `SUM(orders.amount) FILTER (WHERE
   customers.region = 'WEST')` next to `SUM(orders.amount)` would count the order
@@ -436,13 +451,26 @@ LEFT JOIN (
   before, a filter that writes an aggregate over other rows than the metrics'
   root. One metric whose aggregates read other rows than the root's is refused as
   before.
-- Where the answer still differs from Layer 2. A filter conjunct that reads the
-  root and the subtree together, `customers.weight > 0 OR orders.amount > 150`:
-  the part on `customers` is carried, and two copies of a customer that differ
-  in it and both pass the conjunct count the order twice (EAST 550 where Layer 2
-  gives 350 on the test data). So does an argument that mixes the root with
-  several parts of the subtree, when copies differ in a part but give the same
-  argument. These are answers beyond Layer 3 ("Answers beyond Layer 3").
+- Refused: any other expression that reads the subtree and the root (or another
+  subtree) on joined rows, in a `SELECT` that reads the subtree as a derived
+  table. `customers.weight > 0 OR orders.amount > 150` passes O2 for both copies
+  of C1 (weights 1 and -1), so carrying the part on `customers` gives EAST 550,
+  where Layer 2 gives 350; `SUM(GREATEST(orders.amount, customers.weight))` gives
+  200 for O2 with either copy, 990 in total where Layer 2 gives 690; `COUNT(x *
+  customers.weight)` counts a zero twice; an argument with two parts that do not
+  gather (`orders.amount / customers.a * customers.b`) can give one result for two
+  pairs. The planner does not read the data, so it refuses these
+  on data that stores each key once too, where the plain join of 0.13.0 answered
+  them. #653 rejects them as well (`E_CROSS_DATASET_FILTER`,
+  `E_AMBIGUOUS_MEASURE_GRAIN`). A metric refused so is refused in every question
+  with it, so `validate` reports it and the server hides it; a row filter is
+  refused in its question, with a message that asks for an `AND`. Answering
+  them would need Layer 2's plan for the aggregate: the DISTINCT of the root's
+  key, the whole argument and the dimensions, over the plain join (decision of
+  2026-11-06: refuse until a user needs one of them, since adding an answer
+  later changes no number given before). An aggregate that repeated rows do not
+  change (`MAX`, `DISTINCT`), and its `FILTER`, are not refused: a copy changes
+  nothing it returns.
 
 Skips, where the plan does not change:
 
@@ -1085,8 +1113,10 @@ out (sections 3.2 and 3.4, Appendix A), and the `execute_query` profile
 (apache/ossie#529) is not out. The answers below are therefore extensions
 beyond #653, kept as they are because a refusal would gain a user nothing
 today: each has one meaning, and the SQL returns it. Decision of
-2026-11-06: no behavior changes for #653, and this section keeps the
-choice from being reopened without new evidence.
+2026-11-06: no behavior changes for #653 where the answer is right, and
+this section keeps the choice from being reopened without new evidence.
+An answer that could be wrong is refused instead, as #653 refuses it (the
+last row).
 
 A future Layer 3 binding (the `execute_query` profile) refuses each of
 them unless a query property or a `custom_extensions` entry asks for it.
@@ -1105,7 +1135,7 @@ examples use the model of Appendix B.1 (`orders` and `returns` relate to
 | Two metrics with the same final name in different datasets: `orders.revenue` and `returns.revenue` by `customers.region` (section 3.3) | Answered, stitched ("Stitch metrics of several facts"). A dataset's metric is named `dataset.metric`, so the columns are `orders.revenue` and `returns.revenue` and never collide. The question has no alias | `E_NAME_COLLISION` unless an entry has an alias |
 | A model's metric with an aggregate that reads several datasets, or none, or whose `FILTER` reads another dataset: `SUM(orders.amount * customers.weight)`, `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST')`, `COUNT(*) FILTER (WHERE orders.amount > 100)`, `SUM(orders.amount) / COUNT(*)` (section 5.2) | One `SELECT` over one join rooted at the dataset the metric reads (`orders`); `COUNT(*)` counts the rows of that dataset. Aggregates that need other values of a key stored twice are answered in SELECTs of their own, merged on the dimensions ("A key stored twice on the one side"). Refused when another aggregate of the metric reads a dataset the first does not, as in `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST') / COUNT(DISTINCT customers.customer_id)`: see the table of "Evaluate each aggregate over its own dataset" | `E_AMBIGUOUS_MEASURE_GRAIN` |
 | A window function over the grouped rows in a model's metric: `RANK() OVER (ORDER BY SUM(orders.amount) DESC)`, `SUM(SUM(orders.amount)) OVER ()` (section 5.2) | Answered in the same `SELECT`, over the grouped rows. The three window metrics of `tests/fixtures/tpcds.yaml`, Ossie's own example, rely on it. Refused when the metric's aggregates read several datasets, in a question that groups nothing, and in a stitched question; see the same table | `E_DEFERRED_WINDOWED_METRIC` |
-| An expression that reads two datasets next to a key stored twice: a filter on the root and the one side in one expression, `customers.weight > 0 OR orders.amount > 150`, with C1 stored twice (weights 1 and -1) | The derived table carries the part that reads only `customers` and the conjunct stays outside: an order that passes it for both copies counts twice (EAST 550 for `orders.total_revenue`). An aggregate over two datasets or with a `FILTER` on the one side is answered as Layer 2 does, in a SELECT of its own when its neighbours need other values. See "A key stored twice on the one side" | `E_CROSS_DATASET_FILTER` for the filter; `E_AMBIGUOUS_MEASURE_GRAIN` for the aggregate |
+| An expression that reads two datasets next to a key stored twice: a filter on the root and the one side joined with `AND`, an aggregate over two datasets (`SUM(orders.amount * customers.weight)`) or with a `FILTER` on the one side | Answered as Layer 2 does, in a SELECT of its own when its neighbours need other values. An expression where two copies of a key could give the same result (`customers.weight > 0 OR orders.amount > 150`, `SUM(GREATEST(orders.amount, customers.weight))`) is refused, as #653 refuses it. See "A key stored twice on the one side" | `E_CROSS_DATASET_FILTER` for the filter; `E_AMBIGUOUS_MEASURE_GRAIN` for the aggregate |
 
 A ClickHouse `DateTime` is an instant; its zone decides how it prints and
 which calendar day or hour it falls on. A column without a zone, `now()`,

@@ -406,7 +406,10 @@ Access. `validate --url` checks a metric's source columns against
 that the connected user cannot see is hidden from that user (`Executor`
 adds it to the hidden metrics), and `restrict` does not read `source.x` as
 a field named `x` of a dataset named `source`. The column therefore appears
-in no SQL, error or suggestion.
+in no SQL, error or suggestion. Under a policy file, `source.x` counts as
+reading every field of the dataset whose expression reads the column `x`, so
+hiding any of them hides the metric, while the column's data stays protected
+by ClickHouse column grants.
 
 ## AGG is reserved
 

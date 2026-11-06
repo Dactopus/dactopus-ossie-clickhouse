@@ -17,8 +17,9 @@ a minor release may change the Python API.
   reads something else, and in a dataset that declares a field named
   `source` the qualifier is refused. A model's metric, a key and a
   relationship still cannot reach source columns. `validate --url` checks
-  the column, and a metric over a column the connected user cannot read is
-  hidden from them (`docs/design.md`, "Source columns in a dataset's
+  the column, a metric over a column the connected user cannot read is
+  hidden from them, and a policy file that hides a field also hides the
+  dataset metrics that read its column as `source.column` (`docs/design.md`, "Source columns in a dataset's
   metric").
 
 ### Changed

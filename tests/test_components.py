@@ -489,11 +489,16 @@ MIXED = {
     "filtered_per_customer": "COUNT(*) FILTER (WHERE store_sales.ss_quantity > 1) / "
     "COUNT(DISTINCT customer.c_customer_sk)",
 }
-ONE_ROOT = {
+# Aggregates over one root that need other values from the one side than their neighbours do:
+# one SELECT each, since a value carried for one keeps apart copies of a key for the others
+# (docs/design.md, "A key stored twice on the one side").
+APART = {
     "joined_per_sale": f"{LISTED} / SUM(store_sales.ss_quantity)",
-    "joined_per_item": f"{LISTED} / MAX(item.i_current_price)",
     "filtered_per_sale": f"{CLV_PARTS} FILTER (WHERE item.i_brand = 'x') / "
     "SUM(store_sales.ss_quantity)",
+}
+ONE_ROOT = {
+    "joined_per_item": f"{LISTED} / MAX(item.i_current_price)",
     "count_beside_sum": f"{CLV_PARTS} / COUNT(*)",
     "count_filtered_beside_sum": f"{CLV_PARTS} / "
     "COUNT(*) FILTER (WHERE store_sales.ss_quantity > 1)",
@@ -513,12 +518,24 @@ def test_a_mixed_metric_is_refused_in_every_question_and_reported(name):
     )
 
 
+@pytest.mark.parametrize("name", APART)
+def test_aggregates_that_need_other_values_of_the_one_side_are_answered_apart(name):
+    planner = _with_metrics(**{name: APART[name]})
+    assert name not in unanswerable_metrics(planner.model)
+    sql = planner.sql(Query((name,), ("item.i_brand",)))
+    assert sql.count(" UNION ALL ") == 1 and sql.count("FROM tpcds.store_sales ") == 2
+    # a window over them cannot be split, and is refused
+    window = _with_metrics(w=f"RANK() OVER (ORDER BY {APART[name]})")
+    with pytest.raises(PlanError, match="must be answered apart"):
+        window.sql(Query(("w",), ("item.i_brand",)))
+
+
 @pytest.mark.parametrize("name", ONE_ROOT)
 def test_a_metric_whose_aggregates_stay_within_one_root_is_planned_as_before(name):
     planner = _with_metrics(**{name: ONE_ROOT[name]})
     assert name not in unanswerable_metrics(planner.model)
     sql = planner.sql(Query((name,), ("item.i_brand",)))
-    assert " UNION ALL " not in sql and sql.count("FROM") == 1
+    assert " UNION ALL " not in sql and sql.count("FROM tpcds.store_sales ") == 1
 
 
 def test_a_written_filter_that_would_split_or_mix_is_refused_whatever_else_it_holds():
@@ -584,11 +601,12 @@ def test_metrics_of_one_dataset_are_one_select_as_before():
         "store_sales.total_quantity",
     ):
         sql = planner.sql(Query((name,), ("item.i_brand",)))
-        assert "UNION ALL" not in sql and sql.count("FROM") == 1
+        assert "UNION ALL" not in sql and sql.count("FROM tpcds.store_sales ") == 1
     assert planner.sql(Query(("average_sale",), ("item.i_brand",))).startswith(
-        "SELECT item.i_brand AS i_brand, (SUM(store_sales.ss_ext_sales_price) * 1.0) / "
+        "SELECT item.__e1 AS i_brand, (SUM(store_sales.ss_ext_sales_price) * 1.0) / "
         "COUNT(store_sales.ss_item_sk) AS average_sale FROM tpcds.store_sales AS store_sales "
-        "LEFT JOIN tpcds.item AS item"
+        "LEFT JOIN (SELECT DISTINCT item.i_item_sk AS __k0, item.i_brand AS __e1 "
+        "FROM tpcds.item AS item) AS item"
     )
 
 

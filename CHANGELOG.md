@@ -123,6 +123,39 @@ a minor release may change the Python API.
   `E_UNAGGREGATED_FINER_GRAIN_REFERENCE`). ClickHouse rejected it with
   error 215 unless the field was a dimension. `validate` and the MCP
   server hide the metric.
+- A key stored twice in a dataset on the one side of a relationship no
+  longer counts the root's rows twice. ClickHouse does not enforce
+  uniqueness, so with customer C1 written two times, both EAST,
+  `orders.total_revenue` by `customers.region` gave EAST 650 where the
+  answer is 350. A root row now counts once in each group it matches, as
+  the Layer 3 spec requires (apache/ossie#653, `wide_table_semantics.md`
+  section 4, which defers to Layer 2). Aggregates that need other values
+  of the repeated dataset than their neighbours do, such as `SUM(amount)
+  FILTER (WHERE customers.region = 'WEST')` next to `SUM(amount)`, are
+  answered in SELECTs of their own and merged on the dimensions, as
+  metrics of several facts are; one metric with such aggregates is split
+  the same way, and so is an aggregate written in a filter
+  (`COUNT(orders.id) > 2`), which joins the SELECT of the aggregates
+  that need the same values. The generated SQL changes: in a question
+  with an aggregate that repeated rows change (`SUM`, `COUNT(x)`, `AVG`)
+  and a join, each joined dataset is a derived table, `LEFT JOIN (SELECT
+  DISTINCT key, values ...) AS customers`, of the values the question
+  reads from it. A question with only `MIN`, `MAX`, `DISTINCT` and
+  `uniq` aggregates or none, a dictionary read with `dictGetOrNull`, and
+  a semi-join keep their SQL, and so do the answers on data without a
+  repeated key. Now refused, with a message that names the reason: a
+  window metric over aggregates that need other values of the repeated
+  dataset, such as `RANK() OVER (ORDER BY SUM(x) FILTER (WHERE
+  customers.region = 'WEST') / SUM(x))` (`validate` reports it and the
+  MCP server hides it; it was answered over one join, with the numbers
+  above), and a window metric in a question with metrics that are
+  answered apart. Still answered with a root row counted twice: a row
+  filter that reads the root and the repeated dataset in one expression
+  and passes both copies of a key that differ in it (`customers.weight >
+  0 OR orders.amount > 150`; `docs/design.md`, "A key stored twice on
+  the one side"). A large table on the one side costs more: order lines
+  grouped by an order field took 3.0 s against 0.85 s on 10 million
+  orders.
 
 ## [0.13.0] - 2026-11-01
 

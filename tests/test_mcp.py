@@ -211,7 +211,7 @@ async def test_query_and_error(client):
     )  # fmt: skip
     out = r.structured_content
     assert out["columns"] == ["i_category", "total_sales"] and out["row_count"] == 3
-    assert "LEFT JOIN tpcds.item" in out["sql"] and "ORDER BY total_sales DESC" in out["sql"]
+    assert "FROM tpcds.item AS item" in out["sql"] and "ORDER BY total_sales DESC" in out["sql"]
     assert out["truncated"] and "LIMIT 3 " in out["sql"]  # the question's limit, not 4
     values = [float(row[1]) for row in out["rows"]]
     assert values == sorted(values, reverse=True)

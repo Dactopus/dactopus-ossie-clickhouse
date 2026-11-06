@@ -50,7 +50,14 @@ The planner trusts the declared key; ClickHouse does not enforce
 uniqueness. In a multi-tenant schema an id is often unique only within a
 tenant, and then the key is `[tenant_id, customer_id]`, not
 `[customer_id]`. Declared too narrow, it lets a relationship on
-`customer_id` alone through, and that join multiplies rows.
+`customer_id` alone through, and a root row then matches every customer
+with that id. A key that is declared right but stored twice, such as one
+customer written two times, does not multiply the root's rows in a metric or
+a filter on one dataset: the planner reads the dataset as the distinct values
+the question asks of it. A row filter that reads the root and that dataset in
+one expression (`customers.weight > 0 OR orders.amount > 150`) can still count
+a root row once for each copy that differs in the part on the dataset
+(`docs/design.md`, "A key stored twice on the one side").
 
 ```yaml
 datasets:

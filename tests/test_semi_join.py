@@ -702,7 +702,8 @@ def test_a_metric_filtered_on_the_other_dataset_stays_over_its_rows():
     """FILTER (WHERE orders.x) in a metric makes orders one of its datasets, so
     the question is answered over orders rows as before, not with a semi-join."""
     sql = Planner(MODEL).sql(Query(("paid_customers",), (), ("orders.total > 0",)))
-    assert "FROM ossie_semi.orders AS orders LEFT JOIN ossie_semi.customers" in sql
+    assert "FROM ossie_semi.orders AS orders LEFT JOIN (SELECT DISTINCT" in sql
+    assert "FROM ossie_semi.customers AS customers" in sql
     assert " IN (" not in sql
 
 

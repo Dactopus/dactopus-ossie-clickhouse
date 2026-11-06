@@ -352,6 +352,150 @@ target with no declared key is refused too, where the validator skips the
 check: nothing then rules out fan-out. The model still loads; questions
 that need such a join fail, and `validate` reports the relationship.
 
+### A key stored twice on the one side
+
+ClickHouse does not enforce the uniqueness of a declared key, and a
+`MergeTree` table keeps every row it is given. Take the spec's Appendix B.1
+with customer C1 stored twice, both rows in EAST: a plain `LEFT JOIN` from
+`orders` counts C1's orders twice in EAST, 650 for `orders.total_revenue`
+where the answer is 350. Layer 3 (`wide_table_semantics.md`, section 4,
+on `LEFT JOIN`) answers a model that breaks its declared multiplicity as
+Layer 2 does, and Layer 2 (`relational_semantics.md`, section 8.1) gives an
+aggregate in a group the home rows that have at least one joined row in it,
+each counted once. If C3 is stored with two regions, WEST and SOUTH, an
+order of C3 belongs to both groups, once in each.
+
+Rule. In a `SELECT` with an aggregate that repeated rows change, each set of
+datasets the root joins through one first relationship (a subtree) is
+joined as a derived table, not as tables:
+
+```sql
+LEFT JOIN (
+  SELECT DISTINCT customers.id AS __k0,
+         customers.region AS __e1,
+         customers.region = 'EAST' AS __e2,
+         1 AS __m
+  FROM customers
+) AS customers ON orders.customer_id = customers.__k0
+```
+
+- Contents. The derived table holds the key of the first step and, as
+  `__e1`, `__e2` and so on, each largest expression of the question that
+  reads columns of that subtree and nothing else: a dimension, a condition
+  of a filter, an argument. A chain (orders, customers, regions) is one
+  derived table, joined inside it, so that two rows of `customers` with
+  different `region_id` that lead to one region name do not count twice.
+  Two rows that differ only in a column the question never reads collapse.
+- Filters. A condition is carried as a value and applied outside. A root row
+  that matched nothing sees the subtree's columns as NULL, and a filter may
+  pass it (`customers.region IS NULL`), which a filter applied inside could
+  not express. `__m` is 1 in a matched row; the expression of a root row
+  with `__m IS NULL` is the expression over NULL columns, typed by
+  `system.columns` (`CAST(NULL, 'Nullable(String)')`). It is what a plain
+  join leaves there on the same server: the type's default for an array, a map
+  and the geo types (`Ring`, `Polygon`, ...), which cannot be Nullable; NULL for a
+  Variant. A tuple, a `Point` and a `JSON` are NULL on 26.9 and the default on a
+  server that cannot make them Nullable, which the executor asks once with a
+  probe join (`Catalog.nullable_tuple`). A bare column needs none of
+  this: it reads `__eN`, NULL or the default as a plain join gave it.
+- Grouped rows. In HAVING, in the SELECT list outside aggregates and in the
+  clause of a window, only an expression that is a GROUP BY key is read, as
+  the same carried column, so that ClickHouse finds it among the keys
+  (`__m IS NULL` alone would be refused with error 215). The parts of any
+  other expression there are carried one by one: `HAVING UPPER(region) <> 'X'`
+  reads the key `region` inside `UPPER`.
+- Expressions over two datasets. `SUM(orders.amount * customers.weight)` and a
+  `FILTER` on another dataset read the subtree and something else. The parts
+  that read only the subtree are carried (`customers.weight`; the condition of
+  the `FILTER`, a boolean when it reads `customers` alone) and the expression
+  stays outside. When the carried part is all that varies, as in the two
+  examples, copies that differ in it are different rows of Layer 2's DISTINCT,
+  and the answer is Layer 2's.
+- Aggregates that need other values. A carried value keeps apart the copies of a
+  key for every aggregate of its SELECT, so `SUM(orders.amount) FILTER (WHERE
+  customers.region = 'WEST')` next to `SUM(orders.amount)` would count the order
+  of a customer stored in WEST and SOUTH twice in the second. Layer 2 takes the
+  DISTINCT of each aggregate on its own. The aggregates of a question are grouped
+  by the dataset they aggregate and the values they carry (`Planner._carry`), and
+  each group is a SELECT, merged on the dimensions as the groups of several
+  facts are ("Stitch metrics of several facts"). A model's metric with such
+  aggregates (`SUM(x) FILTER (WHERE d.a = 1) / SUM(x)`) is split into one
+  component for each, as one over several datasets is. Dimensions and whole
+  `WHERE` conditions are carried for every aggregate: after the filter they hold
+  one value for a row, and separate nothing. An aggregate that repeated rows do
+  not change (`MAX`, `DISTINCT`) is not hurt by the values of the others, and
+  does not make others apart, and neither does a part that reads only dictionaries.
+  When the metrics of a question differ only in these values (they are answered
+  over one root), an aggregate written in a filter over that root is a unit too:
+  it is computed in the SELECT of the aggregates that need the same values (a
+  SELECT of its own if none does), and the filter is applied to the merged rows.
+  Refused, naming the real reason: a window function over aggregates that need
+  other values (the metric is hidden by `validate`), a window metric in a question
+  with metrics answered apart ("is a window over the merged rows of metrics that
+  need other values of the repeated rows of a dataset they join to"), and, as
+  before, a filter that writes an aggregate over other rows than the metrics'
+  root. One metric whose aggregates read other rows than the root's is refused as
+  before.
+- Where the answer still differs from Layer 2. A filter conjunct that reads the
+  root and the subtree together, `customers.weight > 0 OR orders.amount > 150`:
+  the part on `customers` is carried, and two copies of a customer that differ
+  in it and both pass the conjunct count the order twice (EAST 550 where Layer 2
+  gives 350 on the test data). So does an argument that mixes the root with
+  several parts of the subtree, when copies differ in a part but give the same
+  argument. These are answers beyond Layer 3 ("Answers beyond Layer 3").
+
+Skips, where the plan does not change:
+
+- A `SELECT` with no aggregate, or only aggregates that repeated rows do
+  not change (`MIN`, `MAX`, `DISTINCT`, `uniq`, `any`; see
+  `_REPEAT_SAFE`). `GROUP BY` already collapses repeats, and section 5.6
+  of the spec does the same for a question without metrics.
+- A subtree whose relationships all join a single-key dictionary on its
+  key, or a superset of it. A dictionary has one row for each key, and the
+  column is read with `dictGetOrNull` as before. A dictionary with a dot in
+  its name, which `dictGet*` cannot address, is joined as a table and is
+  not known to be unique.
+- Semi-joins (`IN (SELECT ...)`) cannot repeat a root row and are not
+  changed.
+
+Stitched branches and the components of a model's metric go through the
+same code, so each gets its derived tables.
+
+Not done: a `ReplacingMergeTree` read with `FINAL` on the key of the
+relationship is unique too, but proving it needs the sorting key in the
+catalog. It is the next skip if the cost below matters.
+
+Cost. Measured on 2026-11-06 on ClickHouse 26.9 on the test server (a
+memory limit of 3.26 GiB), best of five runs:
+
+| Case | Plain join | Derived table |
+|---|---|---|
+| TPC-DS SF1, `store_sales` (2.9 million rows) by `item.i_brand` | 0.107 s | 0.109 s |
+| TPC-DS SF1, by customer country and year, filtered on the customer | 0.108 s | 0.119 s |
+| 1 million orders, 3 million order lines, by order channel | 0.10 s | 0.18 s |
+| the same, filtered on order status | 0.08 s | 0.10 s |
+| 10 million orders, 30 million order lines, by order channel | 0.85 s | 3.0 s |
+| the same, filtered on order status | 0.69 s | 1.0 s |
+
+Dimension tables cost almost nothing. The cost is a large table on the one
+side, here order lines read against orders, which dactopus-data-models
+builds as plain `MergeTree`. `GROUP BY` instead of `DISTINCT`,
+`optimize_distinct_in_order` and an explicit `parallel_hash` were not
+faster. With 10 million orders on this server, parallel queries already hit
+the memory limit.
+
+Decision of 2026-11-06: always on, with no switch. The stores this is built
+for have up to a million orders, where it adds about 0.1 s, and a wrong
+revenue is worse than a slow one. If a deployment needs to turn it off, the
+place is the dataset's `custom_extensions` entry under `CLICKHOUSE`, beside
+`dedup`, such as `unique_key: trusted`, where the model author vouches for
+the key. It is added on demand.
+
+The tests are in `tests/test_dedup.py`: DuckDB runs the Layer 2 plan (the
+distinct root key, argument and dimensions after the join and the filter,
+then the aggregate) on Appendix B.1 with C1 and C3 stored twice, and an
+order for a customer that does not exist.
+
 ## Keys and relationships name fields
 
 apache/ossie#486 (`7205e15`) settled what `primary_key`, `unique_keys`,
@@ -959,8 +1103,9 @@ examples use the model of Appendix B.1 (`orders` and `returns` relate to
 | A filter that reads two datasets, `orders.status = 'completed' AND customers.region = 'EAST'`, or two entries of `filters`, one on each dataset (section 3.4) | One `WHERE` over the joins of the metric's root, when that root joins every dataset the filter reads. Refused when one of them could only be searched with a semi-join: the message asks for one filter per side | `E_CROSS_DATASET_FILTER` for the expression. #653 has a single filter, so several entries are a part a binding does not accept (`E_INVALID_QUERY`, sections 3.4 and 3.5) |
 | An aggregate or a metric in a filter: `SUM(orders.amount) > 100`, `orders.revenue > 100` (sections 3.2 and 3.4) | `HAVING` over the groups. A written aggregate that would be split or mixed as in a metric is refused; see the table of "Evaluate each aggregate over its own dataset" | `E_AGGREGATE_IN_WHERE`; predicates on metric values are future (Appendix A.1) |
 | Two metrics with the same final name in different datasets: `orders.revenue` and `returns.revenue` by `customers.region` (section 3.3) | Answered, stitched ("Stitch metrics of several facts"). A dataset's metric is named `dataset.metric`, so the columns are `orders.revenue` and `returns.revenue` and never collide. The question has no alias | `E_NAME_COLLISION` unless an entry has an alias |
-| A model's metric with an aggregate that reads several datasets, or none, or whose `FILTER` reads another dataset: `SUM(orders.amount * customers.weight)`, `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST')`, `COUNT(*) FILTER (WHERE orders.amount > 100)`, `SUM(orders.amount) / COUNT(*)` (section 5.2) | One `SELECT` over one join rooted at the dataset the metric reads (`orders`); `COUNT(*)` counts the rows of that dataset. Refused when another aggregate of the metric reads a dataset the first does not, as in `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST') / COUNT(DISTINCT customers.customer_id)`: see the table of "Evaluate each aggregate over its own dataset" | `E_AMBIGUOUS_MEASURE_GRAIN` |
+| A model's metric with an aggregate that reads several datasets, or none, or whose `FILTER` reads another dataset: `SUM(orders.amount * customers.weight)`, `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST')`, `COUNT(*) FILTER (WHERE orders.amount > 100)`, `SUM(orders.amount) / COUNT(*)` (section 5.2) | One `SELECT` over one join rooted at the dataset the metric reads (`orders`); `COUNT(*)` counts the rows of that dataset. Aggregates that need other values of a key stored twice are answered in SELECTs of their own, merged on the dimensions ("A key stored twice on the one side"). Refused when another aggregate of the metric reads a dataset the first does not, as in `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST') / COUNT(DISTINCT customers.customer_id)`: see the table of "Evaluate each aggregate over its own dataset" | `E_AMBIGUOUS_MEASURE_GRAIN` |
 | A window function over the grouped rows in a model's metric: `RANK() OVER (ORDER BY SUM(orders.amount) DESC)`, `SUM(SUM(orders.amount)) OVER ()` (section 5.2) | Answered in the same `SELECT`, over the grouped rows. The three window metrics of `tests/fixtures/tpcds.yaml`, Ossie's own example, rely on it. Refused when the metric's aggregates read several datasets, in a question that groups nothing, and in a stitched question; see the same table | `E_DEFERRED_WINDOWED_METRIC` |
+| An expression that reads two datasets next to a key stored twice: a filter on the root and the one side in one expression, `customers.weight > 0 OR orders.amount > 150`, with C1 stored twice (weights 1 and -1) | The derived table carries the part that reads only `customers` and the conjunct stays outside: an order that passes it for both copies counts twice (EAST 550 for `orders.total_revenue`). An aggregate over two datasets or with a `FILTER` on the one side is answered as Layer 2 does, in a SELECT of its own when its neighbours need other values. See "A key stored twice on the one side" | `E_CROSS_DATASET_FILTER` for the filter; `E_AMBIGUOUS_MEASURE_GRAIN` for the aggregate |
 
 A ClickHouse `DateTime` is an instant; its zone decides how it prints and
 which calendar day or hour it falls on. A column without a zone, `now()`,

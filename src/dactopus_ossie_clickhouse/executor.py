@@ -300,19 +300,21 @@ class Executor:
         self.databases = sorted({db for db, _ in tables})
         # Which functions outside the spec are aggregates, for the planner's checks.
         aggregate = partial(self.functions.has, aggregate=True) if self.functions else None
+        nullable_tuple = self._nullable_tuple()
         if not tables:
-            return Catalog(aggregate=aggregate)
+            return Catalog(aggregate=aggregate, nullable_tuple=nullable_tuple)
         params = {"pairs": list(tables)}  # bound server-side: names never enter SQL text
         pairs = "{pairs:Array(Tuple(String, String))}"
         rows = self.client.query(
             f"{TABLES} WHERE (database, name) IN {pairs}", parameters=params
         ).result_rows
         cols = self.client.query(
-            "SELECT database, table, groupArray(name) FROM system.columns "
+            "SELECT database, table, groupArray(name), groupArray(type) FROM system.columns "
             f"WHERE (database, table) IN {pairs} GROUP BY database, table",
             parameters=params,
         ).result_rows
-        columns = {(db, t): frozenset(c) for db, t, c in cols}
+        columns = {(db, t): frozenset(c) for db, t, c, _ in cols}
+        types = {(db, t): dict(zip(c, kinds, strict=False)) for db, t, c, kinds in cols}
         try:
             dicts = self.client.query(
                 "SELECT database, name, attribute.names FROM system.dictionaries "
@@ -323,7 +325,7 @@ class Executor:
             dicts = []
         attributes = {(db, n): set(a) for db, n, a in dicts}
 
-        catalog = Catalog(aggregate=aggregate)
+        catalog = Catalog(aggregate=aggregate, nullable_tuple=nullable_tuple)
         self.undecided: set[str] = set()  # datasets whose need for FINAL this user cannot see
         for db, name, engine, full in rows:
             key = None
@@ -342,8 +344,23 @@ class Executor:
                     columns=columns.get((db, name), frozenset()),
                     dedup=mode == "final" or (mode != "none" and bool(versions)),
                     dictionary_key=key,
+                    types=types.get((db, name), {}),
                 )
         return catalog
+
+    def _nullable_tuple(self) -> bool:
+        """Whether a LEFT JOIN with join_use_nulls = 1 gives an unmatched row NULL for a
+        tuple column, as 26.9 does; older servers give the default tuple. Asked of the
+        server, since the planner types the NULL of a row that matched nothing the same way."""
+        try:
+            kind = self.client.query(
+                "SELECT toTypeName(b.x) FROM (SELECT 1 AS k) AS a "
+                "LEFT JOIN (SELECT 1 AS k, tuple(1) AS x WHERE 0) AS b ON a.k = b.k "
+                "SETTINGS join_use_nulls = 1"
+            ).result_rows[0][0]
+        except Exception:
+            return False
+        return str(kind).startswith("Nullable(")
 
     def _keeps_versions(self, table, engine, full, depth=0) -> bool | None:
         """Whether reading a table needs FINAL: it is a ReplacingMergeTree

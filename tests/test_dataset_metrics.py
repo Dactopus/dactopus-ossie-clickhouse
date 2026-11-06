@@ -69,7 +69,7 @@ def refusal(planner: Planner, q: Query) -> str:
 def test_bare_names_read_the_own_fields(planner):
     sql = planner.sql(Query(("orders.revenue",), ("customers.region",)))
     assert 'SUM(orders.amount) AS "orders.revenue"' in sql
-    assert "FROM ossie_scoped.orders AS orders LEFT JOIN ossie_scoped.customers" in sql
+    assert "FROM ossie_scoped.orders AS orders LEFT JOIN (SELECT DISTINCT" in sql
 
 
 def test_two_datasets_metrics_of_one_name(planner):

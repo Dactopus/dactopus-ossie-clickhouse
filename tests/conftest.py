@@ -36,7 +36,7 @@ class FakeClickHouse:
         if "currentUser()" in sql:
             rows = [(self.user, [], self.database)]
         elif "system.columns" in sql:
-            rows = [(*k, sorted(self.tables[k][3])) for k in known]
+            rows = [(*k, sorted(self.tables[k][3]), []) for k in known]
         elif "target_table" in sql:
             rows = [self.tables[k][2] for k in known]
         elif "system.tables" in sql:

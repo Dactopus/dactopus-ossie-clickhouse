@@ -338,6 +338,12 @@ Window functions over aggregates (`RANK() OVER (...)`, `LAG(SUM(x))`)
 pass through in the same `SELECT`; their `PARTITION BY` and `ORDER BY`
 columns are grouping keys and may come from any joined dataset. The spec cannot say which grain a
 window metric needs, so the question has to supply the right dimensions.
+A question with a window metric needs something to group the rows: a
+dimension, or an aggregate outside a window. Without either,
+`SUM(x) OVER (ORDER BY k)` would return a row for each row of the data, so
+the question is refused. A model's metric cannot read a field outside every
+aggregate (`SUM(x) * customer.rate`), even when the question groups by that
+field; `validate` reports it.
 A window metric cannot be used in a filter (ClickHouse does not allow a
 window function in `HAVING`); the planner rejects it with a message.
 An aggregate over aggregates is a window or nothing: `SUM(SUM(x)) OVER ()`

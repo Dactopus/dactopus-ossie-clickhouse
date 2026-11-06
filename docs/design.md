@@ -544,8 +544,8 @@ A metric that refuses in every question is hidden from agents like an
 untranslatable one, since every attempt would cost a turn, and is
 reported by `validate`: a bare `COUNT(*)`, an unknown field, an aggregate
 that repeats rows of a dataset next to an aggregate over several
-datasets, and a metric of components that has a window function or a
-column outside every aggregate.
+datasets, a model's metric with a column outside every aggregate, and a
+metric of components that has a window function.
 
 ## Aggregates over aggregates are refused
 
@@ -596,9 +596,10 @@ Cases, against #653:
 | The same, next to an aggregate whose arguments read a dataset it does not read: `SUM(lines.qty * products.price) / COUNT(DISTINCT customers.id)`, `SUM(orders.amount) FILTER (WHERE customers.segment = 'retail') / COUNT(DISTINCT customers.id)` | Refused in every question and reported by `validate` | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
 | An aggregate whose arguments read no dataset, `COUNT(*)`, with or without a `FILTER` | Counts the rows of the one dataset that every aggregate of the metric, `FILTER`s included, reads, as before; refused when they read several | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
 | A column outside every aggregate, in a metric of components | Refused | Refused (`E_UNAGGREGATED_FINER_GRAIN_REFERENCE`) |
-| A column outside every aggregate, in a metric of one dataset | Sent as written, which ClickHouse accepts only for a dimension of the question | Refused |
+| A column outside every aggregate, in a model's metric of one dataset | Refused (`validate` reports it), whether or not the question groups by the column | Refused |
 | A window function in a metric of components | Refused | Refused (`E_DEFERRED_WINDOWED_METRIC`) |
-| A window function in a metric of one dataset | Answered, in the same `SELECT` | Refused |
+| A window function in a metric of one dataset | Answered, in the same `SELECT`, over the grouped rows (`SUM(SUM(x)) OVER ()`, `RANK() OVER (ORDER BY SUM(x))`, `RANK() OVER (ORDER BY dimension)`) | Refused |
+| The same, in a question with no dimension and no aggregate outside a window (`SUM(x) OVER (ORDER BY k)` alone) | Refused for that question: nothing groups the rows, so the window returns one row per row. The metric stays listed, since a question with a dimension is planned | Refused |
 | Aggregates written into a question's filter that would be split or mixed as in a metric, `SUM(a.x) / COUNT(DISTINCT b.k) > 5`, with or without a `COUNT(*)` beside them, or a written aggregate beside a metric of another dataset, `total_sales > COUNT(DISTINCT b.k)` | Refused; name a metric | No such filter |
 | Metrics of different datasets compared in one filter, `total_sales > store_count` | Each checked against the root as a selected metric, so stitched or refused as one would be | No such filter |
 

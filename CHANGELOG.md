@@ -109,6 +109,21 @@ a minor release may change the Python API.
   in both directions. The generated SQL says `DESC NULLS FIRST`
   (`docs/design.md`, "NULL placement in ORDER BY").
 
+### Fixed
+
+- A question with a window metric, no dimensions and no aggregate outside a
+  window, such as `SUM(orders.amount) OVER (ORDER BY orders.order_id)`, is
+  refused, naming the metric. Nothing grouped the rows, so it returned one
+  row per order. With a dimension, or beside a metric with an aggregate,
+  the question is planned as before, and so is a window over grouped rows
+  (`RANK() OVER (ORDER BY d_year DESC)` by `d_year`).
+- A model's metric that reads a field outside every aggregate, such as
+  `SUM(orders.amount) * customers.weight`, is refused, naming the metric and
+  the field, whether or not the question groups by that field (spec
+  `E_UNAGGREGATED_FINER_GRAIN_REFERENCE`). ClickHouse rejected it with
+  error 215 unless the field was a dimension. `validate` and the MCP
+  server hide the metric.
+
 ## [0.13.0] - 2026-11-01
 
 ### Changed

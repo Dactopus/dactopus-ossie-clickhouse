@@ -40,6 +40,10 @@ CLI work without them.
 Point it at a model and a ClickHouse. The
 [TPC-DS reference model](https://github.com/apache/ossie/blob/main/examples/tpcds_semantic_model.yaml)
 from the Ossie repository is in [tests/fixtures/tpcds.yaml](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/tests/fixtures/tpcds.yaml).
+For a store or a GA4 property,
+[dactopus-data-models](https://github.com/Dactopus/dactopus-data-models)
+ships Ossie models for orders, products, customers and sessions, with the
+dbt packages that build their tables from Shopify, WooCommerce and GA4.
 ClickHouse credentials go in the URL or in `OSSIE_CLICKHOUSE_URL`
 (default `http://127.0.0.1:8123`). `https://` connects with TLS on any
 port, `http://` without it; no other scheme is accepted. A database in the URL path

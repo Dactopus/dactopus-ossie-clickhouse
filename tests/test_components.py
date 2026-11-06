@@ -539,6 +539,26 @@ def test_a_written_filter_that_would_split_or_mix_is_refused_whatever_else_it_ho
     assert "HAVING" in sql and "UNION ALL" not in sql
 
 
+def test_a_named_metric_beside_a_written_aggregate_of_another_dataset_is_refused():
+    """The filter reads store_sales through total_sales, so as a whole it reads the
+    root; one join would count the stores with a sale."""
+    condition = "total_sales > COUNT(DISTINCT store.s_store_sk)"
+    message = refusal(_with_metrics(), Query(("total_sales",), ("store.s_state",), (condition,)))
+    assert f"filter {condition!r} applies aggregates of store and store_sales rows" in message
+
+
+def test_metrics_of_different_datasets_named_in_one_filter_are_each_answered_on_their_own():
+    planner = _with_metrics(store_count="COUNT(DISTINCT store.s_store_sk)")
+    q = Query(("total_sales",), ("store.s_state",), ("total_sales > store_count",))
+    sql = planner.sql(q)
+    # the stores are counted over store rows, not over the sales that reference them
+    assert " UNION ALL " in sql
+    assert "COUNT(DISTINCT store.s_store_sk) AS __m1, 1 AS __b1 FROM tpcds.store AS store " in sql
+    # by a dimension store does not reach, refused as a selected store_count is
+    message = refusal(planner, Query(("total_sales",), ("item.i_brand",), q.filters))
+    assert "'store_count' cannot be with this question's dimensions" in message
+
+
 # --- unchanged (point 3) ------------------------------------------------------------
 
 

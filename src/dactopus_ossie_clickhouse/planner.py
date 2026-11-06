@@ -34,6 +34,7 @@ from dactopus_ossie_clickhouse.model import (
     covers_key,
     declared_keys,
     join_problem,
+    reads_source,
     suggest,
     time_zone,
 )
@@ -307,7 +308,7 @@ def _loose_column(tree: exp.Expression) -> exp.Column | None:
     return None
 
 
-@dataclass
+@dataclass(eq=False)  # compared by identity: units.index(u), u in members
 class _Unit:
     """What a stitched branch computes: a model's metric as a whole, or one
     component of a metric whose aggregates read different datasets."""
@@ -562,13 +563,11 @@ class Planner:
                 continue
             # A dataset's source.column reads no field (unless the dataset declares one
             # named source, and then the metric is refused).
-            reads_source = ds is not None and not self._fields[ds.name.upper()].get(
-                SOURCE_QUALIFIER
-            )
+            from_source = ds is not None and reads_source(ds)
             read = {
                 f"{c.table or (ds.name if ds else '')}.{c.name}".upper()
                 for c in tree.find_all(exp.Column)
-                if not (reads_source and c.table.upper() == SOURCE_QUALIFIER)
+                if not (from_source and c.table.upper() == SOURCE_QUALIFIER)
             }
             if read & wanted:
                 over.append(metric)
@@ -677,7 +676,7 @@ class Planner:
         source's columns as ``source.column`` (rules 1 to 3 of "Metric Scoping")."""
         if node.table:
             if node.table.upper() == SOURCE_QUALIFIER:
-                if self._fields[ds.name.upper()].get(SOURCE_QUALIFIER):
+                if not reads_source(ds):
                     raise PlanError(
                         f"{node.sql()} in {expression!r}: dataset {ds.name!r} declares a field "
                         f"named {SOURCE_QUALIFIER.lower()}, which takes precedence over the "
@@ -1044,7 +1043,7 @@ class Planner:
                 rows[label] = tree
                 row_filters.append(f)
                 continue
-            self._written_aggregates(f)
+            named = self._written_aggregates(f)
             # HAVING may only see aggregates and GROUP BY expressions.
             for col in tree.find_all(exp.Column):
                 if col.find_ancestor(exp.AggFunc):
@@ -1060,6 +1059,11 @@ class Planner:
             having.append(tree)
             aggregate_filters.append(f)
             checked.append((label, _aggregate_inputs(tree)))
+            # Each metric it names on its own too, after the filter, which errors name first.
+            checked += [
+                (f"metric {m.name!r}", _aggregate_inputs(self._metric_tree(m, set())))
+                for m in named
+            ]
 
         if not nested and self._splits(q, aggregate_filters):
             # Never one SELECT over a join: a component counts the rows of its own dataset.
@@ -1425,21 +1429,37 @@ class Planner:
             )
         return _in(self._keys(root, path[-1].to_columns), sub)
 
-    def _written_aggregates(self, f: str) -> None:
+    def _written_aggregates(self, f: str) -> list[OssieMetric]:
         """Refuse a filter that writes aggregates the way a split or a mixed metric
         is written, such as ``SUM(a.x) / COUNT(DISTINCT b.k) > 5``: over one join,
         ``b`` would be counted over the rows ``a`` references. A metric of the
         model that does the same is answered by components; a filter names it.
-        An aggregate that names no dataset (``COUNT(*)``) does not lift the check."""
+        An aggregate that names no dataset (``COUNT(*)``) does not lift the check,
+        and a metric the filter names beside a written aggregate counts with the
+        datasets it aggregates (``total_sales > COUNT(DISTINCT b.k)``).
+
+        Returns the metrics the filter names. plan() checks each against the root
+        on its own, as a selected metric: in ``total_sales > store_count`` the
+        filter as a whole reads the root, and one join would count stores over
+        the sales rows."""
+        tree = self._parse(f)
+        metrics: dict[str, OssieMetric] = {}
+        for col in tree.find_all(exp.Column):
+            if m := self._named_metric(col):
+                metrics.setdefault(m.name, m)
         reads: Reads = [
             (agg, {self.dataset(t).name for t in args}, {self.dataset(t).name for t in filtered})
-            for agg, args, filtered in _aggregate_reads(self._parse(f))
+            for agg, args, filtered in _aggregate_reads(tree)
         ]
         if pair := _mixed(reads):
             raise PlanError(self._mixed_message(f"filter {f!r}", *pair))
         named = [(agg, next(iter(args))) for agg, args, filtered in reads if args]
         if all(len(args) == 1 and filtered <= args for _, args, filtered in reads if args):
-            homes = sorted({home for _, home in named})
+            written = {home for _, home in named}
+            if written:
+                for m in metrics.values():
+                    written.update(_homes(_aggregate_inputs(self._metric_tree(m, set()))))
+            homes = sorted(written)
             if len(homes) > 1:
                 raise PlanError(
                     f"filter {f!r} applies aggregates of {' and '.join(homes)} rows in one "
@@ -1447,6 +1467,7 @@ class Planner:
                     "of only one of them; name a metric of the model that does this, or "
                     "filter on an aggregate of one dataset"
                 )
+        return list(metrics.values())
 
     def _merge_names(self, q: Query, having: list[str]) -> tuple[list[str], list[exp.Expression]]:
         """The metrics a stitched question answers, selected or only named in an

@@ -26,6 +26,7 @@ from dactopus_ossie_clickhouse.model import (
     all_metrics,
     dialects_of,
     expression_text,
+    reads_source,
 )
 
 
@@ -366,7 +367,7 @@ def source_columns(tree: exp.Expression, ds: OssieDataset) -> list[str]:
     """The source columns a parsed metric of ``ds`` reads as ``source.column``, in order
     of appearance. Empty when ``ds`` declares a field named ``source``: the qualifier is
     then that field, and the planner refuses the metric (spec, "Metric Scoping")."""
-    if any(f.name.upper() == SOURCE_QUALIFIER for f in ds.fields or []):
+    if not reads_source(ds):
         return []
     return [
         c.name for c in tree.find_all(exp.Column) if c.table and c.table.upper() == SOURCE_QUALIFIER

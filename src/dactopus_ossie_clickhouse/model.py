@@ -303,6 +303,13 @@ def time_zone(doc: OssieDocument) -> str:
     return data.get("time_zone", DEFAULT_TIME_ZONE)
 
 
+def reads_source(ds: OssieDataset) -> bool:
+    """Whether ``source.column`` in a metric of ``ds`` names a column of its source:
+    unless ``ds`` declares a field named ``source``, which the name then refers to
+    (spec, "Metric Scoping")."""
+    return all(f.name.upper() != SOURCE_QUALIFIER for f in ds.fields or [])
+
+
 def declared_keys(ds: OssieDataset) -> list[list[str]]:
     """The primary key and unique keys of ``ds``, empty ones dropped."""
     return [k for k in [ds.primary_key, *(ds.unique_keys or [])] if k]

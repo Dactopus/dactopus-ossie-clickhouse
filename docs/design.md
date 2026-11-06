@@ -596,7 +596,8 @@ Cases, against #653:
 | A column outside every aggregate, in a metric of one dataset | Sent as written, which ClickHouse accepts only for a dimension of the question | Refused |
 | A window function in a metric of components | Refused | Refused (`E_DEFERRED_WINDOWED_METRIC`) |
 | A window function in a metric of one dataset | Answered, in the same `SELECT` | Refused |
-| Aggregates written into a question's filter that would be split or mixed as in a metric, `SUM(a.x) / COUNT(DISTINCT b.k) > 5`, with or without a `COUNT(*)` beside them | Refused; name a metric | No such filter |
+| Aggregates written into a question's filter that would be split or mixed as in a metric, `SUM(a.x) / COUNT(DISTINCT b.k) > 5`, with or without a `COUNT(*)` beside them, or a written aggregate beside a metric of another dataset, `total_sales > COUNT(DISTINCT b.k)` | Refused; name a metric | No such filter |
+| Metrics of different datasets compared in one filter, `total_sales > store_count` | Each checked against the root as a selected metric, so stitched or refused as one would be | No such filter |
 
 The rows with a departure share a reason: `query` is not a Layer 3
 binding. Its questions carry several filters, aggregate filters, sorting

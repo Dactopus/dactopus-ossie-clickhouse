@@ -636,6 +636,137 @@ def test_a_column_outside_every_aggregate_is_refused():
     assert "bare" in unanswerable_metrics(planner.model)
 
 
+def _b1_planner(tmp_path, model_metrics=(), orders_metrics=()):
+    """The spec's Appendix B.1 model with extra metrics, no server needed."""
+    data = model_data("ossie_components_x")
+    data["metrics"] += [{"name": n, "expression": expression(e)} for n, e in model_metrics]
+    orders = next(d for d in data["datasets"] if d["name"] == "orders")
+    orders.setdefault("metrics", []).extend(
+        {"name": n, "expression": expression(e)} for n, e in orders_metrics
+    )
+    return Planner(load_data(tmp_path, data))
+
+
+NO_AGGREGATE_WINDOWS = [
+    "SUM(orders.amount) OVER (ORDER BY orders.id)",
+    "ROW_NUMBER() OVER (ORDER BY orders.id)",
+    "LAG(orders.amount, 1) OVER (ORDER BY orders.id)",
+]
+
+
+@pytest.mark.parametrize("expr", NO_AGGREGATE_WINDOWS)
+def test_a_window_in_a_question_that_groups_nothing_is_refused(tmp_path, expr):
+    planner = _b1_planner(tmp_path, model_metrics=[("running", expr)])
+    message = refusal(planner, Query(("running",), ()))
+    assert message.startswith("metric 'running' is a window function, and this question has no ")
+    assert "ask for it with a dimension" in message
+    # refused in this question only: with a dimension it plans (a column the window
+    # reads that is not a dimension is ClickHouse's to refuse), and validate keeps it
+    assert "OVER" in planner.sql(Query(("running",), ("customers.region",)))
+    assert "running" not in unanswerable_metrics(planner.model)
+
+
+def test_a_window_with_a_filter_on_rows_still_groups_nothing(tmp_path):
+    planner = _b1_planner(
+        tmp_path, model_metrics=[("running", "SUM(orders.amount) OVER (ORDER BY orders.id)")]
+    )
+    message = refusal(planner, Query(("running",), (), ("orders.amount > 10",)))
+    assert message.startswith("metric 'running' is a window function")
+
+
+def test_a_dataset_metric_window_in_a_question_that_groups_nothing_is_refused(tmp_path):
+    planner = _b1_planner(tmp_path, orders_metrics=[("running", "SUM(amount) OVER (ORDER BY id)")])
+    message = refusal(planner, Query(("orders.running",), ()))
+    assert message.startswith("metric 'orders.running' is a window function")
+    assert "orders.running" not in unanswerable_metrics(planner.model)
+
+
+def test_a_window_beside_an_aggregate_is_not_refused_here(tmp_path):
+    """A SELECT with an aggregate outside a window is one group; what a window there
+    may read is ClickHouse's to say."""
+    planner = _b1_planner(
+        tmp_path, model_metrics=[("running", "SUM(orders.amount) OVER (ORDER BY orders.id)")]
+    )
+    assert "OVER" in planner.sql(Query(("running", "total_revenue")))
+
+
+def test_a_window_in_a_stitched_question_is_refused_as_a_window(tmp_path):
+    planner = _b1_planner(
+        tmp_path, model_metrics=[("running", "SUM(orders.amount) OVER (ORDER BY orders.id)")]
+    )
+    for dimensions in ((), ("customers.region",)):
+        message = refusal(planner, Query(("running", "total_revenue", "total_returns"), dimensions))
+        assert message.startswith("metric 'running' is a window over the merged rows")
+
+
+def test_a_window_over_a_dimension_ranks_the_groups(tmp_path):
+    """A window over the grouped rows needs no aggregate when it reads dimensions."""
+    planner = _b1_planner(
+        tmp_path,
+        model_metrics=[("region_rank", "RANK() OVER (ORDER BY customers.region DESC)")],
+    )
+    sql = planner.sql(Query(("region_rank",), ("customers.region",)))
+    assert "OVER" in sql and "GROUP BY" in sql
+    assert "region_rank" not in unanswerable_metrics(planner.model)
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "SUM(SUM(orders.amount)) OVER ()",
+        "RANK() OVER (ORDER BY SUM(orders.amount) DESC)",
+        "SUM(orders.amount) - LAG(SUM(orders.amount), 1) OVER (ORDER BY customers.region)",
+    ],
+)
+def test_a_window_over_grouped_rows_is_answered(tmp_path, expr):
+    planner = _b1_planner(tmp_path, model_metrics=[("ranked", expr)])
+    assert "OVER" in planner.sql(Query(("ranked",), ("customers.region",)))
+    assert "ranked" not in unanswerable_metrics(planner.model)
+
+
+def test_the_tpcds_window_metrics_are_answered():
+    planner = _with_metrics()
+    for metric, dimensions in (
+        ("cumulative_sales", ("date_dim.d_date",)),
+        ("brand_rank_in_store", ("store.s_store_sk", "item.i_brand")),
+        ("monthly_sales_change", ("date_dim.d_year", "date_dim.d_moy")),
+    ):
+        assert "OVER" in planner.sql(Query((metric,), dimensions))
+    assert unanswerable_metrics(planner.model) == {}
+
+
+@pytest.mark.parametrize("dimensions", [(), ("customers.region",), ("customers.segment",)])
+def test_a_column_outside_every_aggregate_of_one_dataset_is_refused(tmp_path, dimensions):
+    planner = _b1_planner(
+        tmp_path, model_metrics=[("weighted", "SUM(orders.amount) * customers.segment")]
+    )
+    message = refusal(planner, Query(("weighted",), dimensions))
+    assert message.startswith("metric 'weighted' reads customers.segment outside every aggregate")
+    assert "different datasets" not in message  # SUM(orders.amount) alone is one dataset
+    assert "weighted" in unanswerable_metrics(planner.model)
+
+
+def test_a_column_outside_every_aggregate_is_refused_when_it_is_also_a_dimension(tmp_path):
+    planner = _b1_planner(
+        tmp_path, model_metrics=[("weighted", "SUM(orders.amount) * customers.segment")]
+    )
+    message = refusal(planner, Query(("weighted",), ("customers.segment",)))
+    assert "metric 'weighted' reads customers.segment outside every aggregate" in message
+
+
+def test_a_column_in_a_window_clause_is_not_loose(tmp_path):
+    planner = _b1_planner(
+        tmp_path,
+        model_metrics=[
+            (
+                "share",
+                "SUM(orders.amount) / SUM(SUM(orders.amount)) OVER (PARTITION BY customers.region)",
+            )
+        ],
+    )
+    assert "OVER" in planner.sql(Query(("share",), ("customers.region",)))
+
+
 def test_a_window_over_aggregates_of_one_dataset_is_unchanged():
     planner = _with_metrics(
         share="SUM(store_sales.ss_ext_sales_price) / "

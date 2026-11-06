@@ -308,6 +308,12 @@ def _loose_column(tree: exp.Expression) -> exp.Column | None:
     return None
 
 
+def _grouping_aggregate(tree: exp.Expression) -> bool:
+    """Whether ``tree`` has an aggregate that is not itself a window function: one
+    that makes a SELECT without GROUP BY a single group."""
+    return any(not _window_function(agg) for agg in tree.find_all(exp.AggFunc))
+
+
 @dataclass(eq=False)  # compared by identity: units.index(u), u in members
 class _Unit:
     """What a stitched branch computes: a model's metric as a whole, or one
@@ -364,9 +370,9 @@ def _repeated(inputs: Inputs, root: str, one_to_one: set[str]) -> Inputs:
 def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -> dict[str, str]:
     """Metrics the planner refuses in every question, with why.
 
-    One that names an unknown field or reads no column, one whose aggregates
-    read different datasets and that also has a window function or a column
-    outside every aggregate (_split), and one with a duplicate-sensitive
+    One that names an unknown field or reads no column, one with a column
+    outside every aggregate, one whose aggregates read different datasets and
+    that also has a window function (_split), and one with a duplicate-sensitive
     aggregate over each of two datasets that is not split: whichever is the
     root, the other one's rows repeat. Untranslatable metrics are reported by
     untranslatable()."""
@@ -771,6 +777,12 @@ class Planner:
         tree = rewrite_tree(resolved, self._zone)
         if problem := _nested_aggregate(tree):
             raise PlanError(f"metric {m.name!r} {problem}")
+        # A call of a function outside the spec may be an aggregate, and only the server
+        # says (_parse); without its word, ClickHouse decides these two checks.
+        unsure = getattr(self.catalog, "aggregate", None) is None and any(
+            outside_spec(f) for f in resolved.find_all(exp.Anonymous)
+        )
+        tree.meta["unsure"] = unsure
         if scope is not None:
             used.add(scope.name)
             for agg in tree.find_all(exp.AggFunc):  # after rewrite_tree, which replaces some
@@ -798,6 +810,21 @@ class Planner:
                 )
             if pair := _mixed(reads):
                 raise PlanError(self._mixed_message(f"metric {m.name!r}", *pair))
+        if not unsure and (loose := _loose_column(tree)):
+            # E_UNAGGREGATED_FINER_GRAIN_REFERENCE (apache/ossie#653 section 5.2): whether
+            # or not a question also groups by the column.
+            split = bool(self._split_homes(tree))
+            raise PlanError(
+                f"metric {m.name!r} reads {loose.sql('clickhouse')} outside every aggregate"
+                + (
+                    ", and its aggregates read different datasets, so each is answered over "
+                    "its own dataset's rows and a bare column has no row to come from"
+                    if split
+                    else ", so it has no single value for the rows the metric aggregates"
+                )
+                + "; aggregate it, or take it out of the metric and ask for the field as a "
+                "dimension"
+            )
         return tree
 
     @staticmethod
@@ -816,6 +843,16 @@ class Planner:
             "dataset's rows)"
         )
 
+    @staticmethod
+    def _split_homes(tree: exp.Expression) -> set[str]:
+        """The datasets the aggregates of a model's metric read, one each, when they
+        are at least two; empty otherwise (_split)."""
+        reads = _aggregate_reads(tree)
+        if not reads or any(len(args) != 1 or not filtered <= args for _, args, filtered in reads):
+            return set()
+        homes = {next(iter(args)) for _, args, _ in reads}
+        return homes if len(homes) > 1 else set()
+
     def _split(
         self, m: OssieMetric, tree: exp.Expression
     ) -> list[tuple[exp.Expression, str]] | None:
@@ -831,22 +868,11 @@ class Planner:
         or a FILTER on another dataset) is not split, which #653 defers and
         refuses: it is planned as before, unless another aggregate reads a
         dataset it does not (_mixed). An aggregate's FILTER does not give its
-        home. Refused when split: a column
-        outside every aggregate, and a window function (deferred)."""
-        if m.name.upper() in self._scopes:
+        home. Refused when split: a window function (deferred). _metric_tree has
+        refused a column outside every aggregate, split or not."""
+        if m.name.upper() in self._scopes or not self._split_homes(tree):
             return None
         reads = _aggregate_reads(tree)
-        if not reads or any(len(args) != 1 or not filtered <= args for _, args, filtered in reads):
-            return None
-        if len({next(iter(args)) for _, args, _ in reads}) < 2:
-            return None
-        if loose := _loose_column(tree):
-            raise PlanError(
-                f"metric {m.name!r} reads {loose.sql('clickhouse')} outside every aggregate, "
-                "and its aggregates read different datasets, so each is answered over its own "
-                "dataset's rows and a bare column has no row to come from; aggregate it, "
-                "or ask for the field as a dimension"
-            )
         if tree.find(exp.Window):
             raise PlanError(
                 f"metric {m.name!r} is a window function over aggregates that read different "
@@ -992,6 +1018,7 @@ class Planner:
         checked: list[tuple[str, Inputs]] = []  # aggregate expressions
         selects: list[exp.Expression] = []
         group: list[exp.Expression] = []
+        windowed: list[str] = []  # metrics with a window function that reads a column
         seen_aliases: set[str] = set()  # upper-cased: ORDER BY resolves names case-insensitively
 
         def alias(name: str) -> str:
@@ -1022,6 +1049,8 @@ class Planner:
             label = f"metric {m.name!r}"
             tree = self._metric_tree(m, touched.setdefault(label, set()))
             checked.append((label, _aggregate_inputs(tree)))
+            if tree.find(exp.Window) and tree.find(exp.Column) and not tree.meta.get("unsure"):
+                windowed.append(m.name)
             selects.append(tree.as_(alias(m.name)))
 
         rows: dict[str, exp.Expression] = {}  # row filter label -> rewritten tree
@@ -1068,6 +1097,15 @@ class Planner:
                 for m in named
             ]
 
+        if windowed and not group and not any(_grouping_aggregate(e) for e in [*selects, *having]):
+            # Nothing groups the rows, so the window would run over the root's rows and
+            # return one for each, not the one row of a total.
+            raise PlanError(
+                f"metric {windowed[0]!r} is a window function, and this question has no "
+                "dimension and no aggregate outside a window, so nothing groups the rows and "
+                "it would return a row for each row of the data; ask for it with a dimension, "
+                "or put an aggregate inside the window, such as SUM(SUM(x)) OVER ()"
+            )
         if not nested and self._splits(q, aggregate_filters):
             # Never one SELECT over a join: a component counts the rows of its own dataset.
             return self._stitch(q, row_filters, aggregate_filters)

@@ -2,11 +2,11 @@
 
 The data is the F_PRELUDE fixture of the Ossie compliance suite (apache/ossie#237)
 with one more orphan return, so both facts have a NULL-region group. Expected
-rows come from DuckDB running the plan apache/ossie#246 (cc0d070) describes:
+rows come from DuckDB running the plan of apache/ossie#653 section 5.5:
 each metric aggregated on its own, then FULL OUTER JOIN on the dimensions with
-NULL-safe equality (§6.6 row 3), CROSS JOIN of totals with no dimension (§6.6
-row 4). A metric missing from a group shows its value over no rows: NULL for
-SUM, 0 for COUNT (§6.11.5)."""
+NULL-safe equality (the keys are the union of the branches' keys), CROSS JOIN of
+totals with no dimension. A metric missing from a group shows its value over no
+rows: NULL for SUM, 0 for COUNT (section 5.2)."""
 
 from pathlib import Path
 
@@ -48,7 +48,7 @@ COLUMNS = {
     ),
 }
 
-# Each fact aggregated by region, as #246 §6.2 step A.6 resolves a metric.
+# Each fact aggregated by region, as #653 section 5.4 plans a branch.
 REVENUE = """SELECT c.region, SUM(o.amount) AS total_revenue, COUNT(o.id) AS order_count,
     COUNT(o.id) FILTER (WHERE o.status = 'completed') AS completed_orders,
     COALESCE(SUM(o.amount), 0) AS revenue_or_zero
@@ -61,8 +61,8 @@ RETAIL = "WHERE c.segment = 'retail'"
 
 
 def merged(where: str = "") -> str:
-    """Both facts by region: FULL OUTER JOIN, NULL-safe (§6.6 row 3); a fact without
-    the group gives its metric over no rows (§6.11.5)."""
+    """Both facts by region: FULL OUTER JOIN, NULL-safe (section 5.5); a fact without
+    the group gives its metric over no rows (section 5.2)."""
     return f"""
 SELECT COALESCE(r.region, t.region) AS region, r.total_revenue,
        COALESCE(r.order_count, 0) AS order_count,
@@ -91,19 +91,19 @@ CASES = [
         Query(("revenue_or_zero", "total_returns"), ("customers.region",)),
         f"SELECT region, revenue_or_zero, total_returns FROM ({merged()})",
     ),
-    # No dimension: one row of each fact's total (§6.6 row 4).
+    # No dimension: one row of each fact's total (section 5.5).
     (
         Query(("total_revenue", "total_returns")),
         "SELECT (SELECT SUM(amount) FROM orders), (SELECT SUM(amount) FROM returns)",
     ),
-    # Over no rows a sum is NULL and a count 0 (§6.11.5), not ClickHouse's 0 for both.
+    # Over no rows a sum is NULL and a count 0 (section 5.2), not ClickHouse's 0 for both.
     (
         Query(("order_count", "total_returns"), (), ("customers.region = 'SOUTH'",)),
         "SELECT (SELECT COUNT(o.id) FROM orders o JOIN customers c ON o.customer_id = c.id "
         "WHERE c.region = 'SOUTH'), (SELECT SUM(x.amount) FROM returns x "
         "JOIN customers c ON x.customer_id = c.id WHERE c.region = 'SOUTH')",
     ),
-    # A row filter applies to every metric (§6.2 step A.6.1).
+    # A row filter applies to every metric (section 5.4).
     (
         Query(
             ("total_revenue", "total_returns"),
@@ -112,7 +112,7 @@ CASES = [
         ),
         f"SELECT region, total_revenue, total_returns FROM ({merged(RETAIL)})",
     ),
-    # Aggregate filters run on the merged rows (§6.2 step A.9), on a metric not
+    # Aggregate filters run on the merged rows (not in #653), on a metric not
     # selected too.
     (
         Query(("total_revenue", "total_returns"), ("customers.region",), ("total_returns > 6",)),
@@ -240,11 +240,13 @@ def test_counts_are_zero_and_sums_null_for_a_missing_group(ex):
     assert rows["NORTH"][0] is None and rows[None] == (30, 7)
 
 
-def test_one_metric_over_both_facts_is_still_refused():
+def test_one_metric_over_both_facts_is_answered_by_components():
+    """return_rate reads both facts: each side is answered over its own rows
+    (tests/test_components.py has the values)."""
     model = load_model(FIXTURE)
-    assert "return_rate" in unanswerable_metrics(model)
-    with pytest.raises(PlanError):
-        Planner(model).sql(Query(("return_rate",), ("customers.region",)))
+    assert "return_rate" not in unanswerable_metrics(model)
+    sql = Planner(model).sql(Query(("return_rate",), ("customers.region",)))
+    assert " UNION ALL " in sql
 
 
 def test_a_group_that_cannot_reach_a_dimension_names_its_metrics():

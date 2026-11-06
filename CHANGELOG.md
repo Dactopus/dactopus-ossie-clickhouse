@@ -23,6 +23,50 @@ a minor release may change the Python API.
 
 ### Changed
 
+- Each aggregate of a model's metric is evaluated over the rows of its own
+  dataset, as the Layer 3 spec requires since apache/ossie#653
+  (section 5.2); the metric's expression is then evaluated over the
+  values. A metric such as `SUM(orders.amount) / COUNT(DISTINCT
+  customers.customer_id)` was one `SELECT` over `orders LEFT JOIN
+  customers`, so it divided by the customers with an order. It now divides
+  by all customers: the sum and the count are computed in two branches
+  that are merged on the question's dimensions, as metrics of several
+  facts already were (`docs/design.md`, "Evaluate each aggregate over its
+  own dataset"). A metric whose aggregates all read one dataset, a
+  dataset's metric, and an aggregate that reads several datasets
+  (`SUM(lines.qty * products.price)`) are planned as before. Answers that
+  move, on the TPC-DS data in ClickHouse:
+  - `customer_lifetime_value` in total is 52624.706465200004 (total sales
+    over all 100,000 customers), where 0.13.0 gave 57919.727998855364
+    (over the 90,858 customers with a sale).
+  - `customer_lifetime_value` by `customer.c_first_name` for James is
+    51477.36549461814, where 0.13.0 gave 56327.72859226023. The group of
+    customers without a first name is 86156.84807560137, where it was
+    95148.54948766604.
+  - `store_productivity`, sales per employee, is answered: 1654864.98318239
+    in total, and by `store.s_state`. It was refused in every question and
+    hidden from agents; `validate` no longer reports it.
+
+- A question that asks a metric over several datasets for a dimension or
+  a filter that one of its datasets cannot reach is refused, where it was
+  answered over a join. The message names the dimension or filter, the
+  metric and the dataset that cannot reach it, and what would answer it.
+  Every dimension and row filter must be reachable through many-to-one
+  relationships from the dataset of each aggregate (section 5.3), and so
+  must the datasets of a metric named in an aggregate filter. In the
+  TPC-DS model, `customer_lifetime_value` by a field of `store`,
+  `date_dim`, `item` or `store_sales`, and filtered on a field of
+  `date_dim`, `item` or `store`, was answered over the buyers only.
+  `customer` reaches none of them. A metric of `store_sales` answers those
+  questions, such as `COUNT(DISTINCT ss_customer_sk)`. A filter on
+  `customer`, or on `store_sales` as a semi-join, is still answered, and
+  `customer_lifetime_value` filtered on `store_sales.ss_quantity > 50` is
+  42297.0777721388, as before. Also refused: a filter
+  that writes aggregates of different datasets, such as `SUM(a.x) /
+  COUNT(DISTINCT b.k) > 5` (name a metric instead), and a metric whose
+  aggregates read different datasets and that has a window function or a
+  column outside every aggregate (reported by `validate`).
+
 - A call of `AGG` in any capitalization is refused, as the spec reserves
   the name since apache/ossie#662. It was sent to ClickHouse as an unknown
   function. A field, a metric or a column named `agg` is unaffected. The

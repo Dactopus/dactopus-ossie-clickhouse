@@ -101,12 +101,56 @@ does. The planner refuses what that would get wrong:
   section), count a key, `COUNT(orders.order_id)`, or keep it next to an
   aggregate that names the dataset, as in `SUM(orders.amount) / COUNT(*)`.
 
-`COUNT(DISTINCT customer.id)` next to a sales column, as in
-`SUM(sales.amount) / COUNT(DISTINCT customer.id)`, passes: it is about the
-customers who bought, which is what such a metric means. A metric that
-sums columns of two datasets, such as sales per employee written as
-`SUM(sales.amount) / SUM(store.employees)`, is refused in every question
-and reported by `validate`.
+### A metric over two datasets
+
+A model's metric whose aggregates each read one dataset, such as
+`SUM(sales.amount) / COUNT(DISTINCT customer.id)` or sales per employee,
+`SUM(sales.amount) / SUM(store.employees)`, is computed by parts, as the
+Layer 3 spec requires (apache/ossie#653, section 5.2): each aggregate over
+the rows of its own dataset, then the expression over the results. The
+first ratio divides all sales by all customers, buyers or not, and joins
+the customers to the sales nowhere. Without dimensions that is one number from
+each dataset. With dimensions, each part is grouped by them and the groups
+are merged: a group one dataset lacks gives its part the value over no
+rows (NULL for a sum, 0 for a count), so a region with customers and no
+sales shows NULL, and the group of sales with no matching customer shows
+NULL too, as dividing by 0 does.
+
+Every dimension and every row filter must be reachable from the dataset of
+each aggregate through many-to-one relationships. Sales per customer by
+`store.state` is refused: `customer` does not reach `store`, and the
+message says which dimension, which metric and which dataset. Sales per
+buyer, the customers who bought, asks another question, and the dataset
+that holds the sales answers it. Declare it on `sales`
+(next section), with its own fields:
+
+```yaml
+datasets:
+  - name: sales
+    metrics:
+      - name: sales_per_buyer
+        expression:
+          sql: SUM(amount) / COUNT(DISTINCT customer_id)
+```
+
+`sales.sales_per_buyer` works with every dimension `sales` reaches,
+`store.state` included, and with filters on the many side. A filter on
+`sales.quantity > 50` next to the ratio of two datasets divides those
+sales by the customers with at least one such sale.
+
+Three things a metric of several datasets cannot have, and it is refused
+in every question and reported by `validate`: a window function, such as
+`SUM(SUM(sales.amount)) OVER () / COUNT(DISTINCT customer.id)`, a column
+outside every aggregate, such as `SUM(sales.amount) * customer.rate`, and
+`COUNT(*)` next to aggregates of several datasets, which names no dataset.
+An aggregate whose arguments read several datasets, such as
+`SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another
+dataset, is computed over one join, as before: one value for each row of
+the root. A metric with such an aggregate is not split into parts. Next
+to an aggregate over another dataset it follows the rules above: `SUM(lines.qty *
+products.price) / SUM(store.employees)` is refused in every question,
+because a store's staff would count once per line, and `MAX(store.employees)`
+in its place is answered over the stores the lines reference.
 
 A filter on a dataset whose rows reference the metric's, the many side
 of a relationship, keeps each row that at least one matching row
@@ -290,7 +334,7 @@ An aggregate over aggregates is a window or nothing: `SUM(SUM(x)) OVER ()`
 passes, while `AVG(COUNT(x))`, `AVG(SUM(x) OVER ())` and an aggregate in
 another's `FILTER (WHERE ...)` are refused in every question and reported
 by `validate` (ClickHouse refuses them; foundational semantics,
-apache/ossie#246, defers them).
+the merged specification does not define them).
 Frames are the spec's: `ROWS` frames that hold the current row and
 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`; others are
 rejected. A window's `ORDER BY` takes `NULLS FIRST` or `NULLS LAST`;

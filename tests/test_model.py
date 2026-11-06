@@ -17,6 +17,19 @@ from dactopus_ossie_clickhouse.model import overrides, time_zone
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tpcds.yaml"
+# Aggregates of two datasets and a bare column: refused in every question (#653, 5.2).
+REFUSED_METRIC = {
+    "name": "staff_noise",
+    "expression": {
+        "dialects": [
+            {
+                "dialect": "ANSI_SQL",
+                "expression": "SUM(store_sales.ss_ext_sales_price) / "
+                "SUM(store.s_number_employees) + store.s_state",
+            }
+        ]
+    },
+}
 
 
 @pytest.fixture
@@ -600,9 +613,12 @@ def test_load_model_needs_a_path():
 
 def test_cli_several_files(tmp_path, tpcds, capsys):
     sales, rest = split(tpcds)
+    rest["metrics"].append(REFUSED_METRIC)
     a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
-    # The reference model has a metric validate refuses; two files report the same.
-    assert main(["validate", str(FIXTURE)]) == 1
+    tpcds["metrics"].append(REFUSED_METRIC)
+    whole = write(tmp_path, tpcds, "whole.yaml")
+    # The model has a metric validate refuses; two files report the same.
+    assert main(["validate", str(whole)]) == 1
     single = capsys.readouterr().err.splitlines()
     assert main(["validate", str(a), str(b)]) == 1
     pair = capsys.readouterr().err.splitlines()
@@ -645,12 +661,16 @@ def test_non_finite_number(tmp_path, tpcds):
 
 
 def test_cli(tmp_path, tpcds, capsys):
-    # The reference model's store_productivity sums two datasets: no question answers it.
-    assert main(["validate", str(FIXTURE)]) == 1
-    assert "metric 'store_productivity': aggregates columns of store and store_sales" in (
+    # The reference model's store_productivity reads two datasets, and each aggregate
+    # is answered over its own: nothing to report.
+    assert main(["validate", str(FIXTURE)]) == 0
+    capsys.readouterr()
+    # A bare column next to aggregates of different datasets has no row to come from.
+    refused = write(tmp_path, {**tpcds, "metrics": [*tpcds["metrics"], REFUSED_METRIC]}, "r.yaml")
+    assert main(["validate", str(refused)]) == 1
+    assert "metric 'staff_noise': metric 'staff_noise' reads store.s_state outside" in (
         capsys.readouterr().err
     )
-    tpcds["metrics"] = [m for m in tpcds["metrics"] if m["name"] != "store_productivity"]
     assert main(["validate", str(write(tmp_path, tpcds, "ok.yaml"))]) == 0
     assert "ok (tpcds_retail_model" in capsys.readouterr().out
     tpcds["version"] = "0.0.0"

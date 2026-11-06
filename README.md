@@ -104,6 +104,11 @@ questions it refuses.
   ([stitching](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#stitch-metrics-of-several-facts)): every
   region of either fact appears, and a fact without rows in a region
   gives NULL for a sum and 0 for a count.
+- A model's metric over several datasets, such as sales per customer,
+  `SUM(orders.amount) / COUNT(DISTINCT customers.id)`, computes each
+  aggregate over its own dataset's rows, as the Layer 3 spec requires, and
+  divides the results: the customers are all customers, with an order or
+  without ([components](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#evaluate-each-aggregate-over-its-own-dataset)).
 - A metric declared on a dataset (`datasets[].metrics`) is asked for as
   `dataset.metric` and computed over that dataset's rows, `COUNT(*)`
   included ([model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#metrics-on-a-dataset)).
@@ -179,7 +184,8 @@ data must already be in ClickHouse.
   touches through many-to-one relationships, along one path to each. Two
   paths to the same dataset are refused as ambiguous. Metrics of
   different facts are stitched, so each dimension and row filter must be
-  reachable from each fact.
+  reachable from each fact, and from the dataset of each aggregate of a
+  metric over several datasets.
 - Metrics are computed over the root's rows. A question whose metric
   would count a joined dataset's rows repeatedly, or only those the root
   references, is refused with a message, not answered with a wrong

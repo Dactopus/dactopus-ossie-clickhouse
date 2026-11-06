@@ -7,7 +7,27 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Added
+
+- A dataset's metric may read a column of the dataset's `source` as
+  `source.column`, as the spec says since apache/ossie#633:
+  `SUM(source.quantity)` is `SUM(orders.quantity)` in the query, without
+  the dataset declaring a field for the column. The qualifier is case
+  insensitive, `source.amount` is the column even when a field `amount`
+  reads something else, and in a dataset that declares a field named
+  `source` the qualifier is refused. A model's metric, a key and a
+  relationship still cannot reach source columns. `validate --url` checks
+  the column, and a metric over a column the connected user cannot read is
+  hidden from them (`docs/design.md`, "Source columns in a dataset's
+  metric").
+
 ### Changed
+
+- A call of `AGG` in any capitalization is refused, as the spec reserves
+  the name since apache/ossie#662. It was sent to ClickHouse as an unknown
+  function. A field, a metric or a column named `agg` is unaffected. The
+  refusal covers `sql`, `OSSIE_SQL_2026` and `ANSI_SQL` expressions and an
+  agent's filters (`docs/design.md`, "AGG is reserved").
 
 - A window's `ORDER BY` without `NULLS FIRST` or `NULLS LAST` now sorts
   NULL as the largest value, as the spec says since apache/ossie#587:

@@ -36,6 +36,7 @@ from dactopus_ossie_clickhouse.translate import (
     parse,
     passthrough_functions,
     pick_expression,
+    source_columns,
     to_clickhouse,
     untranslatable,
 )
@@ -222,7 +223,7 @@ class Executor:
         """ClickHouse lists in system.tables and system.columns only what the
         connected user may read, so anything the model names and the catalog
         lacks is invisible to this user."""
-        datasets, fields = set(), set()
+        datasets, fields, metrics = set(), set(), set()
         for ds in self.full_model.datasets:
             info = self.catalog.get(ds.name)
             if info is None:
@@ -232,8 +233,12 @@ class Executor:
                 cols = {c.name for c in tree.find_all(exp.Column)}
                 if not cols <= info.columns:
                     fields.add(f"{ds.name}.{f.name}")
+            # A metric that reads a source column this user cannot see goes with it.
+            for name, tree in self._parsed_metrics(ds):
+                if not set(source_columns(tree, ds)) <= info.columns:
+                    metrics.add(name)
         # A relationship goes with the fields it joins on (restrict).
-        return Hidden(frozenset(datasets), frozenset(fields))
+        return Hidden(frozenset(datasets), frozenset(fields), frozenset(metrics))
 
     def _parsed_fields(self, ds: OssieDataset):
         """Each field of ``ds`` that translates, with its parsed expression; the
@@ -241,6 +246,13 @@ class Executor:
         for f in ds.fields or []:
             if f"{ds.name}.{f.name}" not in self.untranslatable_fields:
                 yield f, parse(pick_expression(f.expression))
+
+    def _parsed_metrics(self, ds: OssieDataset):
+        """Each metric of ``ds`` that translates, as "dataset.metric" with its parsed
+        expression; the others are hidden and reported by untranslatable()."""
+        for m in ds.metrics or []:
+            if f"{ds.name}.{m.name}" not in self.untranslatable_metrics:
+                yield f"{ds.name}.{m.name}", parse(pick_expression(m.expression))
 
     def _server_functions(self) -> ServerFunctions | None:
         """What system.functions lists; None when it cannot be read or is empty."""
@@ -411,6 +423,10 @@ class Executor:
                 for c in tree.find_all(exp.Column):
                     if not c.table:
                         needed[c.name] = f"field {f.name!r}"
+            # A metric's source.column is read from the source too.
+            for name, tree in self._parsed_metrics(ds):
+                for col in source_columns(tree, ds):
+                    needed.setdefault(col, f"metric {name!r}")
             for col, where in needed.items():
                 if col not in info.columns:
                     problems.append(

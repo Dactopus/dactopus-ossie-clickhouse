@@ -29,6 +29,7 @@ from dactopus_ossie_clickhouse._vendor.ossie import (
     OssieRelationship,
 )
 from dactopus_ossie_clickhouse.model import (
+    SOURCE_QUALIFIER,
     all_metrics,
     covers_key,
     declared_keys,
@@ -474,9 +475,15 @@ class Planner:
                 tree = parse(pick_expression(m.expression))
             except ValueError:  # refused in every question, and hidden by the executor
                 continue
+            # A dataset's source.column reads no field (unless the dataset declares one
+            # named source, and then the metric is refused).
+            reads_source = ds is not None and not self._fields[ds.name.upper()].get(
+                SOURCE_QUALIFIER
+            )
             read = {
                 f"{c.table or (ds.name if ds else '')}.{c.name}".upper()
                 for c in tree.find_all(exp.Column)
+                if not (reads_source and c.table.upper() == SOURCE_QUALIFIER)
             }
             if read & wanted:
                 over.append(metric)
@@ -560,6 +567,12 @@ class Planner:
                 return self._own_field(scope, node, expression)
             if metrics and (m := self._named_metric(node)):
                 return self._metric_tree(m, used)
+            if node.table.upper() == SOURCE_QUALIFIER and not self._datasets.get(SOURCE_QUALIFIER):
+                raise PlanError(
+                    f"{node.sql()} in {expression!r}: source columns are read only by a "
+                    "dataset's own metrics, as source.column; use a field of the dataset "
+                    "(dataset.field)"
+                )
             if not node.table:
                 hint = ""
                 if metrics:
@@ -575,14 +588,22 @@ class Planner:
         return tree.transform(inline)
 
     def _own_field(self, ds: OssieDataset, node: exp.Column, expression: str) -> exp.Expression:
-        """A column of a metric of ``ds``: one of its fields by bare name, as
-        apache/ossie's validator requires (rule 1 of "Metric Scoping")."""
+        """A column of a metric of ``ds``: one of its fields by bare name, or one of its
+        source's columns as ``source.column`` (rules 1 to 3 of "Metric Scoping")."""
         if node.table:
+            if node.table.upper() == SOURCE_QUALIFIER:
+                if self._fields[ds.name.upper()].get(SOURCE_QUALIFIER):
+                    raise PlanError(
+                        f"{node.sql()} in {expression!r}: dataset {ds.name!r} declares a field "
+                        f"named {SOURCE_QUALIFIER.lower()}, which takes precedence over the "
+                        "qualifier, so its metrics cannot read source columns"
+                    )
+                return self._source_column(ds, node)
             why = (
                 f"names its own fields without the dataset, as {node.name}"
                 if node.table.upper() == ds.name.upper()
-                else "reads only its own fields; a metric over other datasets "
-                "belongs in the model's metrics"
+                else "reads only its own fields and, as source.column, its source's columns; a "
+                "metric over other datasets belongs in the model's metrics"
             )
             raise PlanError(
                 f"{node.sql()} in {expression!r}: a metric of dataset {ds.name!r} {why}"
@@ -595,6 +616,13 @@ class Planner:
                 f"{suggest(node.name, names)}"
             )
         return self._field_expr(ds, f)
+
+    @staticmethod
+    def _source_column(ds: OssieDataset, node: exp.Column) -> exp.Expression:
+        """``source.column`` as ``column`` under the dataset's alias; no field's
+        expression is substituted, even for a field of the same name (spec, "Name
+        Resolution": "each source.column reference with column")."""
+        return exp.column(node.this, table=ds.name)
 
     def _time_strings(
         self, tree: exp.Expression, metrics: bool, scope: OssieDataset | None = None

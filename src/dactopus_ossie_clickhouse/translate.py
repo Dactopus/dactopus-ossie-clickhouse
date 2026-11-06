@@ -19,9 +19,10 @@ from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.parser import Parser
 
-from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument, OssieExpression
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDataset, OssieDocument, OssieExpression
 from dactopus_ossie_clickhouse.model import (
     DEFAULT_TIME_ZONE,
+    SOURCE_QUALIFIER,
     all_metrics,
     dialects_of,
     expression_text,
@@ -289,6 +290,14 @@ def _shape_problem(node: exp.Expression) -> str | None:
         return "ClickHouse's parametric call name(params)(args) is not supported"
     if isinstance(node, exp.Alias):
         return "an alias (AS) is not allowed in an expression"
+    # Spec, expression_language.md "Measure Evaluation: AGG (RESERVED)": the name is
+    # reserved in every capitalization, and an expression must not call it yet.
+    # SQLGlot parses it as an anonymous function, which would reach ClickHouse.
+    if isinstance(node, exp.Anonymous) and node.name.upper() == "AGG":
+        return (
+            "AGG() is reserved by the Ossie spec for a future version and cannot be called "
+            "in an expression yet"
+        )
     if isinstance(node, exp.PercentileCont | exp.PercentileDisc):
         signature = _SIGNATURES[node.sql_name()][0]
         if not isinstance(node.parent, exp.WithinGroup):
@@ -351,6 +360,17 @@ def parse(expression: str) -> exp.Expression:
         ):
             node.set("nulls_first", True)
     return tree
+
+
+def source_columns(tree: exp.Expression, ds: OssieDataset) -> list[str]:
+    """The source columns a parsed metric of ``ds`` reads as ``source.column``, in order
+    of appearance. Empty when ``ds`` declares a field named ``source``: the qualifier is
+    then that field, and the planner refuses the metric (spec, "Metric Scoping")."""
+    if any(f.name.upper() == SOURCE_QUALIFIER for f in ds.fields or []):
+        return []
+    return [
+        c.name for c in tree.find_all(exp.Column) if c.table and c.table.upper() == SOURCE_QUALIFIER
+    ]
 
 
 def outside_spec(node: exp.Expression) -> bool:

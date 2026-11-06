@@ -51,6 +51,11 @@ class PlanError(ValueError):
     pass
 
 
+class _BlendError(PlanError):
+    """Planner._refuse_blends. A metric refused so is refused in every question with it,
+    which unanswerable_metrics reports."""
+
+
 # A string compared with a field or metric of these types is read as TIMESTAMP '...'
 # is, in the model's zone; ClickHouse reads it in the column's (#58).
 _TIMES = (OssieDataType.DATE_TIME, OssieDataType.DATE_TIME_TZ)
@@ -309,6 +314,198 @@ def _component_node(agg: exp.AggFunc) -> exp.Expression:
     return node
 
 
+def _blend(
+    tree: exp.Expression, owner: dict[str, int], row_filter: bool
+) -> tuple[int, exp.Expression, bool] | None:
+    """A part of ``tree`` that Planner._dedup would carry from a subtree and that sits in
+    a larger expression on joined rows where two copies of a key that differ in the part
+    can give the same result, so the root row would count once for each: the subtree
+    (index into ``owner``'s values), the expression to name and whether it is a condition.
+
+    A condition (a row filter, a FILTER) is safe when the part is one of its conjuncts:
+    only the copies that pass it remain, and a carried condition has one value that
+    passes. An aggregate's argument is safe when it holds one part and gives each value
+    of the part its own result, or results that cannot change the aggregate (_injective).
+    Anything else counts a root row once for each copy where Layer 2 counts it once
+    (docs/design.md, "A key stored twice on the one side"); #653 rejects such expressions
+    anyway (E_CROSS_DATASET_FILTER, E_AMBIGUOUS_MEASURE_GRAIN)."""
+    parts: dict[int, int] = {}  # id of an aggregate -> carried parts in its argument
+
+    def check(node: exp.Expression, i: int) -> tuple[int, exp.Expression, bool] | None:
+        steps: list[tuple[exp.Expression, exp.Expression]] = []  # (parent, child), upwards
+        agg = None
+        p = node
+        while (parent := p.parent) is not None and not isinstance(parent, exp.Where):
+            if isinstance(parent, exp.AggFunc) and not _window_function(parent):
+                agg = parent
+                break
+            if not isinstance(parent, exp.Paren):
+                steps.append((parent, p))
+            p = parent
+        if isinstance(parent, exp.Where) and isinstance(parent.parent, exp.Filter):
+            filtered = parent.parent.this.find(exp.AggFunc)
+            if filtered is not None and _repeat_safe(filtered):
+                return None  # MAX(x) FILTER (...): a copy repeats nothing it returns
+        if agg is not None and _repeat_safe(agg):
+            return None
+        if agg is None:
+            conjunct = next((o for o, _ in reversed(steps) if not isinstance(o, exp.And)), None)
+            return None if conjunct is None else (i, conjunct, True)
+        parts[id(agg)] = parts.get(id(agg), 0) + 1
+        if parts[id(agg)] > 1 or not _injective(steps, isinstance(agg, exp.Sum)):
+            return i, _component_node(agg), False
+        return None
+
+    def visit(node: exp.Expression, joined: bool) -> tuple[int, exp.Expression, bool] | None:
+        if isinstance(node, exp.Subquery | exp.Select):
+            return None
+        if joined and isinstance(node, exp.Condition):
+            own = {owner.get(c.table.upper()) for c in node.find_all(exp.Column)}
+            if len(own) == 1 and None not in own and not node.find(exp.AggFunc, exp.Window):
+                return check(node, next(iter(own)))
+        if isinstance(node, exp.Where) or (
+            isinstance(node, exp.AggFunc) and not _window_function(node)
+        ):
+            joined = True
+        for child in node.iter_expressions():
+            if found := visit(child, joined):
+                return found
+        return None
+
+    return visit(tree, row_filter)
+
+
+def _regroup(tree: exp.Expression, owner: dict[str, int]) -> exp.Expression:
+    """``tree`` with the factors of a product, and the terms of a sum, that read only one
+    subtree gathered in one parenthesized operand, inside aggregates: ``lines.qty *
+    products.price * (1 - products.discount)`` becomes ``lines.qty * (products.price * (1 -
+    products.discount))``, so Planner._dedup carries the product of the two as one value
+    and two copies of a key that give the same product collapse, as in Layer 2's DISTINCT
+    (_blend refuses two parts). Products and sums are reordered only; ``/`` is left alone."""
+
+    def side(n: exp.Expression) -> int | None:
+        own = {owner.get(c.table.upper()) for c in n.find_all(exp.Column)}
+        if len(own) == 1 and None not in own and not n.find(exp.AggFunc, exp.Window, exp.Select):
+            return next(iter(own))
+        return None
+
+    def bare(n: exp.Expression) -> exp.Expression:
+        while isinstance(n, exp.Paren):
+            n = n.this
+        return n
+
+    def wrap(n: exp.Expression) -> exp.Expression:
+        return exp.Paren(this=n) if isinstance(n, exp.Binary | exp.Neg) else n
+
+    def factors(n: exp.Expression) -> list[exp.Expression]:
+        b = bare(n)
+        return factors(b.this) + factors(b.expression) if isinstance(b, exp.Mul) else [n]
+
+    def terms(n: exp.Expression, neg: bool = False) -> list[tuple[bool, exp.Expression]]:
+        b = bare(n)
+        if isinstance(b, exp.Add | exp.Sub):
+            return terms(b.this, neg) + terms(b.expression, neg ^ isinstance(b, exp.Sub))
+        return [(neg, n)]
+
+    def in_aggregate(n: exp.Expression) -> bool:
+        p = n.parent
+        while p is not None:
+            if isinstance(p, exp.AggFunc) and not _window_function(p):
+                return True
+            p = p.parent
+        return False
+
+    def gather(items: list, key) -> tuple[list, dict[int, list]] | None:
+        groups: dict[int, list] = {}
+        for item in items:
+            i = side(key(item))
+            if i is not None:
+                groups.setdefault(i, []).append(item)
+        if not any(len(g) > 1 for g in groups.values()) or len(groups) == len(items) == 1:
+            return None
+        many = {i for i, g in groups.items() if len(g) > 1}
+        return [it for it in items if side(key(it)) not in many], {i: groups[i] for i in many}
+
+    def product(items: list[exp.Expression]) -> exp.Expression:
+        out = wrap(items[0].copy())
+        for f in items[1:]:
+            out = exp.Mul(this=wrap(out), expression=wrap(f.copy()))
+        return out
+
+    def total(items: list[tuple[bool, exp.Expression]]) -> exp.Expression:
+        neg, first = items[0]
+        out = exp.Neg(this=wrap(first.copy())) if neg else wrap(first.copy())
+        for neg, t in items[1:]:
+            op = exp.Sub if neg else exp.Add
+            out = op(this=wrap(out), expression=wrap(t.copy()))
+        return out
+
+    def fun(n: exp.Expression) -> exp.Expression:
+        if isinstance(n, exp.Mul) and not isinstance(bare_parent(n), exp.Mul) and in_aggregate(n):
+            found = gather(factors(n), lambda f: f)
+            if found:
+                rest, groups = found
+                parts = [*rest, *(exp.Paren(this=product(g)) for g in groups.values())]
+                return product([_regroup(p, owner) for p in parts])
+        if (
+            isinstance(n, exp.Add | exp.Sub)
+            and not isinstance(bare_parent(n), exp.Add | exp.Sub)
+            and in_aggregate(n)
+        ):
+            found = gather(terms(n), lambda t: t[1])
+            if found:
+                rest, groups = found
+                items = [*rest, *((False, exp.Paren(this=total(g))) for g in groups.values())]
+                return total([(neg, _regroup(t, owner)) for neg, t in items])
+        return n
+
+    def bare_parent(n: exp.Expression) -> exp.Expression | None:
+        p = n.parent
+        while isinstance(p, exp.Paren):
+            p = p.parent
+        return p
+
+    return tree.transform(fun)
+
+
+def _injective(steps: list[tuple[exp.Expression, exp.Expression]], in_sum: bool) -> bool:
+    """Whether the path from a carried part up to an aggregate's argument (``steps``,
+    (parent, child) upwards) gives two copies that differ in the part results the
+    aggregate tells apart as Layer 2's DISTINCT does: ``+`` and ``-`` give each value its
+    own result; ``*`` and ``/`` too unless the other side is zero, which a ``SUM`` adds
+    nothing for. A part that is the condition of a ``CASE`` with one ``WHEN`` (or an
+    ``IF``), joined there only with AND, is a FILTER: the copies that fail it give NULL,
+    which an aggregate skips, or 0, which a ``SUM`` adds nothing for."""
+    state = "start"  # "cond": the part is a condition so far; "value": it is a value
+    for parent, child in steps:
+        if isinstance(parent, exp.And) and state in ("start", "cond"):
+            state = "cond"
+        elif isinstance(parent, exp.If) and child is parent.this and state in ("start", "cond"):
+            case = parent.parent if isinstance(parent.parent, exp.Case) else None
+            if case is not None and len(case.args.get("ifs") or []) != 1:
+                return False
+            rest = case.args.get("default") if case is not None else parent.args.get("false")
+            zero = isinstance(rest, exp.Literal) and rest.is_number and float(rest.name) == 0
+            if not (rest is None or isinstance(rest, exp.Null) or (zero and in_sum)):
+                return False
+            state = "value"
+        elif isinstance(parent, exp.Case) and isinstance(child, exp.If) and state == "value":
+            continue
+        elif state in ("start", "value") and (
+            isinstance(parent, exp.Add | exp.Sub | exp.Neg)
+            or (in_sum and isinstance(parent, exp.Mul | exp.Div))
+        ):
+            state = "value"
+        else:
+            return False
+    return state != "cond"
+
+
+def _owners(subtrees: list[_Subtree]) -> dict[str, int]:
+    """Upper-cased dataset name -> index of the subtree of Planner._dedup it is in."""
+    return {d: i for i, s in enumerate(subtrees) for d in s.datasets}
+
+
 def _loose_column(tree: exp.Expression) -> exp.Column | None:
     """A column outside every aggregate and every window clause: the spec's
     unaggregated field (E_UNAGGREGATED_FINER_GRAIN_REFERENCE)."""
@@ -411,10 +608,11 @@ def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -
 
     One that names an unknown field or reads no column, one with a column
     outside every aggregate, one whose aggregates read different datasets and
-    that also has a window function (_split), and one with a duplicate-sensitive
+    that also has a window function (_split), one with a duplicate-sensitive
     aggregate over each of two datasets that is not split: whichever is the
-    root, the other one's rows repeat. Untranslatable metrics are reported by
-    untranslatable()."""
+    root, the other one's rows repeat, and one that reads a joined dataset with
+    the root in an expression a copy of a key could count twice (_blend).
+    Untranslatable metrics are reported by untranslatable()."""
     planner = Planner(model, catalog)
     skip = set(untranslatable(model)[1])
     out = {}
@@ -428,6 +626,12 @@ def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -
             if planner._split(m, tree) is not None:
                 continue  # each aggregate is answered over its own dataset
             inputs = _aggregate_inputs(tree)
+            try:
+                planner.plan(Query((name,)))
+            except _BlendError:
+                raise
+            except PlanError:
+                pass  # refused in this question only, or for a reason found below
         except PlanError as e:
             out[name] = str(e)
             continue
@@ -1169,6 +1373,7 @@ class Planner:
         selects: list[exp.Expression] = []
         group: list[exp.Expression] = []
         windowed: list[str] = []  # metrics with a window function that reads a column
+        measured: list[tuple[str, exp.Expression]] = []  # metrics and aggregate filters
         seen_aliases: set[str] = set()  # upper-cased: ORDER BY resolves names case-insensitively
 
         def alias(name: str) -> str:
@@ -1193,12 +1398,14 @@ class Planner:
                 inputs = _aggregate_inputs(tree)
                 touched.setdefault(label, set()).update(d for _, ds in inputs for d in ds)
                 checked.append((label, inputs))
+                measured.append((label, tree))
                 selects.append(tree.copy().as_(alias(name)))
                 continue
             m = self.metric(name)
             label = f"metric {m.name!r}"
             tree = self._metric_tree(m, touched.setdefault(label, set()))
             checked.append((label, _aggregate_inputs(tree)))
+            measured.append((label, tree))
             if tree.find(exp.Window) and tree.find(exp.Column) and not tree.meta.get("unsure"):
                 windowed.append(m.name)
             selects.append(tree.as_(alias(m.name)))
@@ -1239,6 +1446,7 @@ class Planner:
                         "dimension of this query; add it to dimensions or put it in its own filter"
                     )
             having.append(tree)
+            measured.append((label, tree))
             aggregate_filters.append(f)
             checked.append((label, _aggregate_inputs(tree)))
             # Each metric it names on its own too, after the filter, which errors name first.
@@ -1318,6 +1526,11 @@ class Planner:
         if q.limit is not None:
             sel = sel.limit(q.limit)
         if root is not None and subtrees:
+            sel = _regroup(sel, _owners(subtrees))
+            filtered = [(label, t, True) for label, t in rows.items() if any(t is w for w in where)]
+            self._refuse_blends(
+                [*filtered, *((label, t, False) for label, t in measured)], root, subtrees
+            )
             sel = self._dedup(sel, root, subtrees)
         if dict_keys:
             sel = sel.transform(lambda n: self._dict_get(n, dict_keys))
@@ -1519,6 +1732,39 @@ class Planner:
             )
             sel = sel.join(inner.subquery(target.name), on=on, join_type="left")
         return sel
+
+    def _refuse_blends(
+        self,
+        items: list[tuple[str, exp.Expression, bool]],
+        root: OssieDataset,
+        subtrees: list[_Subtree],
+    ) -> None:
+        """Refuse a question whose filter or metric (label, tree, whether a row filter)
+        reads a subtree of _dedup with another dataset in one expression that could count
+        a row of ``root`` once for each copy of a key (_blend)."""
+        owner = _owners(subtrees)
+        for label, tree, row_filter in items:
+            found = _blend(_regroup(tree, owner), owner, row_filter)
+            if found is None:
+                continue
+            i, shown, condition = found
+            side = self.dataset(subtrees[i].first.to).name
+            where = "one condition" if condition else "the argument of"
+            head = (
+                f"{label} reads {side} and another dataset in {where} {shown.sql()}, and "
+                f"ClickHouse does not enforce the key of {side}: with a key stored twice, a "
+                f"row of {root.name} would count once for each copy "
+            )
+            if condition:
+                raise _BlendError(
+                    head + "that passes it, and this version cannot answer it. Join the "
+                    f"condition on {side} to the rest with AND, or ask for each part on its own"
+                )
+            raise _BlendError(
+                head + "that gives the same argument, and this version cannot answer it. "
+                f"Join the part on {side} with + or - (or * and / in SUM), put a condition on "
+                f"{side} in a FILTER, or ask for each part on its own"
+            )
 
     def _unmatched(self, col: exp.Column) -> exp.Expression:
         """What a column of a LEFT JOIN holds in a root row that matched nothing: NULL,

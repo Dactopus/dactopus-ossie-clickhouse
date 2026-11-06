@@ -149,11 +149,20 @@ a minor release may change the Python API.
   customers.region = 'WEST') / SUM(x))` (`validate` reports it and the
   MCP server hides it; it was answered over one join, with the numbers
   above), and a window metric in a question with metrics that are
-  answered apart. Still answered with a root row counted twice: a row
-  filter that reads the root and the repeated dataset in one expression
-  and passes both copies of a key that differ in it (`customers.weight >
-  0 OR orders.amount > 150`; `docs/design.md`, "A key stored twice on
-  the one side"). A large table on the one side costs more: order lines
+  answered apart. Also refused, on any data, since the planner does not
+  read it: an expression that reads the root and the joined dataset
+  together where two copies of a key could give one result, so a root
+  row would count once for each. Such are a condition joined with `OR`
+  (`customers.weight > 0 OR orders.amount > 150` gave EAST 550 where the
+  answer is 350), `SUM(GREATEST(orders.amount, customers.weight))` and
+  `COUNT(orders.amount * customers.weight)`; #653 rejects them too.
+  `validate` reports such a metric and the MCP server hides it.
+  Conditions joined with `AND`, `SUM(lines.qty * products.price)`, `+`
+  and `-`, a `FILTER` or `CASE WHEN` on the joined dataset, and several
+  factors of the joined dataset in one product (`SUM(lines.qty *
+  products.price * (1 - products.discount))`, read as one value) are
+  answered (`docs/design.md`, "A key stored twice on the one side"). A
+  large table on the one side costs more: order lines
   grouped by an order field took 3.0 s against 0.85 s on 10 million
   orders.
 

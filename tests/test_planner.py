@@ -978,7 +978,8 @@ def test_relationships_in_a_cycle():
 
 def test_one_to_one_through_a_path():
     """store -> store_area -> area_copy, each on a key of its from side: no row of
-    area_copy repeats over store's, so a store metric may sum it."""
+    area_copy repeats over store's, so a store metric may sum it. The two factors on the
+    subtree are gathered into one value of its derived table (_regroup)."""
 
     def mutate(m):
         _area(m)
@@ -998,9 +999,9 @@ def test_one_to_one_through_a_path():
 
     planner = _variant(mutate)
     assert planner._one_to_one("store") == {"store_area", "area_copy"}
-    assert "LEFT JOIN tpcds.store AS area_copy" in planner.sql(
-        Query(metrics=("gap",), dimensions=("store.s_state",))
-    )
+    sql = planner.sql(Query(metrics=("gap",), dimensions=("store.s_state",)))
+    assert "LEFT JOIN tpcds.store AS area_copy" in sql
+    assert "(store_area.s_number_employees * area_copy.s_number_employees) AS __e1" in sql
 
 
 def test_dictionary_on_a_path():

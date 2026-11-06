@@ -269,7 +269,11 @@ over a field of the same name: `source.amount` reads the column `amount`
 even when the dataset declares a field `amount` with another expression.
 `validate --url` checks the column exists, and a metric over a column the
 connected ClickHouse user cannot read is hidden from that user, like a
-metric over a field they cannot read.
+metric over a field they cannot read. A source column has no `datatype`,
+so a plain string compared with one is read in the column's zone, as with
+a field without `datatype` ([Time zone](#time-zone)): write
+`TIMESTAMP '2026-10-01 00:00:00'` for the model's zone, as in
+`COUNT(*) FILTER (WHERE source.created_at >= TIMESTAMP '2026-10-01 00:00:00')`.
 
 `source` is not reserved. A dataset that declares a field named `source`
 reads that name as the field, so none of its metrics can read a source

@@ -40,9 +40,9 @@ a minor release may change the Python API.
     over all 100,000 customers), where 0.13.0 gave 57919.727998855364
     (over the 90,858 customers with a sale).
   - `customer_lifetime_value` by `customer.c_first_name` for James is
-    51477.36549461814, where 0.13.0 gave 56327.72859226023. The group of
-    customers without a first name is 86156.84807560137, where it was
-    95148.54948766604.
+    51477.36549461814, where 0.13.0 gave 56327.72859226023. The NULL group,
+    customers without a first name and the store sales without a matching
+    customer, is 86156.84807560137, where it was 95148.54948766604.
   - `store_productivity`, sales per employee, is answered: 1654864.98318239
     in total, and by `store.s_state`. It was refused in every question and
     hidden from agents; `validate` no longer reports it.
@@ -66,6 +66,25 @@ a minor release may change the Python API.
   COUNT(DISTINCT b.k) > 5` (name a metric instead), and a metric whose
   aggregates read different datasets and that has a window function or a
   column outside every aggregate (reported by `validate`).
+
+- A model's metric with an aggregate over several datasets (or a `FILTER`
+  on another dataset) next to an aggregate over a dataset the first does
+  not read is refused in every question and reported by `validate`, as
+  section 5.2 rejects the metric. It was planned over one join, which counted
+  the second aggregate's dataset over the first's rows: `SUM(orders.amount)
+  FILTER (WHERE customers.segment = 'retail') / COUNT(DISTINCT
+  customers.id)` divided by the customers with an order. A metric whose
+  aggregates stay within the datasets of the one that reads several
+  (`SUM(lines.qty * products.price) / SUM(lines.qty)`) is planned as before.
+  An aggregate's `FILTER` no longer gives its dataset: `COUNT(*) FILTER
+  (WHERE customers.segment = 'retail')` names none, and is refused next to
+  an aggregate of another dataset.
+- Also refused: a window metric in a question with a metric of components
+  (as with stitched metrics, a window would run over the merged rows), and
+  a written aggregate filter next to one, such as `-m
+  customer_lifetime_value -f "SUM(store_sales.ss_quantity) > 5"`, which
+  was one `SELECT` before. A written filter that splits or mixes
+  aggregates is refused even with a `COUNT(*)` beside them.
 
 - A call of `AGG` in any capitalization is refused, as the spec reserves
   the name since apache/ossie#662. It was sent to ClickHouse as an unknown

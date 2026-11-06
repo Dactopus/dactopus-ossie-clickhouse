@@ -146,11 +146,17 @@ outside every aggregate, such as `SUM(sales.amount) * customer.rate`, and
 An aggregate whose arguments read several datasets, such as
 `SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another
 dataset, is computed over one join, as before: one value for each row of
-the root. A metric with such an aggregate is not split into parts. Next
-to an aggregate over another dataset it follows the rules above: `SUM(lines.qty *
-products.price) / SUM(store.employees)` is refused in every question,
-because a store's staff would count once per line, and `MAX(store.employees)`
-in its place is answered over the stores the lines reference.
+the root. A metric with such an aggregate is not split into parts, and it
+may not also have an aggregate over a dataset those arguments do not read:
+`SUM(lines.qty * products.price) / COUNT(DISTINCT customers.id)` and
+`SUM(lines.qty * products.price) / MAX(store.employees)` are refused in
+every question, since one join would count the customers or the stores over
+the lines' rows. Declare the ratio on the dataset it means, or write two
+metrics. `SUM(lines.qty * products.price) / SUM(lines.qty)` stays within
+`lines` and `products` and is computed over one join. A `COUNT(*) FILTER
+(WHERE ...)` names no dataset by its filter: it counts the rows of the one
+dataset that all of the metric's aggregates read, and is refused next to
+aggregates of another.
 
 A filter on a dataset whose rows reference the metric's, the many side
 of a relationship, keeps each row that at least one matching row

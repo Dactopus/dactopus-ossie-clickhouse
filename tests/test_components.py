@@ -547,6 +547,14 @@ def test_a_named_metric_beside_a_written_aggregate_of_another_dataset_is_refused
     assert f"filter {condition!r} applies aggregates of store and store_sales rows" in message
 
 
+def test_an_aggregate_over_a_metric_that_reads_no_dataset_names_none():
+    """A bare metric name in a written aggregate reads no dataset, like COUNT(*)."""
+    planner = _with_metrics(now_m="CURRENT_TIMESTAMP")
+    condition = "MAX(now_m) > TIMESTAMP '2020-01-01 00:00:00'"
+    sql = planner.sql(Query(("total_sales",), ("item.i_brand",), (condition,)))
+    assert "HAVING" in sql and "UNION ALL" not in sql
+
+
 def test_metrics_of_different_datasets_named_in_one_filter_are_each_answered_on_their_own():
     planner = _with_metrics(store_count="COUNT(DISTINCT store.s_store_sk)")
     q = Query(("total_sales",), ("store.s_state",), ("total_sales > store_count",))

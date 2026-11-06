@@ -318,8 +318,11 @@ class _Unit:
     label: str  # "metric 'x'", as errors name it
     key: frozenset[str]  # the datasets whose rows it aggregates: its branch
     metric: str  # the metric the unit belongs to
-    component: bool = False
-    home: str = ""
+    home: str = ""  # a component's dataset; empty for a whole metric
+
+    @property
+    def component(self) -> bool:
+        return bool(self.home)
 
 
 def _nested_aggregate(tree: exp.Expression) -> str | None:
@@ -1447,8 +1450,14 @@ class Planner:
         for col in tree.find_all(exp.Column):
             if m := self._named_metric(col):
                 metrics.setdefault(m.name, m)
+        # A bare name in an aggregate is a metric that reads no dataset (CURRENT_TIMESTAMP):
+        # it names none, as COUNT(*) does.
         reads: Reads = [
-            (agg, {self.dataset(t).name for t in args}, {self.dataset(t).name for t in filtered})
+            (
+                agg,
+                {self.dataset(t).name for t in args if t},
+                {self.dataset(t).name for t in filtered if t},
+            )
             for agg, args, filtered in _aggregate_reads(tree)
         ]
         if pair := _mixed(reads):
@@ -1526,9 +1535,7 @@ class Planner:
             standing = []
             for node, home in parts:
                 alias = f"__c{len(units)}"
-                units.append(
-                    _Unit(alias, node.copy(), f"metric {n!r}", frozenset({home}), n, True, home)
-                )
+                units.append(_Unit(alias, node.copy(), f"metric {n!r}", frozenset({home}), n, home))
                 standing.append((node, alias))
             for node, alias in standing:  # after the copies: the nodes are disjoint
                 node.replace(exp.column(alias))
@@ -1616,18 +1623,13 @@ class Planner:
             return exp.If(this=present, true=value, false=empties[i])
 
         by_alias = {u.alias: merged(i) for i, u in enumerate(units)}
-        values: dict[str, exp.Expression] = {}
-        for n in names:
-            if n in outer:
 
-                def component(node: exp.Expression) -> exp.Expression:
-                    if isinstance(node, exp.Column) and not node.table and node.name in by_alias:
-                        return by_alias[node.name].copy()
-                    return node
+        def component(node: exp.Expression) -> exp.Expression:
+            if isinstance(node, exp.Column) and not node.table and node.name in by_alias:
+                return by_alias[node.name].copy()
+            return node
 
-                values[n] = outer[n].transform(component)
-            else:
-                values[n] = by_alias[n]
+        values = {n: outer[n].transform(component) if n in outer else by_alias[n] for n in names}
         selects = [exp.column(d).as_(d) for d in dims]
         selects += [values[self.metric(n).name].copy().as_(self.metric(n).name) for n in q.metrics]
         sel = exp.select(*selects).from_(exp.union(*parts, distinct=False).subquery("stitched"))

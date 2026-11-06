@@ -150,7 +150,6 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
         for m in model.metrics or []
         if kept(m.name, m.expression)
     ]
-    declared = {d.name: d for d in model.datasets}
     for d in data["datasets"]:
         metrics = [
             m.model_dump(by_alias=True, exclude_none=True)

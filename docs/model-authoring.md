@@ -265,7 +265,8 @@ apache/ossie#246, defers them).
 Frames are the spec's: `ROWS` frames that hold the current row and
 `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`; others are
 rejected. A window's `ORDER BY` takes `NULLS FIRST` or `NULLS LAST`;
-without it, NULLs sort last in both directions.
+without it, NULL is the largest value: last for `ASC`, first for `DESC`
+(the spec's rule, "Window ORDER BY NULL Placement").
 
 ## Time and derived dimensions
 

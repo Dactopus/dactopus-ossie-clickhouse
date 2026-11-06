@@ -114,6 +114,45 @@ def test_ossie_schema_version():
     )
 
 
+# A window's ORDER BY without NULLS FIRST | LAST has the spec's default, NULL as the largest
+# value (parse() sets nulls_first on DESC). It relies on ClickHouse's own default, NULLs
+# last both ways, which SQLGlot's ClickHouse generator leaves unwritten, and on NULLS FIRST
+# surviving, in either direction. Without the clause, ASC needs no rule.
+NULL_PLACEMENT = [
+    ("k", "k"),
+    ("k ASC", "k ASC"),
+    ("k NULLS LAST", "k"),
+    ("k DESC NULLS LAST", "k DESC"),
+    ("k NULLS FIRST", "k NULLS FIRST"),
+    ("k DESC NULLS FIRST", "k DESC NULLS FIRST"),
+]
+
+
+@pytest.mark.parametrize(("order", "generated"), NULL_PLACEMENT)
+def test_sqlglot_places_nulls_as_clickhouse_does(order, generated):
+    tree = sqlglot.parse_one(f"SUM(v) OVER (ORDER BY {order})", read=OssieSQL)
+    actual = tree.sql(dialect="clickhouse")
+    assert actual == f"SUM(v) OVER (ORDER BY {generated})", (
+        f"SQLGlot {sqlglot.__version__} prints ORDER BY {order} as {actual}: check the "
+        "window ORDER BY default in parse() (docs/design.md, NULL placement) and the NULLS "
+        "tests in tests/test_translate.py"
+    )
+
+
+@pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
+def test_ossie_window_order_default_is_null_largest():
+    text = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "expression_language.md").read_text()
+    if "## Window ORDER BY NULL Placement" not in text:
+        pytest.skip("this checkout of apache/ossie predates its NULL placement rule (#587)")
+    assert (
+        "Without `NULLS FIRST` or `NULLS LAST`, NULL sorts as the largest value: "
+        "last for `ASC`, first for `DESC`." in text
+    ), (
+        "apache/ossie's expression_language.md no longer says where NULL sorts in a "
+        "window's ORDER BY without a clause: check the default in parse() (translate.py)"
+    )
+
+
 @pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
 def test_tpcds_fixture_matches_ossie_example():
     example = Path(os.environ["OSSIE_REPO"]) / "examples" / "tpcds_semantic_model.yaml"

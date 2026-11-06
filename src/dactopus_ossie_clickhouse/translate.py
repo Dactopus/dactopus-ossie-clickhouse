@@ -232,8 +232,10 @@ class OssieSQL(Dialect):
     Mirrors apache/ossie PR #222; switch to ``read="ossie"`` once it merges."""
 
     Parser = _OssieParser
-    # Without NULLS FIRST | LAST the spec leaves NULL placement open (apache/ossie#498);
-    # NULLs sort last both ways, as in ClickHouse and DuckDB (docs/design.md).
+    # NULLs sort last both ways where the spec says nothing, as in ClickHouse: a query's
+    # ORDER BY, which the planner builds, and WITHIN GROUP. A window's ORDER BY has the
+    # spec's default, NULL as the largest value, set in parse() (docs/design.md); this
+    # setting does not give it, as it would flip every DESC the parser reads.
     NULL_ORDERING = "nulls_are_last"
 
 
@@ -275,6 +277,10 @@ def _frame_problem(spec: exp.WindowSpec) -> str | None:
     )
 
 
+def _in_window_order(node: exp.Ordered) -> bool:
+    return isinstance(node.parent, exp.Order) and isinstance(node.parent.parent, exp.Window)
+
+
 def _shape_problem(node: exp.Expression) -> str | None:
     """Spec shapes an argument count cannot express."""
     # SQLGlot reads ClickHouse's quantile(0.5)(x) as quantile(0.5) AS (x): SQL that
@@ -310,11 +316,7 @@ def _shape_problem(node: exp.Expression) -> str | None:
         return f"{node.name} is not a date part; expected one of " + ", ".join(sorted(_DATE_PARTS))
     if isinstance(node, exp.WindowSpec):
         return _frame_problem(node)
-    if (
-        isinstance(node, exp.Ordered)
-        and "nulls" in node.meta
-        and not (isinstance(node.parent, exp.Order) and isinstance(node.parent.parent, exp.Window))
-    ):
+    if isinstance(node, exp.Ordered) and "nulls" in node.meta and not _in_window_order(node):
         return f"NULLS {node.meta['nulls']} is allowed only in a window's ORDER BY"
     # ClickHouse accepts IGNORE NULLS here and silently ignores it.
     if isinstance(node, exp.IgnoreNulls) and isinstance(
@@ -337,6 +339,17 @@ def parse(expression: str) -> exp.Expression:
             )
         if problem := _shape_problem(node):
             raise ValueError(f"{problem}: {expression!r}")
+        # Spec, "Window ORDER BY NULL Placement": without NULLS FIRST | LAST, NULL is the
+        # largest value, so DESC puts it first. ClickHouse's default is last both ways,
+        # which already is the spec's for ASC. Set here, not in a rewrite, which reads
+        # meta["nulls"] after a copy.
+        if (
+            isinstance(node, exp.Ordered)
+            and node.args.get("desc")
+            and "nulls" not in node.meta
+            and _in_window_order(node)
+        ):
+            node.set("nulls_first", True)
     return tree
 
 

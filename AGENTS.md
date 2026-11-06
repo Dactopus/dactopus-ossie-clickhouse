@@ -106,8 +106,11 @@ Translation:
 - `CURRENT_*`, ClickHouse's `now()` and `today()`, timestamp literals and
   `DATEDIFF` use the model's zone (`model.time_zone`, UTC by default),
   never the server's zone or `session_timezone`.
-- NULLs sort last in both directions. Keep it when parsing switches to
-  the Ossie dialect.
+- A window's `ORDER BY` item without `NULLS FIRST | LAST` sorts NULL as the
+  largest value (spec, "Window ORDER BY NULL Placement"): `parse()` makes
+  `DESC` say `NULLS FIRST`. Every other `ORDER BY`, the planner's rows and
+  `WITHIN GROUP` included, sorts NULLs last both ways. Keep both when
+  parsing switches to the Ossie dialect.
 
 Planning:
 

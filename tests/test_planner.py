@@ -180,6 +180,30 @@ def test_window_metric_keeps_nulls_clause():
     assert "RANK() OVER (ORDER BY SUM(store.s_number_employees) ASC NULLS FIRST)" in sql
 
 
+def test_window_metric_desc_puts_null_first_but_rows_keep_nulls_last():
+    # The spec's default for a window's ORDER BY (NULL is the largest value) reaches the
+    # SQL; the ORDER BY of the rows the planner builds does not take it.
+    planner = _with_metrics(
+        rank_desc="RANK() OVER (ORDER BY SUM(store.s_number_employees) DESC)",
+        rank_desc_last="RANK() OVER (ORDER BY SUM(store.s_number_employees) DESC NULLS LAST)",
+        rank_asc="RANK() OVER (ORDER BY SUM(store.s_number_employees))",
+    )
+    q = Query(
+        metrics=("rank_desc", "rank_desc_last", "rank_asc"),
+        dimensions=("store.s_state",),
+        order_by=("rank_desc desc",),
+    )
+    sql = planner.sql(q)
+    assert (
+        "RANK() OVER (ORDER BY SUM(store.s_number_employees) DESC NULLS FIRST) AS rank_desc," in sql
+    )
+    assert "RANK() OVER (ORDER BY SUM(store.s_number_employees) DESC) AS rank_desc_last," in sql
+    assert "RANK() OVER (ORDER BY SUM(store.s_number_employees)) AS rank_asc " in sql
+    assert sql.endswith("ORDER BY rank_desc DESC, s_state ASC " + SETTINGS)
+    q = Query(metrics=("total_profit", "total_sales"), dimensions=("item.i_brand",))
+    assert P.sql(q).endswith("ORDER BY total_profit DESC, i_brand ASC " + SETTINGS)
+
+
 def test_order_by():
     # Default: first metric descending, only when there are rows to rank.
     q = Query(metrics=("total_profit", "total_sales"), dimensions=("item.i_brand",))

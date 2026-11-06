@@ -295,18 +295,15 @@ CH_WINDOW = (
     "Array(Tuple(UInt8, Nullable(Int32), Float64))) AS r))"
 )
 DUCK_WINDOW = "(SELECT * FROM (VALUES (1, 1, 10.0), (2, NULL, 20.0), (3, 2, 30.0)) t(id, k, v))"
-# Without NULLS FIRST | LAST the spec leaves NULL placement open; NULLs sort last both
-# ways, as DuckDB does (docs/design.md). With it, NULLs go where it says in either direction.
+# Compared with DuckDB, whose NULLs sort last both ways: ascending without NULLS FIRST |
+# LAST, which is the spec's default ("Window ORDER BY NULL Placement", NULL as the
+# largest value), and every explicit clause, in either direction.
 WINDOWS = [
     "SUM(v) OVER (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-    "SUM(v) OVER (ORDER BY k DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
     "SUM(v) OVER (ORDER BY k RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
-    "SUM(v) OVER (ORDER BY k DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
     "SUM(v) OVER (ORDER BY k ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
     "sum(v) over (order by k rows between 1 preceding and current row)",
-    "AVG(v) OVER (ORDER BY k DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
     "ROW_NUMBER() OVER (ORDER BY k)",
-    "RANK() OVER (ORDER BY k DESC)",
     "LAG(v, 1) OVER (ORDER BY k)",
     "MEDIAN(v) OVER (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
     "SUM(v) OVER (ORDER BY k NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
@@ -330,6 +327,61 @@ def check_rows(expr, clickhouse, duck, ch_base, duck_base):
 @pytest.mark.parametrize("expr", WINDOWS)
 def test_window_null_order(expr, clickhouse, duck):
     check_rows(expr, clickhouse, duck, CH_WINDOW, DUCK_WINDOW)
+
+
+# Descending without NULLS FIRST | LAST: DuckDB puts NULLs last, the spec first ("Window
+# ORDER BY NULL Placement": NULL is the largest value, last for ASC, first for DESC).
+# Expected values by hand, as (id, value) for ids 1, 2, 3, over k = 1, NULL, 2 and
+# v = 10, 20, 30; descending, the rows come in the order id 2, 3, 1.
+DESC_WINDOWS = [
+    (
+        "SUM(v) OVER (ORDER BY k DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+        [(1, 60.0), (2, 20.0), (3, 50.0)],
+    ),
+    (
+        "SUM(v) OVER (ORDER BY k DESC RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+        [(1, 60.0), (2, 20.0), (3, 50.0)],
+    ),
+    (
+        "AVG(v) OVER (ORDER BY k DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+        [(1, 10.0), (2, 20.0), (3, 20.0)],
+    ),
+    ("ROW_NUMBER() OVER (ORDER BY k DESC)", [(1, 3), (2, 1), (3, 2)]),
+    ("RANK() OVER (ORDER BY k DESC)", [(1, 3), (2, 1), (3, 2)]),
+    ("LAG(v, 1) OVER (ORDER BY k DESC)", [(1, 30.0), (2, None), (3, 20.0)]),
+    ("FIRST_VALUE(v) OVER (ORDER BY k DESC)", [(1, 20.0), (2, 20.0), (3, 20.0)]),
+    # an explicit clause wins over the direction
+    ("RANK() OVER (ORDER BY k DESC NULLS LAST)", [(1, 2), (2, 3), (3, 1)]),
+    ("RANK() OVER (ORDER BY k DESC NULLS FIRST)", [(1, 3), (2, 1), (3, 2)]),
+    ("RANK() OVER (ORDER BY k NULLS FIRST)", [(1, 2), (2, 1), (3, 3)]),
+    # the default is per ORDER BY item
+    ("ROW_NUMBER() OVER (ORDER BY id > 0 DESC, k DESC)", [(1, 3), (2, 1), (3, 2)]),
+    ("ROW_NUMBER() OVER (ORDER BY k DESC NULLS LAST, id DESC)", [(1, 2), (2, 3), (3, 1)]),
+]
+
+
+@pytest.mark.parametrize(("expr", "expected"), DESC_WINDOWS)
+def test_window_desc_puts_null_first(expr, expected, clickhouse):
+    got = clickhouse.query(f"SELECT id, {to_clickhouse(expr)} FROM {CH_WINDOW} ORDER BY id")
+    assert [tuple(map(norm, r)) for r in got.result_rows] == expected
+
+
+# The spec's own example: revenue over three rows, 10, NULL, 5.
+SPEC_REVENUE = "(SELECT arrayJoin([10, NULL, 5]::Array(Nullable(Int32))) AS revenue)"
+
+
+@pytest.mark.parametrize(
+    ("expr", "numbers"),
+    [
+        # ROW_NUMBER() OVER (ORDER BY revenue)       -- 5, 10, NULL
+        ("ROW_NUMBER() OVER (ORDER BY revenue)", {5: 1, 10: 2, None: 3}),
+        # ROW_NUMBER() OVER (ORDER BY revenue DESC)  -- NULL, 10, 5
+        ("ROW_NUMBER() OVER (ORDER BY revenue DESC)", {None: 1, 10: 2, 5: 3}),
+    ],
+)
+def test_window_null_order_spec_example(expr, numbers, clickhouse):
+    got = clickhouse.query(f"SELECT revenue, {to_clickhouse(expr)} FROM {SPEC_REVENUE}")
+    assert dict(got.result_rows) == numbers
 
 
 # Offset base: v is not Nullable, w holds NULLs. ClickHouse answers a missing row with
@@ -369,7 +421,10 @@ def test_window_offsets(expr, clickhouse, duck):
     check_rows(expr, clickhouse, duck, CH_OFFSET, DUCK_OFFSET)
 
 
-@pytest.mark.parametrize("expr", [c[0] for c in AGGREGATES + CATALOG] + WINDOWS + OFFSETS)
+@pytest.mark.parametrize(
+    "expr",
+    [c[0] for c in AGGREGATES + CATALOG] + WINDOWS + [d[0] for d in DESC_WINDOWS] + OFFSETS,
+)
 def test_rewrite_is_idempotent(expr):
     # The planner rewrites a metric, then again inside a filter that names it.
     from dactopus_ossie_clickhouse.translate import parse, rewrite_tree

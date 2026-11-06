@@ -97,11 +97,37 @@ def test_translate_uses_picked_dialect():
         ("NTH_VALUE(v, 2) OVER (ORDER BY k)", "NTH_VALUE(toNullable(v), 2) OVER (ORDER BY k)"),
         ("FIRST_VALUE(v) OVER (ORDER BY k)", "FIRST_VALUE(v) RESPECT NULLS OVER (ORDER BY k)"),
         ("LAST_VALUE(v) IGNORE NULLS OVER ()", "LAST_VALUE(v) IGNORE NULLS OVER ()"),
-        # NULLS FIRST stays; NULLS LAST is ClickHouse's default both ways and is dropped
+        # Without a clause NULL is the largest value (spec, "Window ORDER BY NULL
+        # Placement"): DESC says NULLS FIRST, ClickHouse's default already gives ASC.
+        ("SUM(v) OVER (ORDER BY k)", "SUM(v) OVER (ORDER BY k)"),
+        ("SUM(v) OVER (ORDER BY k ASC)", "SUM(v) OVER (ORDER BY k ASC)"),
+        ("SUM(v) OVER (ORDER BY k DESC)", "SUM(v) OVER (ORDER BY k DESC NULLS FIRST)"),
+        (
+            "SUM(v) OVER (PARTITION BY p ORDER BY k DESC, j, m DESC)",
+            "SUM(v) OVER (PARTITION BY p ORDER BY k DESC NULLS FIRST, j, m DESC NULLS FIRST)",
+        ),
+        (
+            "RANK() OVER (ORDER BY SUM(v) DESC)",
+            "RANK() OVER (ORDER BY SUM(v) DESC NULLS FIRST)",
+        ),
+        # A clause is kept as written: NULLS FIRST stays; NULLS LAST is ClickHouse's
+        # default both ways and is dropped.
         ("SUM(v) OVER (ORDER BY k NULLS FIRST)", "SUM(v) OVER (ORDER BY k NULLS FIRST)"),
         ("SUM(v) OVER (ORDER BY k DESC NULLS FIRST)", "SUM(v) OVER (ORDER BY k DESC NULLS FIRST)"),
         ("SUM(v) OVER (ORDER BY k NULLS LAST)", "SUM(v) OVER (ORDER BY k)"),
         ("SUM(v) OVER (ORDER BY k DESC NULLS LAST)", "SUM(v) OVER (ORDER BY k DESC)"),
+        ("SUM(v) OVER (ORDER BY k ASC NULLS LAST)", "SUM(v) OVER (ORDER BY k ASC)"),
+        ("SUM(v) OVER (ORDER BY k ASC NULLS FIRST)", "SUM(v) OVER (ORDER BY k ASC NULLS FIRST)"),
+        (
+            "SUM(v) OVER (ORDER BY k DESC NULLS LAST, j DESC)",
+            "SUM(v) OVER (ORDER BY k DESC, j DESC NULLS FIRST)",
+        ),
+        # ORDER BY inside WITHIN GROUP is not a window's: it keeps no NULLS clause
+        # (the rewrite turns DESC into 1 - p), while the OVER next to it gets the default.
+        (
+            "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x DESC) OVER (ORDER BY k DESC)",
+            "quantileExactInclusiveOrNull(1 - 0.5)(x * 1.0) OVER (ORDER BY k DESC NULLS FIRST)",
+        ),
         (
             "LAG(v, 1) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST, j)",
             "lag(toNullable(v), 1) OVER (PARTITION BY p ORDER BY k ASC NULLS FIRST, j)",

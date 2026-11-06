@@ -200,37 +200,77 @@ Known mismatch: the spec's own example of a ratio, `avg_orders`
 on apache/ossie `main`), declares `datatype: Decimal`, and the answer is
 a float. `datatype` is not checked against results.
 
-## NULLs sort last in both directions
+## NULL placement in ORDER BY
 
-The spec does not define where NULLs go in `ORDER BY` when the author
-does not say (apache/ossie#498). Its window syntax has
-`ORDER BY order_expr [ASC|DESC] [NULLS {FIRST|LAST}]` since apache/ossie
-`7496811` (apache/ossie#577); before that it had no `NULLS` clause at all
-(checked in `expression_language.md`, `spec.md` and `spec.yaml` at
-apache/ossie b6c702e). Engines differ:
-ClickHouse 26.9 and DuckDB 1.5.6 put NULLs last both ways; Postgres treats
-NULL as larger than any value, last ascending and first descending;
+A window's `ORDER BY` without `NULLS FIRST | LAST` sorts NULL as the
+largest value: last for `ASC`, first for `DESC`. Everything else sorts
+NULLs last in both directions.
+
+The spec defines the first rule (apache/ossie#587, merged as `30e1e50`;
+`expression_language.md`, "Window Functions" and "Window ORDER BY NULL
+Placement"): "Without `NULLS FIRST` or `NULLS LAST`, NULL sorts as the
+largest value: last for `ASC`, first for `DESC`. This applies to
+`OSSIE_SQL_2026` expressions; other dialects keep their own semantics.
+Implementations MUST produce this order whatever the native default of
+the engine". Before it the spec was silent (apache/ossie#498, and the
+closed proposal apache/ossie#246); this executor had chosen NULLs last
+both ways, ClickHouse's and DuckDB's default. The window syntax has the
+`NULLS` clause since `7496811` (apache/ossie#577).
+
+Engines differ. ClickHouse 26.9 and DuckDB 2.0.0 put NULLs last both
+ways; Postgres treats NULL as larger than any value, as the spec does;
 SQLGlot's default dialect, which the parser derives from, treats it as
-smaller, first ascending. The translator used to inherit that last one,
-and the planner matched it, so a running total ordered by a key with NULLs
-started from their sum: on TPC-DS, with `LEFT JOIN`s, the 129,850 sales
-without a matching date came first in `cumulative_sales`.
+smaller, first ascending. The translator once inherited that last one,
+and the planner matched it, so a running total ordered by a key with
+NULLs started from their sum: on TPC-DS, with `LEFT JOIN`s, the 129,850
+sales without a matching date came first in `cumulative_sales`. DuckDB
+disagrees with the spec for `DESC`, so the tests of that case pin their
+expected values by hand.
 
-Chosen: NULLs last both ways when the clause is absent. It is
-ClickHouse's default, so the generated SQL carries no `NULLS` clause, and
-it agrees with DuckDB, the reference engine in tests, so no expected value
-needs pinning. For a query's `order_by` it also keeps rows without a value
-at the end of a top-N list in either direction. The parser dialect sets
-`NULL_ORDERING`; the Ossie dialect from apache/ossie PR #222 inherits
-SQLGlot's default, so switching to it must keep the setting. Revisit when
-apache/ossie#498 settles the default.
+Which expressions it covers. `sql` is the `OSSIE_SQL_2026` form
+(`spec.md`: "the top-level `sql` is authoritative and consumers MUST use
+it as the OSSIE_SQL_2026 form"), and so is an `OSSIE_SQL_2026` entry in
+`dialects`. An `ANSI_SQL` entry is, for the spec, an opaque dialect that
+"keeps its own semantics". This project reads it with the same rule all
+the same: the SQL standard leaves the placement of NULLs to the
+implementation, so the spec's default is a conforming choice, and one
+rule keeps the answer of a metric the same when its author moves it
+between `sql` and `ANSI_SQL`. An agent's filter is read the same way.
 
-An explicit `NULLS FIRST | LAST` in a window's `ORDER BY` is passed
-through as written; the spec places NULLs by it regardless of direction,
-as ClickHouse does. SQLGlot 30.22.0 keeps `NULLS FIRST` and drops
-`NULLS LAST`, ClickHouse's default in both directions. The clause stays
-rejected in `WITHIN GROUP (ORDER BY ...)`, where the spec's syntax has
-none. A query's `order_by` has no clause either.
+How. ClickHouse supports the clause. Its default, NULLs last both ways
+(spec's table "Native defaults"), is the spec's for `ASC`, so `parse()`
+sets `nulls_first` on each `DESC` item of a window's `ORDER BY` that has
+no clause, and the SQL says `DESC NULLS FIRST`; `ASC` carries nothing.
+The spec lets an implementation omit a default the engine already gives
+"only if the session cannot change that default, or the implementation
+sets it". No ClickHouse 26.9 setting changes the order of NULLs
+(`system.settings` has none whose name concerns NULLs and ordering, and
+the server has no counterpart of DuckDB's `default_null_order`), and the
+planner's `SETTINGS` set none. An explicit `NULLS FIRST | LAST` is
+kept as written; SQLGlot 30.27 prints `NULLS FIRST` and drops
+`NULLS LAST`, which is ClickHouse's default in both directions. A
+canary pins that, and the spec sentence.
+
+The setting is not `NULL_ORDERING` of the parser dialect, which stays
+`nulls_are_last`: `nulls_are_large` would also turn every `DESC` the
+parser reads into `NULLS FIRST`, where the spec gives no rule. Switching
+to the upstream Ossie dialect must keep that: the window rule stays in
+`parse()`, and anything else the dialect parses keeps NULLs last.
+
+Out of scope, kept as it was. The rows of a query: the planner builds
+the `ORDER BY`, NULLs last in both directions with no clause, which
+keeps rows without a value at the end of a top-N list. The merged Layer 3
+spec (apache/ossie#653) has no query `ORDER BY` to follow. And
+`WITHIN GROUP (ORDER BY ...)`, where the spec's syntax has no clause: it
+stays rejected there, and the rewrite of the percentile functions
+reads the direction only. Tests pin both.
+
+What changes in an answer: a window metric ordered `DESC` over a key
+with NULLs. On TPC-DS, with `LEFT JOIN`s, the sales without a matching
+date form a group with a NULL `d_year`, and
+`RANK() OVER (ORDER BY date_dim.d_year DESC)` now ranks it 1, where it
+ranked it last. `ASC`, such as the running total in `cumulative_sales`,
+and an explicit clause give what they gave.
 
 NaN is not NULL and engines disagree on it too: ClickHouse puts NaN after
 the values and before NULLs in both directions; DuckDB and Postgres treat

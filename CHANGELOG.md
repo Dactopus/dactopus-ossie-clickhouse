@@ -7,6 +7,19 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- A window's `ORDER BY` without `NULLS FIRST` or `NULLS LAST` now sorts
+  NULL as the largest value, as the spec says since apache/ossie#587:
+  last for `ASC`, first for `DESC`. The executor sorted NULLs last in both
+  directions, so a window metric ordered `DESC` over a key with NULLs
+  gives different numbers: `RANK() OVER (ORDER BY d_year DESC)` ranks the
+  rows without a year 1, not last, and a running total in `DESC` order
+  starts from them. `ASC` and an explicit clause are unchanged. The rows
+  of a query, and `ORDER BY` inside `WITHIN GROUP`, still sort NULLs last
+  in both directions. The generated SQL says `DESC NULLS FIRST`
+  (`docs/design.md`, "NULL placement in ORDER BY").
+
 ## [0.13.0] - 2026-11-01
 
 ### Changed

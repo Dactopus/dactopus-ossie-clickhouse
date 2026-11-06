@@ -11,6 +11,7 @@ import pytest
 from clickhouse_connect.driver.exceptions import OperationalError
 
 from dactopus_ossie_clickhouse import executor, load_model
+from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor, ServerFunctions
 from dactopus_ossie_clickhouse.model import overrides
@@ -675,3 +676,42 @@ def test_unknown_user_is_named(clickhouse, capsys):
 def test_unknown_database_is_named(clickhouse, capsys):
     err = _connect_error(capsys, server_url("ossie_no_such_db"))
     assert "has no database ossie_no_such_db; check the database in the URL's path" in err
+
+
+def test_window_desc_ranks_a_null_key_first_and_results_keep_nulls_last(tpcds):
+    """Sales without a date form a group whose d_year is NULL.
+
+    Spec, "Window ORDER BY NULL Placement": a window's ORDER BY without NULLS FIRST |
+    LAST puts NULL first for DESC and last for ASC. The rows of a query keep NULLs last
+    both ways, which the MCP query tool promises."""
+    from tests.test_model import FIXTURE as TPCDS
+
+    data = load_model(TPCDS).model_dump(by_alias=True)
+    for name, text in {
+        "year_rank_desc": "RANK() OVER (ORDER BY date_dim.d_year DESC)",
+        "year_rank_asc": "RANK() OVER (ORDER BY date_dim.d_year)",
+        "year_rank_desc_last": "RANK() OVER (ORDER BY date_dim.d_year DESC NULLS LAST)",
+    }.items():
+        data["metrics"].append({"name": name, "expression": {"sql": text}})
+    ex = Executor(tpcds, OssieDocument.model_validate(data))
+
+    q = Query(
+        metrics=("total_sales", "year_rank_desc", "year_rank_asc", "year_rank_desc_last"),
+        dimensions=("date_dim.d_year",),
+        order_by=("d_year asc",),
+    )
+    rows = ex.execute(q).rows
+    years = [r[0] for r in rows]
+    assert years[-1] is None and None not in years[:-1]
+    by_year = {r[0]: r[2:] for r in rows}
+    n = len(rows)
+    # (descending, ascending, descending with NULLS LAST) ranks of the NULL key and of
+    # the greatest and the least year
+    assert by_year[None] == (1, n, n)
+    assert by_year[max(y for y in years if y)] == (2, n - 1, 1)
+    assert by_year[min(y for y in years if y)] == (n, 1, n - 1)
+
+    # the same rows, ordered descending: NULL still last
+    q = Query(metrics=("total_sales",), dimensions=("date_dim.d_year",), order_by=("d_year desc",))
+    years = [r[0] for r in ex.execute(q).rows]
+    assert years[-1] is None and years[0] == max(y for y in years if y)

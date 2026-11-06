@@ -16,7 +16,7 @@ import yaml
 from sqlglot import exp
 
 from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
-from dactopus_ossie_clickhouse.model import SOURCE_QUALIFIER
+from dactopus_ossie_clickhouse.model import SOURCE_QUALIFIER, reads_source
 from dactopus_ossie_clickhouse.planner import PlanError
 from dactopus_ossie_clickhouse.translate import parse, pick_expression
 
@@ -86,12 +86,11 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
         dataset declares one named source (then the planner refuses the metric); a
         source column the caller cannot read is hidden by Executor, as a metric."""
         tree = parse(pick_expression(expression))
-        names = {f.name.upper() for f in declared[scope].fields or []} if scope else set()
-        reads_source = bool(scope) and SOURCE_QUALIFIER not in names
+        from_source = bool(scope) and reads_source(declared[scope])
         cols = [
             c
             for c in tree.find_all(exp.Column)
-            if not (reads_source and c.table.upper() == SOURCE_QUALIFIER)
+            if not (from_source and c.table.upper() == SOURCE_QUALIFIER)
         ]
         return {f"{c.table or scope}.{c.name}".upper() for c in cols if c.table or scope}
 

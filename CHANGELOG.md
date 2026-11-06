@@ -84,7 +84,12 @@ a minor release may change the Python API.
   a written aggregate filter next to one, such as `-m
   customer_lifetime_value -f "SUM(store_sales.ss_quantity) > 5"`, which
   was one `SELECT` before. A written filter that splits or mixes
-  aggregates is refused even with a `COUNT(*)` beside them.
+  aggregates is refused even with a `COUNT(*)` beside them, and so is one
+  that compares a metric with a written aggregate of another dataset,
+  `total_sales > COUNT(DISTINCT store.s_store_sk)`. A filter that compares
+  metrics of different datasets, `total_sales > store_count`, has each
+  answered over its own dataset's rows, as when they are selected; it was
+  one `SELECT` that counted the stores with a sale.
 
 - A call of `AGG` in any capitalization is refused, as the spec reserves
   the name since apache/ossie#662. It was sent to ClickHouse as an unknown

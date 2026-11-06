@@ -119,8 +119,11 @@ Planning:
   each dataset, only along relationships whose `to_columns` cover a key
   of the target. Keys and relationship columns name fields, never source
   columns. A row filter the root does not reach is a semi-join; metrics
-  no one root answers together are stitched. The rules and the refusals
-  are in `docs/design.md`; the code is `planner.py`.
+  no one root answers together are stitched. A model's metric whose
+  aggregates each read a different dataset is split into components, one
+  per aggregate, answered over their own dataset's rows and stitched
+  (Layer 3, apache/ossie#653 section 5). The rules and the refusals are
+  in `docs/design.md`; the code is `planner.py`.
 - The planner refuses a question it cannot answer with the right number:
   an aggregate that repeats could change, an aggregate over aggregates,
   two paths to one dataset. Errors name the nearest known object; agents

@@ -445,21 +445,19 @@ reason to accept it.
 ## Paths of several relationships
 
 A question may touch a dataset the root reaches only through others, such
-as order lines to orders to customers. apache/ossie#246 (`cc0d070`)
-section 6.9 resolves it: the one path of many-to-one relationships is
-used, two or more are ambiguous (`E_AMBIGUOUS_PATH`), none is
-`E_NO_PATH`, and a path visits no dataset twice. The datasets in the
-middle are joined like the others (section 6.2, datasets involved in a
-query), so a row filter may read them, and each relationship on the path
-must cover a key of its target.
+as order lines to orders to customers. apache/ossie#653 section 4
+resolves it: the one path of many-to-one relationships is used, two or
+more are ambiguous (`E_AMBIGUOUS_PATH`), and a path visits no dataset
+twice. A dataset no path reaches is `E_NO_PATH` (section 5.3). The
+datasets in the middle are joined like the others (the join tree of
+section 5.4), so a row filter may read them, and each relationship on the
+path must cover a key of its target.
 
 Any second path is ambiguous, a direct relationship next to a longer
-path included, as rule 2 says ("two or more paths"). The table of error
-codes under Semantic 5 (section 6.1) says "equally-valid", which could
-be read as preferring the shortest path; the planner does not, since the
-paths can mean different things: `store_sales` to `date_dim` is the
-sale's date, `store_sales` to `store` to `date_dim` could be the store's
-closing date. Only paths to datasets the question touches count: two
+path included: section 4 says "even if one path is shorter". The paths
+can mean different things: `store_sales` to `date_dim` is the sale's
+date, `store_sales` to `store` to `date_dim` could be the store's closing
+date. Only paths to datasets the question touches count: two
 paths elsewhere in the model do not refuse a question that does not need
 them.
 
@@ -490,7 +488,12 @@ per sale and came out about 458,000 times too small. In a GA4 model,
 sessions from Google instead of 102,920.
 
 The planner refuses both after it picks the root, on the rewritten tree
-(`APPROX_PERCENTILE` is an aggregate only after rewrite):
+(`APPROX_PERCENTILE` is an aggregate only after rewrite). Since 0.14.0 a
+model's metric whose aggregates each read one dataset is not checked this
+way: it is split into components ("Evaluate each aggregate over its own
+dataset", below), and `store_productivity` is answered. The checks
+remain for a metric of one dataset asked over another root, and for an
+aggregate whose arguments read several datasets:
 
 - An aggregate whose argument reads joined datasets and no root column is
   refused unless repeats cannot change it (`MIN`, `MAX`, `DISTINCT`,
@@ -526,70 +529,189 @@ a dimension or a filter) so an agent can split the question.
 The cost: a correct question is refused when its intended population is
 the root's references, such as distinct users per purchased item through
 `sessions.user_id`. The planner cannot tell that from users next to
-revenue, where it would be wrong. The spec does not say which rows a
-metric spanning datasets is computed over; apache/ossie#354 (open) asks
-every metric to be grain-safe. A metric declared on a dataset
-(apache/ossie#591) has that dataset as its home; a model's metric still
-has its home read from the expression.
+revenue, where it would be wrong. Layer 3 (apache/ossie#653 section 5.2)
+now says which rows a model's metric is computed over: each aggregate
+call, the rows of the one dataset its arguments read. A metric declared
+on a dataset (apache/ossie#591) has that dataset as its home whatever its
+expression.
 A question whose metrics no one root answers together is stitched instead
-(next section); a single metric that reads two datasets is still refused.
+(next sections).
 
-A metric that refuses in every question (a repeat-sensitive aggregate over
-each of two datasets, a bare `COUNT(*)`, an unknown field) is hidden from
-agents like an untranslatable one, since every attempt would cost a turn,
-and is reported by `validate`.
+A metric that refuses in every question is hidden from agents like an
+untranslatable one, since every attempt would cost a turn, and is
+reported by `validate`: a bare `COUNT(*)`, an unknown field, an aggregate
+that repeats rows of a dataset next to an aggregate over several
+datasets, and a metric of components that has a window function or a
+column outside every aggregate.
 
 ## Aggregates over aggregates are refused
 
 An aggregate inside another outside a window, `AVG(COUNT(x))`,
 `AVG(SUM(x) OVER ())` or one in another's `FILTER`, is
-`ILLEGAL_AGGREGATION` in ClickHouse, and apache/ossie#246 §4.5 defers it
-(`E_NESTED_AGGREGATION_DEFERRED`). Such a metric passed `validate` and
-failed in every question, so the planner refuses it
+`ILLEGAL_AGGREGATION` in ClickHouse, and the merged specification does not
+define it (the closed proposal apache/ossie#246 deferred it). Such a
+metric passed `validate` and failed in every question, so the planner
+refuses it
 (`_nested_aggregate`), `validate` reports it and the metric is hidden, as
 is such a filter. `SUM(SUM(x)) OVER ()` is a window over grouped rows
 and passes.
+
+## Evaluate each aggregate over its own dataset
+
+A model's metric whose aggregates read different datasets was planned as
+one `SELECT` from one root. The reference model's
+`customer_lifetime_value`, `SUM(store_sales.ss_ext_sales_price) /
+COUNT(DISTINCT customer.c_customer_sk)`, ran over `store_sales LEFT JOIN
+customer`, so the denominator counted the customers with a sale. The Layer
+3 spec (apache/ossie#653, `core-spec/wide_table_semantics.md`, merged
+2026-11-04) names that plan as wrong in section 5.2: on its data
+(Appendix B.1) it gives 650 / 3 where the answer is 650 / 4. Each
+aggregate call of a model's metric is a component, evaluated over the rows
+of its home dataset, the one dataset its arguments read. Components
+with the same home form a branch with the question's dimensions and row
+filters (sections 5.3 and 5.4); the branches are merged on the dimensions
+(next section), and the metric's expression is evaluated over the
+component values. The expression is the translator's output as before,
+`Division to Float64` included: the aggregates in the rewritten tree are
+replaced by the merged values.
+
+On the TPC-DS data in ClickHouse, `customer_lifetime_value` is 52,624.71
+(5,262,470,646.52 over 100,000 customers) where 0.13.0 gave 57,919.73
+(over the 90,858 customers with a sale). A group of the merge that only the sales
+branch has, such as sales with no matching customer, has no customer
+count: its component takes the empty-input value 0, the division gives
+`inf`, and the executor shows NULL, as for any division by zero.
+
+Cases, against #653:
+
+| Case | Here | #653 |
+|---|---|---|
+| A model's metric whose aggregates read different single datasets | Components, one branch per home | Section 5.2 |
+| A model's metric whose aggregates read one dataset | One branch, planned as a whole: the SQL of 0.13.0 | Same, one component per aggregate in one branch |
+| A dataset's metric | One component whatever its expression | Same |
+| An aggregate whose arguments read several datasets, such as `SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another dataset | Not split. The metric is planned as a whole, over one join, as in 0.13.0 | Refused, deferred (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| A metric with such an aggregate and a single-dataset aggregate over another dataset | Open, see below. Not split for now: the second aggregate is read over the join's rows, and refused unless repeats cannot change it (`MAX`, `DISTINCT`) | Refused |
+| An aggregate that reads no dataset, `COUNT(*)` | Counts the rows of the one dataset the metric's other aggregates read, as before; refused when they read several | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| A column outside every aggregate, in a metric of components | Refused | Refused (`E_UNAGGREGATED_FINER_GRAIN_REFERENCE`) |
+| A column outside every aggregate, in a metric of one dataset | Sent as written, which ClickHouse accepts only for a dimension of the question | Refused |
+| A window function in a metric of components | Refused | Refused (`E_DEFERRED_WINDOWED_METRIC`) |
+| A window function in a metric of one dataset | Answered, in the same `SELECT` | Refused |
+| Aggregates of different datasets written into a question's filter, `SUM(a.x) / COUNT(DISTINCT b.k) > 5` | Refused; name a metric | No such filter |
+
+The rows with a departure share a reason: `query` is not a Layer 3
+binding. Its questions carry several filters, aggregate filters, sorting
+and limits, which #653 leaves out (sections 3.2 and 3.4, Appendix A), so
+the executor answers some questions the spec refuses, where the spec
+defers a case or rejects it as unsupported. Where the spec decides what
+the value is, its semantics win: the first rows, and the reachability
+below.
+
+The mixed row is open. A metric such as `SUM(lines.qty * products.price)
+/ MAX(store.employees)` has an aggregate section 5.2 defers and one it
+names: the second would be evaluated over `store` rows. The planner
+splits a metric only when every aggregate of it reads one dataset, so
+this one is planned as a whole, and the `MAX` reads the stores the lines
+reference. Two readings of the brief for this change fit it: the spec
+defers the metric, so today's answer stays, or one join makes a component
+count rows of another dataset, so it is refused. Undecided. The tests
+that pin the current answer, in `tests/test_planner.py`:
+`test_allows_aggregates_that_read_root_rows`,
+`test_one_to_one_through_a_path`, and the repeat-safe rows of
+`test_clickhouse_aggregates_that_repeats_do_not_change`.
+
+### Reachability
+
+Section 5.3: every dimension's dataset, and the filter's, must be
+reachable through many-to-one relationships from every component's home.
+`customer_lifetime_value` by `store.s_state` or by `date_dim.d_year` was
+answered (over the buyers only) and is refused now: `customer` reaches
+neither `store` nor `date_dim`. The message names the dimension (or the
+filter), the metric, the aggregate and its home, and what would answer the
+question: a metric of a dataset that reaches the dimension and that the
+metric's other aggregates read, such as `COUNT(DISTINCT ss_customer_sk)`
+on `store_sales`. That counts the customers a sale references, which is
+the meaning of the question once a sale is the row.
+
+A row filter is planned in each branch as a question of its own, as
+stitching does:
+
+- A filter on a dataset the home reaches is a `WHERE` over the branch's
+  joins.
+- A filter on a dataset whose rows reference the home, the many side, is
+  the semi-join of "Semi-joins for filters on the many side".
+  `customer_lifetime_value` filtered on `store_sales.ss_quantity > 50`
+  divides the sales with that quantity by the customers with at least one
+  such sale. #653 refuses this filter with `E_UNSUPPORTED_FILTER_PATH`
+  (section 5.3) unless the query or the model asks for the behavior
+  (section 9); the executor answers it for every metric, as it did before.
+- A filter no branch home reaches in either way is refused with that
+  branch's error, which names the filter, the metric and its home.
+
+The errors use no codes. Section 8 asks for the dimension or filter and the
+metric that does not reach it, and for a remedy where one exists; the
+message has both.
+
+### Components in the merged query
+
+The units of a stitched question are its metrics, and the components of
+its split metrics. Units are grouped by the datasets they aggregate across
+all metrics (section 5.4), so `customer_lifetime_value` next to
+`total_sales` by `customer.c_first_name` is one `SELECT` with two
+branches: `store_sales`, which computes both sums, and `customer`, which
+counts. A unit's value over no rows (the empty-input value) is computed as
+before. A branch is planned without stitching again.
+
+Tests: `tests/test_components.py` runs the plan of section 5.5 written out
+as SQL in DuckDB on the data of Appendix B.1 and on a set with a
+dimension value in one branch only, a NULL group in two branches and an
+empty-input `COUNT`, and compares ClickHouse with it. Where a component is
+0 the metric divides by zero, which the two engines answer differently:
+the expected value there is written by hand as NULL, what the executor shows.
 
 ## Stitch metrics of several facts
 
 When no one root answers a question's metrics together, each group of
 metrics is answered from its own root and the results are merged on the
-dimensions, as apache/ossie#246 (`cc0d070`) requires in section 6.2,
-step A.7, and section 6.6. A group is the metrics whose aggregates read
-the same datasets. It is planned as a question of its own with the
-question's dimensions and row filters: a row filter applies to every
-metric (step A.6.1). Revenue next to returns by region was refused; an
-agent had to ask twice and combine the rows, which the MCP server's
-instructions forbid.
+dimensions, as apache/ossie#653 requires in sections 5.4 and 5.5 for the
+branches of a Layer 3 query. A group is the metrics whose aggregates read
+the same datasets, and the components of a split metric (previous
+section) count as metrics of their home. It is planned as a question of
+its own with the question's dimensions and row filters: a row filter
+applies to every branch (section 5.4). Revenue next to returns by region
+was refused; an agent had to ask twice and combine the rows, which the MCP
+server's instructions forbid.
 
 The merge is `UNION ALL` of the groups' rows and `GROUP BY` on the
-dimensions, where #246 describes a `FULL OUTER JOIN`. The rows are the
-same: every group of either side appears (section 6.6, row 3), and a NULL
-dimension value on two sides makes one row, as the NULL-safe equality
-(`IS NOT DISTINCT FROM`) #246 requires would. `GROUP BY` gives that for
-any number of groups; chained joins would need the keys coalesced after
-each one. With no dimensions it leaves one row of totals (row 4).
+dimensions, where #653 describes a `UNION` of the keys with a `LEFT JOIN`
+of each branch on NULL-safe equality (`IS NOT DISTINCT FROM`) and warns
+against joining each branch to only one earlier branch. The rows are the
+same: every dimension tuple of either side appears once (guarantee S3),
+and a NULL dimension value on two sides makes one row. `GROUP BY` gives that
+for any number of groups; chained joins would need the keys coalesced
+after each one. With no dimensions it leaves one row of totals.
 
-A metric missing from a group shows its value over no rows (section
-6.11.5): NULL for `SUM`, 0 for `COUNT`, 0 for `COALESCE(SUM(x), 0)`. The
-planner computes it by replacing each aggregate with its value over no
-rows, 0 for counts and NULL otherwise, and each group marks its rows so
-the merge can tell a missing group from a NULL value. A ClickHouse
-aggregate outside the spec has no such rule: under
+A metric missing from a group shows its value over no rows (section 5.2,
+the empty-input value; `core-spec/relational_semantics.md`, section 8.1):
+NULL for `SUM`, 0 for `COUNT`, 0 for `COALESCE(SUM(x), 0)`. The planner
+computes it by replacing each aggregate with its value over no rows, 0 for
+counts and NULL otherwise, and each group marks its rows so the merge can
+tell a missing group from a NULL value, the `present` marker of section
+5.5. A ClickHouse aggregate outside the spec has no such rule: under
 `aggregate_functions_null_for_empty` it gives 0 for `countIf`, `uniq`
 and `deltaSum`, `[]` for `groupArray` and `topK`, NULL for most others,
 and `system.functions` does not say which. ClickHouse computes it
-instead: the metric planned on its own, as a scalar subquery over
-`WHERE FALSE`, which reads no rows and runs under the outer `SETTINGS`.
+instead: the metric, or the component, planned on its own as a scalar
+subquery over `WHERE FALSE`, which reads no rows and runs under the outer
+`SETTINGS`.
 
-Aggregate filters run on the merged rows (step A.9) and may name metrics,
-selected or not, and the question's dimensions. Refused: an aggregate
-function written into such a filter, and a window metric, which #246
-evaluates over the merged rows (step A.10) and a group would evaluate
-over its own. A question whose dimension or row filter one group cannot
+Aggregate filters, which #653 does not have (it has no predicates on
+metric values), run on the merged rows and may name metrics, selected or
+not, and the question's dimensions. Refused: an aggregate function written
+into such a filter, and a window metric, which a group would evaluate over
+its own rows. A question whose dimension or row filter one group cannot
 reach, such as an `orders` field next to a `returns` metric, is refused
-with that group's own error, which names the datasets it cannot join;
-the single-root error would only say the facts do not join.
+with that group's own error, which names the datasets it cannot join; the
+single-root error would only say the facts do not join.
 
 `tests/test_stitch.py` compares answers with DuckDB running the `FULL OUTER
 JOIN` plan, on the F_PRELUDE data of the Ossie compliance suite
@@ -614,16 +736,19 @@ each session once per purchase. Models worked around it with a field on
 the root (`sessions.has_purchase`), which cannot take the filter's
 condition. Two models of dactopus-data-models asked for it (#10).
 
-Such a filter is now a semi-join, a filtering join in apache/ossie#246
-(`cc0d070`) section 6.5: `sessions.session_key IN (SELECT
+Such a filter is now a semi-join: `sessions.session_key IN (SELECT
 purchases.session_key FROM purchases WHERE purchases.revenue > 0)`. A root
 row stays when at least one row of the filtered dataset references it and
-passes the filter, and counts once. That reading follows from step A.6.1,
-which puts a `WHERE` dataset into every metric's datasets, and Semantic 2,
-which counts each row of a metric's dataset at most once whatever the
-question joins for filtering. Section 6.8 defers an explicit semi-join
-form, `EXISTS_IN`, for many-to-many relationships, with NULL handling and
-negation open; a later proposal may define an anti-semi-join differently.
+passes the filter, and counts once, so a root row never repeats. Layer 3
+(apache/ossie#653) does not define it: a filter whose dataset the metric
+does not reach is `E_UNSUPPORTED_FILTER_PATH` (section 5.3), and section
+9 lets an engine answer it only when the query or the model asks for that
+explicitly. Appendix A.1 lists "existence filters" among the future
+extensions. This executor answers it for every question, so it departs
+from #653 here, as it did before #653 existed. The relational spec (`relational_semantics.md`, section 8.3)
+keeps a source row once per group however many rows derive from it, which
+is the same count. Whether a later version defines an anti-semi-join, and
+how it treats NULL, is open.
 
 The planner tries it only when the question is refused as before. It then
 takes the root of the metrics, dimensions and aggregate filters alone; a
@@ -716,7 +841,7 @@ order_lines.product_id IN (SELECT products.product_id FROM products
   line kept through its item or through its customer) and are refused
   with both named, even when one reaches the other: M's row then names
   the second one twice, directly and through the first. So are two paths
-  from the root to S (#246 section 6.9).
+  from the root to S (apache/ossie#653 section 4).
 - Only a table of S's properties qualifies: on M's path to S, a key of
   each dataset holds its columns to the next (`Planner._not_a_property`).
   `product_categories (product_id, category)` lists properties of a

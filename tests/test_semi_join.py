@@ -4,8 +4,8 @@ reach, against ClickHouse, compared with DuckDB.
 Orders, order lines and items are filtered for a count of customers; logins for
 a count of accounts, joined on a key of two columns. Expected rows come from
 DuckDB running EXISTS: a customer counts once when at least one of its orders
-passes every filter on orders, and not at all without one (#246 §6.5,
-filtering join; Semantic 2). orders is a ReplacingMergeTree with an order
+passes every filter on orders, and not at all without one (docs/design.md,
+"Semi-joins for filters on the many side"). orders is a ReplacingMergeTree with an order
 updated after it was paid, so a subquery read without FINAL counts it.
 
 Order lines are counted by tags of their item, and of their order's customer,
@@ -274,7 +274,7 @@ CASES = [
         "WHERE g.tenant = a.tenant AND g.account = a.account AND g.day = 'd1')",
     ),
     # Stitched: customers through the semi-join, orders with a plain WHERE, merged
-    # by region with NULL-safe equality (§6.6 row 3).
+    # by region with NULL-safe equality (section 5.5).
     (
         Query(
             ("customer_count", "order_count"), ("customers.region",), ("orders.status = 'paid'",)
@@ -854,7 +854,7 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "answered over orders rows (because of dimension 'orders.status', filter "
             "'orders.total > 0')",
         ),
-        # Two paths from lines to customers (#246 §6.9).
+        # Two paths from lines to customers (apache/ossie#653 section 4).
         (
             _variant(
                 {

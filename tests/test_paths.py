@@ -1,11 +1,11 @@
 """Paths of more than one relationship, against ClickHouse, compared with DuckDB.
 
-Order lines and refunds reach customers only through orders (#246 §6.9 rule 1).
+Order lines and refunds reach customers only through orders (apache/ossie#653 section 4).
 Expected rows come from DuckDB running LEFT JOINs along the path from the fact
-outward (§6.6 row 1): a fact row without a match at either step lands in the
-NULL group, and a customer no fact reaches does not appear (§6.2 step A.7). The
-intermediate dataset takes part in the query like any other (§6.2, datasets
-involved in a query): where may filter it."""
+outward (section 5.4): a fact row without a match at either step lands in the
+NULL group, and a customer no fact reaches does not appear (section 5.5). The
+intermediate dataset takes part in the query like any other (section 5.4,
+the join tree): where may filter it."""
 
 from pathlib import Path
 
@@ -62,7 +62,7 @@ CASES = [
         Query(("line_amount",), ("customers.region",), ("orders.status = 'paid'",)),
         f"SELECT region, line_amount FROM ({LINES.format(where=PAID)})",
     ),
-    # Two facts by a dimension two steps from each, stitched (§6.6 row 3).
+    # Two facts by a dimension two steps from each, stitched (section 5.5).
     (
         Query(("line_amount", "refund_amount"), ("customers.region",)),
         f"""SELECT COALESCE(a.region, b.region), a.line_amount, b.refund_amount

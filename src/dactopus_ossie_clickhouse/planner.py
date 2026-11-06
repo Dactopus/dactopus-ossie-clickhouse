@@ -245,12 +245,52 @@ def _window_function(agg: exp.AggFunc) -> bool:
     return isinstance(parent, exp.Window)
 
 
+def _component_node(agg: exp.AggFunc) -> exp.Expression:
+    """The aggregate with the wrappers that belong to it: FILTER (WHERE ...),
+    RESPECT NULLS, IGNORE NULLS."""
+    node: exp.Expression = agg
+    while isinstance(node.parent, exp.Filter | exp.RespectNulls | exp.IgnoreNulls) and (
+        node.parent.this is node
+    ):
+        node = node.parent
+    return node
+
+
+def _loose_column(tree: exp.Expression) -> exp.Column | None:
+    """A column outside every aggregate and every window clause: the spec's
+    unaggregated field (E_UNAGGREGATED_FINER_GRAIN_REFERENCE)."""
+    for col in tree.find_all(exp.Column):
+        node = col.parent
+        while node is not None and not (
+            isinstance(node, exp.AggFunc | exp.Window)
+            or (isinstance(node, exp.Filter) and isinstance(node.this, exp.AggFunc))
+        ):
+            node = node.parent
+        if node is None:
+            return col
+    return None
+
+
+@dataclass
+class _Unit:
+    """What a stitched branch computes: a model's metric as a whole, or one
+    component of a metric whose aggregates read different datasets."""
+
+    alias: str  # the metric's name, or __c<n> for a component
+    tree: exp.Expression
+    label: str  # "metric 'x'", as errors name it
+    key: frozenset[str]  # the datasets whose rows it aggregates: its branch
+    metric: str  # the metric the unit belongs to
+    component: bool = False
+    home: str = ""
+
+
 def _nested_aggregate(tree: exp.Expression) -> str | None:
     """Why ``tree`` cannot run, when it has an aggregate inside another that is not
     a window function: AVG(COUNT(x)), AVG(SUM(x) OVER ()), or an aggregate in
     another's FILTER (WHERE ...). ClickHouse refuses them (ILLEGAL_AGGREGATION), and
-    the spec defers them (#246 §4.5, E_NESTED_AGGREGATION_DEFERRED). SUM(SUM(x))
-    OVER () is a window over grouped rows and passes."""
+    the merged specification does not define them. SUM(SUM(x)) OVER () is a window
+    over grouped rows and passes."""
     for inner in tree.find_all(exp.AggFunc):
         prev, node = inner, inner.parent
         while node is not None and not isinstance(node, exp.AggFunc):
@@ -284,8 +324,10 @@ def _repeated(inputs: Inputs, root: str, one_to_one: set[str]) -> Inputs:
 def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -> dict[str, str]:
     """Metrics the planner refuses in every question, with why.
 
-    One that names an unknown field or reads no column, and one with a
-    duplicate-sensitive aggregate over each of two datasets: whichever is the
+    One that names an unknown field or reads no column, one whose aggregates
+    read different datasets and that also has a window function or a column
+    outside every aggregate (_split), and one with a duplicate-sensitive
+    aggregate over each of two datasets that is not split: whichever is the
     root, the other one's rows repeat. Untranslatable metrics are reported by
     untranslatable()."""
     planner = Planner(model, catalog)
@@ -296,7 +338,11 @@ def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -
             continue
         try:
             # Through the planner, so names are the model's spelling, as in plan().
-            inputs = _aggregate_inputs(planner._metric_tree(planner.metric(name), set()))
+            m = planner.metric(name)
+            tree = planner._metric_tree(m, set())
+            if planner._split(m, tree) is not None:
+                continue  # each aggregate is answered over its own dataset
+            inputs = _aggregate_inputs(tree)
         except PlanError as e:
             out[name] = str(e)
             continue
@@ -335,7 +381,8 @@ def _settings() -> list[exp.Expression]:
 
 def _empty_value(tree: exp.Expression) -> exp.Expression | None:
     """A metric over no rows: what a stitched group missing from the metric's fact
-    shows. #246 §6.11.5: NULL for SUM, 0 for COUNT, 0 for COALESCE(SUM(x), 0).
+    shows. The empty-input value of apache/ossie#653 section 5.2 (#354 section 8.1):
+    NULL for SUM, 0 for COUNT, 0 for COALESCE(SUM(x), 0).
 
     None for a metric with an aggregate outside the spec: ClickHouse gives 0 for
     countIf and uniq, NULL for sumIf, [] for groupArray, and system.functions
@@ -344,7 +391,9 @@ def _empty_value(tree: exp.Expression) -> exp.Expression | None:
         return None
 
     def empty(node: exp.Expression) -> exp.Expression:
-        agg = node.this if isinstance(node, exp.Filter) else node  # COUNT(x) FILTER (...)
+        agg = node  # COUNT(x) FILTER (...), ANY_VALUE(x) IGNORE NULLS
+        while isinstance(agg, exp.Filter | exp.RespectNulls | exp.IgnoreNulls):
+            agg = agg.this
         if isinstance(agg, exp.AggFunc):
             counts = isinstance(agg, exp.Count | exp.ApproxDistinct)
             return exp.Literal.number(0) if counts else exp.Null()
@@ -708,6 +757,43 @@ class Planner:
                 )
         return tree
 
+    def _split(
+        self, m: OssieMetric, tree: exp.Expression
+    ) -> list[tuple[exp.Expression, str]] | None:
+        """The components of a model's metric, [(aggregate with its wrappers, home
+        dataset)] in ``tree``, when its aggregates read different datasets; None
+        when it is one branch, planned as a whole.
+
+        Layer 3 (apache/ossie#653, "Metric components"): each aggregate of a
+        model's metric is evaluated over the rows of the one dataset its
+        arguments read, and the metric's expression over the values. A
+        dataset's metric is one component whatever its expression. A metric with
+        an aggregate that reads several datasets (SUM(lines.qty * products.price),
+        or a FILTER on another dataset) is not split, which #653 defers and
+        refuses: it is planned as before. Refused when split: a column
+        outside every aggregate, and a window function (deferred)."""
+        if m.name.upper() in self._scopes:
+            return None
+        inputs = _aggregate_inputs(tree)
+        if not inputs or any(len(ds) != 1 for _, ds in inputs):
+            return None
+        if len({next(iter(ds)) for _, ds in inputs}) < 2:
+            return None
+        if loose := _loose_column(tree):
+            raise PlanError(
+                f"metric {m.name!r} reads {loose.sql('clickhouse')} outside every aggregate, "
+                "and its aggregates read different datasets, so each is answered over its own "
+                "dataset's rows and a bare column has no row to come from; aggregate it, "
+                "or ask for the field as a dimension"
+            )
+        if tree.find(exp.Window):
+            raise PlanError(
+                f"metric {m.name!r} is a window function over aggregates that read different "
+                "datasets; this version cannot answer it (the spec defers it). Put the "
+                "window in a metric of one dataset, or ask for each part on its own"
+            )
+        return [(_component_node(agg), next(iter(ds))) for agg, ds in inputs]
+
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
         tree = self._parse(pick_expression(f.expression))
@@ -744,7 +830,8 @@ class Planner:
 
     def _paths(self, start: str, target: str) -> list[tuple[OssieRelationship, ...]]:
         """Up to two acyclic paths of relationships from ``start`` to ``target``
-        (apache/ossie#246 §6.9 rule 4); a second one already makes the join ambiguous."""
+        (apache/ossie#653 section 4: no dataset twice); a second one already makes the
+        join ambiguous."""
         found: list[tuple[OssieRelationship, ...]] = []
 
         def walk(at: str, path: tuple[OssieRelationship, ...], seen: frozenset[str]) -> None:
@@ -761,9 +848,9 @@ class Planner:
     def _joins(self, root: OssieDataset, used: set[str]) -> list[OssieRelationship]:
         """The relationships that join each used dataset to ``root``, nearest first.
 
-        apache/ossie#246 §6.9: the one path of many-to-one relationships to each
+        apache/ossie#653 section 4: the one path of many-to-one relationships to each
         dataset, ambiguous when there are two. Datasets on a path that the query
-        does not name are joined too (§6.2, datasets involved in a query)."""
+        does not name are joined too (section 5.4, the join tree)."""
         depth: dict[str, tuple[int, OssieRelationship]] = {}
         for name in sorted(used - {root.name}):
             paths = self._paths(root.name, name)
@@ -821,6 +908,19 @@ class Planner:
     # --- assembly -----------------------------------------------------------
 
     def plan(self, q: Query) -> exp.Select:
+        return self._plan(q)
+
+    def _plan(
+        self,
+        q: Query,
+        components: dict[str, tuple[str, exp.Expression]] | None = None,
+        nested: bool = False,
+    ) -> exp.Select:
+        """``plan``. A branch of a stitched question (``nested``) is planned as a
+        question of its own: it is never stitched again. Its ``components``
+        name aggregates of a model's metric by internal alias, as (label, tree);
+        they stand in for metrics of the model."""
+        components = components or {}
         if not q.metrics and not q.dimensions:
             raise PlanError("a query needs at least one metric or dimension")
         if q.limit is not None and q.limit < 0:
@@ -850,6 +950,13 @@ class Planner:
             group.append(e.copy())
 
         for name in q.metrics:
+            if name in components:
+                label, tree = components[name]
+                inputs = _aggregate_inputs(tree)
+                touched.setdefault(label, set()).update(d for _, ds in inputs for d in ds)
+                checked.append((label, inputs))
+                selects.append(tree.copy().as_(alias(name)))
+                continue
             m = self.metric(name)
             label = f"metric {m.name!r}"
             tree = self._metric_tree(m, touched.setdefault(label, set()))
@@ -878,6 +985,7 @@ class Planner:
                 rows[label] = tree
                 row_filters.append(f)
                 continue
+            self._written_aggregates(f)
             # HAVING may only see aggregates and GROUP BY expressions.
             for col in tree.find_all(exp.Column):
                 if col.find_ancestor(exp.AggFunc):
@@ -894,6 +1002,9 @@ class Planner:
             aggregate_filters.append(f)
             checked.append((label, _aggregate_inputs(tree)))
 
+        if not nested and self._splits(q, aggregate_filters):
+            # Never one SELECT over a join: a component counts the rows of its own dataset.
+            return self._stitch(q, row_filters, aggregate_filters)
         used = set().union(*touched.values())
         where = list(rows.values())
         semi_joins: list[exp.Expression] = []
@@ -912,7 +1023,7 @@ class Planner:
             except PlanError:
                 split = self._split_filters(touched, rows, checked)
                 if split is None:
-                    stitched = self._stitch(q, row_filters, aggregate_filters)
+                    stitched = None if nested else self._stitch(q, row_filters, aggregate_filters)
                     if stitched is not None:
                         return stitched
                     raise
@@ -990,7 +1101,8 @@ class Planner:
 
         A row of the root stays when at least one row of the filtered dataset M
         references it and passes the filter, so no root row repeats; NOT stays
-        inside (#246 §6.5, filtering join; Semantic 2). Filters on M and on
+        inside (docs/design.md, "Semi-joins for filters on the many side": #653
+        rejects such a filter, section 5.3, and this planner answers it). Filters on M and on
         datasets M reaches go into one subquery, so one row of M passes all of
         them, as a joined row would. The subquery is a question over M, with its
         own joins, FINAL and dictionaries; M reaches the root along one path of
@@ -1254,23 +1366,28 @@ class Planner:
             )
         return _in(self._keys(root, path[-1].to_columns), sub)
 
-    def _stitch(self, q: Query, where: list[str], having: list[str]) -> exp.Select | None:
-        """Metrics no one root answers together, each answered from its own root and
-        merged on the dimensions (#246 §6.2 step A.7, §6.6); None if they form one
-        group, or a group is refused even on its own.
+    def _written_aggregates(self, f: str) -> None:
+        """Refuse a filter that writes aggregates over different datasets, such as
+        ``SUM(a.x) / COUNT(DISTINCT b.k) > 5``: over one join, ``b`` would be
+        counted over the rows ``a`` references. A metric of the model that does
+        the same is answered by components; a filter names it."""
+        written = _aggregate_inputs(self._parse(f))
+        if any(len(ds) != 1 for _, ds in written):
+            return
+        homes = sorted({self.dataset(next(iter(ds))).name for _, ds in written})
+        if len(homes) > 1:
+            raise PlanError(
+                f"filter {f!r} applies aggregates of {' and '.join(homes)} rows in one "
+                "expression, which one SELECT over joined rows would count over the rows "
+                "of only one of them; name a metric of the model that does this, or filter "
+                "on an aggregate of one dataset"
+            )
 
-        Metrics are grouped by the datasets their aggregates read, and each group is
-        planned as a question of its own with the dimensions and the row filters,
-        which apply to every metric (#246 §6.2 step A.6.1). The groups' rows are
-        merged with UNION ALL and GROUP BY on the dimensions: every group of either
-        side appears (§6.6 row 3), a NULL dimension value merges into one row as
-        NULL-safe equality would, and no dimensions leave one row of totals (§6.6
-        row 4). A metric missing from a group shows its value over no rows
-        (_empty_value). Aggregate filters run after the merge (step A.9) and may
-        name metrics, selected or not, and the question's dimensions. ``where`` and
-        ``having`` are the question's filters as plan() split them."""
+    def _merge_names(self, q: Query, having: list[str]) -> tuple[list[str], list[exp.Expression]]:
+        """The metrics a stitched question answers, selected or only named in an
+        aggregate filter, as the model spells them, and the filters parsed."""
         names = list(dict.fromkeys(self.metric(n).name for n in q.metrics))
-        having_trees = []
+        trees = []
         for f in having:
             tree = self._parse(f)
             self._time_strings(tree, metrics=True)
@@ -1278,12 +1395,61 @@ class Planner:
                 m = self._named_metric(col)
                 if m and m.name not in names:
                     names.append(m.name)  # filtered on, not selected
-            having_trees.append(tree)
+            trees.append(tree)
+        return names, trees
 
+    def _splits(self, q: Query, having: list[str]) -> bool:
+        """Whether a metric of the question has components of different datasets."""
+        names, _ = self._merge_names(q, having)
+        return any(
+            self._split(m, self._metric_tree(m, set())) is not None
+            for m in (self.metric(n) for n in names)
+        )
+
+    def _stitch(self, q: Query, where: list[str], having: list[str]) -> exp.Select | None:
+        """Metrics no one root answers together, each answered from its own root and
+        merged on the dimensions (Layer 3, apache/ossie#653 sections 5.4 and 5.5);
+        None if they form one group, or a group is refused even on its own.
+
+        The units of a question are its metrics, and the components of a model's
+        metric whose aggregates read different datasets (_split). Units are grouped
+        by the datasets they aggregate, across metrics: the aggregates of a
+        dataset, components or whole metrics, form one branch. Each group is
+        planned as a question of its own with the dimensions and the row filters,
+        which apply to every unit. The groups' rows are merged with UNION ALL
+        and GROUP BY on the dimensions: every group of either side appears
+        (S3), a NULL dimension value merges into one row as NULL-safe equality
+        would, and no dimensions leave one row of totals.
+        A unit missing from a group shows its value over no rows (_empty_value).
+        A split metric's expression is then evaluated over the merged values of
+        its components. Aggregate filters (#653 has no metric-value predicates) run on
+        the merged rows and may name metrics, selected or not, and the question's
+        dimensions. ``where`` and ``having`` are the question's filters as plan()
+        split them."""
+        names, having_trees = self._merge_names(q, having)
         metric_trees = {n: self._metric_tree(self.metric(n), set()) for n in names}
-        groups: dict[frozenset[str], list[str]] = {}
+        units: list[_Unit] = []
+        outer: dict[str, exp.Expression] = {}  # a split metric -> its expression over components
         for n, tree in metric_trees.items():
-            groups.setdefault(frozenset(_homes(_aggregate_inputs(tree))), []).append(n)
+            m = self.metric(n)
+            parts = self._split(m, tree)
+            if parts is None:
+                key = frozenset(_homes(_aggregate_inputs(tree)))
+                units.append(_Unit(n, tree, f"metric {n!r}", key, n))
+                continue
+            standing = []
+            for node, home in parts:
+                alias = f"__c{len(units)}"
+                units.append(
+                    _Unit(alias, node.copy(), f"metric {n!r}", frozenset({home}), n, True, home)
+                )
+                standing.append((node, alias))
+            for node, alias in standing:  # after the copies: the nodes are disjoint
+                node.replace(exp.column(alias))
+            outer[n] = tree
+        groups: dict[frozenset[str], list[_Unit]] = {}
+        for u in units:
+            groups.setdefault(u.key, []).append(u)
         if len(groups) > 1 and frozenset() in groups:
             # A metric that reads no dataset (the current time) takes its value in any
             # group; a group of its own would add a row for every dimension value.
@@ -1291,25 +1457,27 @@ class Planner:
             next(iter(groups.values())).extend(loose)
         if len(groups) < 2:
             return None
+        splitting = bool(outer)
         branches = []
         for members in groups.values():
             try:
-                branch = Query(tuple(members), q.dimensions, tuple(where))
-                branches.append((set(members), self.plan(branch)))
+                branches.append(self._branch(members, q.dimensions, where))
             except PlanError as e:
-                try:
-                    self.plan(Query(tuple(members)))
-                except PlanError:
-                    return None  # refused alone too: the single-root error says why
-                # A dimension or row filter the group cannot reach: its own refusal
-                # names the datasets, the single-root one only says the facts do not join.
-                raise PlanError(
-                    "metrics of different datasets are answered each on their own, and "
-                    f"{', '.join(map(repr, members))} cannot be with this question's "
-                    f"dimensions and row filters: {e}"
-                ) from None
+                if not splitting:
+                    try:
+                        self.plan(Query(tuple(u.alias for u in members)))
+                    except PlanError:
+                        return None  # refused alone too: the single-root error says why
+                    # A dimension or row filter the group cannot reach: its own refusal
+                    # names the datasets, the single-root one only says the facts do not join.
+                    raise PlanError(
+                        "metrics of different datasets are answered each on their own, and "
+                        f"{', '.join(repr(u.alias) for u in members)} cannot be with this "
+                        f"question's dimensions and row filters: {e}"
+                    ) from None
+                raise self._branch_error(members, units, q.dimensions, where, e) from None
         for n, tree in metric_trees.items():
-            if tree.find(exp.Window):
+            if n not in outer and tree.find(exp.Window):
                 raise PlanError(
                     f"metric {n!r} is a window over the merged rows of metrics that are "
                     "answered from different datasets; this version cannot answer it, "
@@ -1321,24 +1489,25 @@ class Planner:
                     f"filter {f!r} applies an aggregate function to metrics answered from "
                     "different datasets; this version cannot answer it, name a metric instead"
                 )
-        empties = {}
-        for n in names:
-            empty = _empty_value(metric_trees[n])
-            empties[n] = self._over_no_rows(n) if empty is None else empty
+        empties = []
+        for u in units:
+            empty = _empty_value(u.tree)
+            empties.append(self._over_no_rows(u) if empty is None else empty)
 
         dims = [self.field_ref(d)[1].name for d in q.dimensions]
-        marked = [  # groups with a metric whose value over no rows is not NULL
+        group_of = {u.alias: g for g, members in enumerate(groups.values()) for u in members}
+        marked = [  # groups with a unit whose value over no rows is not NULL
             g
-            for g, (members, _) in enumerate(branches)
-            if any(not isinstance(empties[n], exp.Null) for n in members)
+            for g, members in enumerate(groups.values())
+            if any(not isinstance(empties[units.index(u)], exp.Null) for u in members)
         ]
         parts = []
-        for g, (members, sel) in enumerate(branches):
+        for g, (members, (_, sel)) in enumerate(zip(groups.values(), branches, strict=True)):
             planned = {e.alias.upper(): e.this for e in sel.expressions}
             cols = [planned[d.upper()].as_(d) for d in dims]
             cols += [
-                (planned[n.upper()] if n in members else exp.Null()).as_(f"__m{i}")
-                for i, n in enumerate(names)
+                (planned[u.alias.upper()] if u in members else exp.Null()).as_(f"__m{i}")
+                for i, u in enumerate(units)
             ]
             cols += [
                 (exp.Literal.number(1) if h == g else exp.Null()).as_(f"__b{h}") for h in marked
@@ -1349,17 +1518,30 @@ class Planner:
                 part.set(arg, None)
             parts.append(part)
 
-        def merged(i: int, n: str) -> exp.Expression:
+        def merged(i: int) -> exp.Expression:
+            u = units[i]
             value = exp.AnyValue(this=exp.column(f"__m{i}"))  # any() skips NULLs
-            g = next(g for g, (members, _) in enumerate(branches) if n in members)
-            if g not in marked or isinstance(empties[n], exp.Null):
+            g = group_of[u.alias]
+            if g not in marked or isinstance(empties[i], exp.Null):
                 return value
             present = exp.GT(
                 this=exp.Count(this=exp.column(f"__b{g}")), expression=exp.Literal.number(0)
             )
-            return exp.If(this=present, true=value, false=empties[n])
+            return exp.If(this=present, true=value, false=empties[i])
 
-        values = {n: merged(i, n) for i, n in enumerate(names)}
+        by_alias = {u.alias: merged(i) for i, u in enumerate(units)}
+        values: dict[str, exp.Expression] = {}
+        for n in names:
+            if n in outer:
+
+                def component(node: exp.Expression) -> exp.Expression:
+                    if isinstance(node, exp.Column) and not node.table and node.name in by_alias:
+                        return by_alias[node.name].copy()
+                    return node
+
+                values[n] = outer[n].transform(component)
+            else:
+                values[n] = by_alias[n]
         selects = [exp.column(d).as_(d) for d in dims]
         selects += [values[self.metric(n).name].copy().as_(self.metric(n).name) for n in q.metrics]
         sel = exp.select(*selects).from_(exp.union(*parts, distinct=False).subquery("stitched"))
@@ -1386,6 +1568,86 @@ class Planner:
             sel = sel.limit(q.limit)
         sel.set("settings", _settings())
         return sel
+
+    def _branch(
+        self, members: list[_Unit], dimensions: tuple[str, ...], where: list[str]
+    ) -> tuple[list[_Unit], exp.Select]:
+        """A branch: ``members`` planned as a question of their own."""
+        stand_in = {u.alias: (u.label, u.tree) for u in members if u.component}
+        names = tuple(u.alias for u in members)
+        return members, self._plan(Query(names, dimensions, tuple(where)), stand_in, nested=True)
+
+    def _branch_error(
+        self,
+        members: list[_Unit],
+        units: list[_Unit],
+        dimensions: tuple[str, ...],
+        where: list[str],
+        error: PlanError,
+    ) -> PlanError:
+        """Why a branch of a question with split metrics is refused: the unit that
+        cannot be with the dimensions and row filters, and the dimension or filter
+        that it cannot reach (#653 section 8 names both)."""
+        for u in members:
+            try:
+                self._branch([u], dimensions, where)
+            except PlanError as e:
+                first = e
+                break
+        else:
+            return error
+        try:
+            self._branch([u], (), [])
+        except PlanError as alone:
+            return alone  # refused with nothing else asked: its own error says why
+        if not u.component:
+            return PlanError(
+                "metrics of different datasets are answered each on their own, and "
+                f"{u.alias!r} cannot be with this question's dimensions and row filters: {first}"
+            )
+        what = f"{u.label}, whose aggregate {u.tree.sql('clickhouse')} reads {u.home} rows,"
+        reach = self._reachable(u.home)
+        for d in dimensions:
+            try:
+                self._branch([u], (d,), [])
+            except PlanError as e_d:
+                ds = self.field_ref(d)[0].name
+                if ds in reach:
+                    return PlanError(f"dimension {d!r} cannot be with {what}: {e_d}")
+                return PlanError(
+                    f"dimension {d!r} cannot be with {what} because {u.home} does not reach "
+                    f"{ds} through many-to-one relationships. {self._other_home(u, units, ds)}"
+                )
+        for f in where:
+            try:
+                self._branch([u], (), [f])
+            except PlanError as e_f:
+                return PlanError(f"row filter {f!r} cannot be with {what}: {e_f}")
+        return PlanError(f"dimensions and row filters cannot be with {what}: {first}")
+
+    def _other_home(self, u: _Unit, units: list[_Unit], target: str) -> str:
+        """What would answer a question by ``target``: a metric of a dataset that
+        reaches it and that the metric's other aggregates read, counting the rows
+        of ``u.home`` that its rows reference."""
+        homes = sorted({o.home for o in units if o.metric == u.metric and o.component} - {u.home})
+        reaching = [h for h in homes if target in self._reachable(h)]
+        if not reaching:
+            return f"No other dataset of metric {u.metric!r} reaches {target}."
+        r = reaching[0]
+        link = [
+            rel
+            for rel in self._outgoing(r)
+            if rel.to.upper() == u.home.upper() and len(rel.from_columns) == 1
+        ]
+        agg = u.tree.this if isinstance(u.tree, exp.Filter) else u.tree
+        example = ""
+        if len(link) == 1 and isinstance(agg, exp.Count) and isinstance(agg.this, exp.Distinct):
+            example = f", such as COUNT(DISTINCT {link[0].from_columns[0]})"
+        return (
+            f"To ask for it by {target}, define a metric of dataset {r}, which reaches "
+            f"{target}{example}; it counts the {u.home} rows that {r} rows reference, "
+            f"not every {u.home} row."
+        )
 
     def _order(self, q: Query, selects: list[exp.Expression]) -> list[exp.Expression]:
         """ORDER BY over selected aliases; names are metrics, dataset.field, or field names.
@@ -1418,11 +1680,15 @@ class Planner:
                 out.append(exp.Ordered(this=exp.column(alias), desc=False, nulls_first=False))
         return out
 
-    def _over_no_rows(self, name: str) -> exp.Expression:
-        """A metric's value over no rows as ClickHouse computes it: the metric
-        planned on its own, as a scalar subquery over WHERE FALSE, which reads
-        nothing. It runs under the outer query's SETTINGS."""
-        sel = self.plan(Query((name,)))
+    def _over_no_rows(self, unit: _Unit) -> exp.Expression:
+        """A unit's value over no rows as ClickHouse computes it: the metric (or the
+        component) planned on its own, as a scalar subquery over WHERE FALSE,
+        which reads nothing. It runs under the outer query's SETTINGS."""
+        sel = self._plan(
+            Query((unit.alias,)),
+            {unit.alias: (unit.label, unit.tree)} if unit.component else None,
+            nested=True,
+        )
         for arg in ("order", "limit", "settings"):
             sel.set(arg, None)
         return sel.where(exp.false()).subquery()

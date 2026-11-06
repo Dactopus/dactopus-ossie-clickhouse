@@ -36,6 +36,10 @@ SUPPORTED_DIALECTS = ("OSSIE_SQL_2026", "ANSI_SQL")
 # a JSON object on a dataset or on the model, with these keys and values.
 VENDOR = "CLICKHOUSE"
 DEFAULT_TIME_ZONE = "UTC"
+# In a dataset's metric, `source.column` reads a column of the dataset's source (spec,
+# "Metric Scoping"), unless the dataset declares a field of this name. Upper case: names
+# resolve case-insensitively.
+SOURCE_QUALIFIER = "SOURCE"
 
 
 class ModelError(ValueError):

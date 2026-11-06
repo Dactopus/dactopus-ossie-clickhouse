@@ -370,6 +370,78 @@ The pin that brings this also brings dataset-scoped metrics
 answers them, a model that declares one is refused: loading it and
 answering without its metrics would drop them silently.
 
+## Source columns in a dataset's metric
+
+apache/ossie#633 (`21e849d`; `spec.md`, "Metric Scoping" and "Name
+Resolution") lets a dataset's metric read a column of its dataset's
+`source` as `source.column`: "`source.quantity` and `SOURCE.quantity` name
+the same column. `source.amount` refers to the source column even when the
+dataset declares a field named `amount`." An unqualified name in such a
+metric "MUST be a declared field of the dataset". On the name `source`:
+"`source` is not reserved: a field or dataset may be named `source`. If a
+dataset declares a field named `source`, the name `source` refers to that
+field, so the dataset's metrics cannot refer to source columns." A model's
+metric "cannot reference source columns", and keys and relationship
+columns name fields. For a consumer that generates SQL against the source
+tables the spec says to replace "each `source.column` reference with
+`column`".
+
+How. `Planner._own_field` reads the qualifier case-insensitively. When the
+dataset declares no field named `source`, it rewrites `source.column` on
+the AST to the column under the dataset's alias, `orders.column`, and
+substitutes no field's expression, even for a field of the same name. Only
+the qualifier folds case: the column keeps the spelling the expression
+gives it, as a field's column does, since ClickHouse's column names are
+case-sensitive. When the dataset declares a field named `source`, any
+`source.column` is refused with a message that says the field takes
+precedence. Every other qualified name in a dataset's metric stays an
+error. A `source.column` in a model's metric or in an agent's filter, where
+no dataset named `source` exists, is refused with a message that says
+source columns belong to a dataset's own metrics; a dataset that is itself
+named `source` keeps `source.field` in model metrics and filters. A key or
+relationship column `source.x` is not a field name, so loading refuses it.
+
+Access. `validate --url` checks a metric's source columns against
+`system.columns` like the columns of fields. A metric over a source column
+that the connected user cannot see is hidden from that user (`Executor`
+adds it to the hidden metrics), and `restrict` does not read `source.x` as
+a field named `x` of a dataset named `source`. The column therefore appears
+in no SQL, error or suggestion.
+
+## AGG is reserved
+
+apache/ossie#662 (`9b8f16c`; `expression_language.md`, "Measure
+Evaluation: `AGG` (RESERVED)"): "In `OSSIE_SQL_2026` expressions, an
+implementation MUST NOT give `AGG` any other meaning. Expressions in other
+dialects are not affected. Because function names should be case
+insensitive, the reservation covers every capitalization". And:
+"`OSSIE_SQL_2026` expressions MUST NOT call `AGG` until a future version
+defines where model declarations may use it." A field, metric or column
+named `agg` stays valid ("Reserving `AGG` as a function name does not
+prevent a field, metric, or column from being named `agg`").
+
+Before this a call of `AGG(x)` parsed as an unknown function and went to
+ClickHouse as written, where it fails or, if the server has a function of
+that name, means something else. `parse()` now refuses a call of `AGG` in
+any capitalization, an `OVER` call too, so the refusal reaches a field and
+a metric (hidden and reported by `validate`, as any expression that does
+not translate) and an agent's filter, before any SQL is built. Only a
+function call is refused: a column, field or metric named `agg` is a name,
+not a call.
+
+Which expressions it covers. The same as in "NULL placement in ORDER BY":
+`sql`, an `OSSIE_SQL_2026` entry and, because this project reads it by the
+same rules, an `ANSI_SQL` entry. The spec's "Expressions in other dialects
+are not affected" says the reservation does not bind them, not that
+refusing is wrong; the SQL standard has no function `AGG`, so no portable
+`ANSI_SQL` expression loses a meaning, and one rule keeps a metric valid
+when its author moves it between `sql` and `ANSI_SQL`. The cost is a
+ClickHouse user-defined function named `agg` called from an `ANSI_SQL`
+entry; the spec's own advice for an older expression is to "write the
+expression in a vendor dialect", which this executor does not read, so such
+a call cannot be written in a model. Nothing else the spec says gives a
+reason to accept it.
+
 ## Paths of several relationships
 
 A question may touch a dataset the root reaches only through others, such

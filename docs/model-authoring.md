@@ -196,11 +196,35 @@ rules of the previous section apply as to any metric of that dataset:
 
 A dataset's fields and metrics share one set of names, so a metric named
 like a field of its dataset fails to load. A metric that names a field
-of another dataset, its own field as `orders.amount`, a source column no
-field declares, or another metric is refused in every question and
-reported by `validate`, as apache/ossie's validator refuses it. A metric
-over fields of several datasets goes in the model's `metrics`, which
-cannot name a dataset's metric either.
+of another dataset, its own field as `orders.amount`, a column of its
+source without `source.`, or another metric is refused in every question
+and reported by `validate`, as apache/ossie's validator refuses it. A
+metric over fields of several datasets goes in the model's `metrics`,
+which cannot name a dataset's metric either.
+
+A dataset's metric may also read a column of its dataset's `source`,
+written `source.column` (spec, "Metric Scoping"), so a column that no
+field exposes can still be aggregated:
+
+```yaml
+    metrics:
+      - name: units
+        expression: {sql: SUM(source.quantity)}
+```
+
+The query reads the column as it is, under the dataset: `SUM(orders.quantity)`.
+The qualifier is case insensitive (`SOURCE.quantity` is the same column),
+the column keeps the spelling the expression gives it, and the column wins
+over a field of the same name: `source.amount` reads the column `amount`
+even when the dataset declares a field `amount` with another expression.
+`validate --url` checks the column exists, and a metric over a column the
+connected ClickHouse user cannot read is hidden from that user, like a
+metric over a field they cannot read.
+
+`source` is not reserved. A dataset that declares a field named `source`
+reads that name as the field, so none of its metrics can read a source
+column and `source.column` is refused there. A model's metric, a key and a
+relationship never reach source columns: `source.column` in one is refused.
 
 ## Expressions
 
@@ -211,8 +235,13 @@ it, an `OSSIE_SQL_2026` entry is read, then `ANSI_SQL`, which the spec
 leaves opaque and this executor reads as OSSIE_SQL_2026. Other dialects
 are carried and ignored; an expression with only those is reported by
 `validate`. Within a field, bare column names are the dataset's own
-columns; a field may not reach into another dataset. Metrics reference
-fields as `dataset.field`.
+columns; a field may not reach into another dataset. A model's metrics
+reference fields as `dataset.field`.
+
+The function name `AGG` is reserved by the spec for a future version, in
+every capitalization: an expression that calls it is refused and reported
+by `validate`, and a filter that calls it is refused, without reaching
+ClickHouse. A field, a metric or a column may be named `agg`.
 
 The spec's function catalog is translated to ClickHouse. Functions
 ClickHouse lacks (`DATEADD`, `DATEDIFF`, `DATE_PART`, `SPLIT_PART`,

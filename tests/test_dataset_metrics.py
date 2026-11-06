@@ -116,8 +116,8 @@ def test_a_model_metric_cannot_name_a_dataset_metric(tmp_path):
         (
             "SUM(amount) / COUNT(customers.id)",
             "customers.id in 'SUM(amount) / COUNT(customers.id)': a metric of dataset 'orders' "
-            "reads only its own fields; a metric over other datasets belongs in the model's "
-            "metrics",
+            "reads only its own fields and, as source.column, its source's columns; a metric "
+            "over other datasets belongs in the model's metrics",
         ),
         (
             "SUM(amout)",

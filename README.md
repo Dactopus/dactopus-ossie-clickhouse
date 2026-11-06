@@ -124,7 +124,8 @@ questions it refuses.
   `ANSI_SQL` dialect, are translated on the
   [SQLGlot](https://github.com/tobymao/sqlglot) AST; the spec's function
   catalog is mapped to ClickHouse equivalents and checked by value against
-  [DuckDB](https://duckdb.org) and the spec text. Any other function
+  [DuckDB](https://duckdb.org) and the spec text. `AGG`, which the spec
+  reserves, is refused. Any other function
   reaches ClickHouse as written (`toString`, `sumIf`, `DAYOFWEEK`, a
   user-defined function), and `validate --url` checks the server has it.
 - Rows come sorted by the first metric, descending, unless `order_by` says

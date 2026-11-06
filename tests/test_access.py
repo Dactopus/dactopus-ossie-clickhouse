@@ -189,3 +189,30 @@ def test_bare_source_reads_the_users_default_database(admin, tmp_path):
     assert ex.database == "ossie_test"
     r = ex.execute(Query(metrics=("revenue",)))
     assert "FINAL" in r.sql and r.rows == [(65.0,)]
+
+
+def test_a_metric_over_a_source_column_the_user_cannot_read_is_hidden(admin, tmp_path):
+    # `ver` is no field's column; the clerk may read order_id and amount only.
+    import yaml
+
+    data = yaml.safe_load(FIXTURE.read_text())
+    orders = next(d for d in data["datasets"] if d["name"] == "orders")
+    orders["metrics"] = [
+        {"name": "revenue_here", "expression": {"sql": "SUM(source.amount)"}},
+        {"name": "latest_version", "expression": {"sql": "MAX(source.ver)"}},
+    ]
+    p = tmp_path / "m.yaml"
+    p.write_text(yaml.safe_dump(data, sort_keys=False))
+
+    full = Executor(admin, load_model(p))
+    assert full.execute(Query(metrics=("orders.revenue_here",))).rows == [(65.0,)]
+    assert full.execute(Query(metrics=("orders.latest_version",))).rows == [(2,)]
+
+    clerk = Executor(as_user(admin, "ossie_clerk"), load_model(p))
+    orders = next(d for d in clerk.model.datasets if d.name == "orders")
+    assert [m.name for m in orders.metrics] == ["revenue_here"]
+    assert clerk.execute(Query(metrics=("orders.revenue_here",))).rows == [(65.0,)]
+    with pytest.raises(PlanError) as e:
+        clerk.execute(Query(metrics=("orders.latest_version",)))
+    assert "source.ver" not in str(e.value) and "MAX(" not in str(e.value)
+    assert "source.ver" not in clerk.model.model_dump_json()

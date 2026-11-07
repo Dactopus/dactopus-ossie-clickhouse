@@ -1,6 +1,6 @@
 [project]
 name = "dactopus-ossie-clickhouse"
-version = "0.13.0"
+version = "0.14.0"
 description = "Apache Ossie semantic model implementation for ClickHouse"
 readme = "README.md"
 license = "Apache-2.0"
@@ -27,7 +27,7 @@ dependencies = [
     "PyYAML>=6,<7",
     # Upper bounds: the translator builds on SQLGlot AST classes and parser
     # internals, and clickhouse-connect's client options; both move between majors.
-    "sqlglot>=30.27,<31",
+    "sqlglot>=30.30,<31",
     "clickhouse-connect>=1,<2",
 ]
 

@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-07
+
 ### Added
 
 - A dataset's metric may read a column of the dataset's `source` as
@@ -108,6 +110,7 @@ a minor release may change the Python API.
   of a query, and `ORDER BY` inside `WITHIN GROUP`, still sort NULLs last
   in both directions. The generated SQL says `DESC NULLS FIRST`
   (`docs/design.md`, "NULL placement in ORDER BY").
+- `sqlglot>=30.30`, the current release; it makes no rewrite redundant.
 
 ### Fixed
 

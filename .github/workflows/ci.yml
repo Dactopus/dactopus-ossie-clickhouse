@@ -8,6 +8,9 @@ on:
 env:
   OSSIE_CLICKHOUSE_REQUIRED: 1  # a missing server or database fails the run instead of skipping
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

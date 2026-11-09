@@ -4,6 +4,10 @@ Bug reports, questions about a translation, and pull requests are welcome.
 Everything in this repository is in English: code, comments, commit
 messages, issues.
 
+Questions about using it and ideas go to
+[Discussions](https://github.com/orgs/Dactopus/discussions); issues are for
+bugs and concrete changes.
+
 ## Reporting a wrong answer
 
 The failure mode this project guards against is SQL that runs and returns

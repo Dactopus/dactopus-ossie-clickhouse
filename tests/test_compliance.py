@@ -68,15 +68,6 @@ CASES = {
         ("dept.loc = 'NEW YORK'",),
         ("emp.job",),
     ),
-}
-
-# Questions this executor refuses: a metric of the one side (dept) grouped or
-# filtered by the many side (emp) would have to count each department once per
-# group (relational_semantics.md, section 9), and the planner answers a question
-# over the rows of one root (docs/design.md, "Refuse a metric over another
-# dataset's rows"). A refusal is not a wrong number; a case answered one day
-# moves to CASES.
-REFUSED = {
     "b04_one_side_counted_once": Query(
         ("dept.dept_count", "emp.emp_count"), ("emp.job",), order_by=("emp.job",)
     ),
@@ -90,6 +81,10 @@ REFUSED = {
         ("dept.dept_count",), ("emp.job",), ("dept.dept_count > 1",), ("emp.job",)
     ),
 }
+
+# Questions this executor refuses, with why in a comment: none today. A refusal
+# is not a wrong number; a case answered one day moves to CASES.
+REFUSED: dict[str, Query] = {}
 
 # Cases a question cannot ask, each with the form of its query that a question
 # does not have: metrics, dimensions and filters by name, joined along the

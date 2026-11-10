@@ -90,12 +90,11 @@ def test_count_star_counts_its_own_dataset(planner):
     assert "FROM ossie_scoped.orders AS orders LEFT JOIN" in sql
 
 
-def test_count_star_over_another_root_is_refused(planner):
-    # Each customer row would repeat once per order.
-    q = Query(("customers.customer_rows",), ("orders.status",))
-    assert "aggregates customers rows, but this question is answered over orders rows" in (
-        refusal(planner, q)
-    )
+def test_count_star_by_the_many_side_counts_each_row_once(planner):
+    # COUNT(*) counts customers rows, each once per status of its orders, over the
+    # customers joined to the distinct (status, customer) pairs (tests/test_bridge.py).
+    sql = planner.sql(Query(("customers.customer_rows",), ("orders.status",)))
+    assert "COUNT(*) AS __m0, 1 AS __b0 FROM ossie_scoped.customers AS customers INNER JOIN" in sql
 
 
 def test_a_model_metric_cannot_name_a_dataset_metric(tmp_path):

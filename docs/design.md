@@ -357,9 +357,9 @@ The spec has no cardinality attribute. A relationship is used only when its
 `to_columns` cover the primary key or a unique key of the target, which is
 what makes a `LEFT JOIN` safe against fan-out. A row filter on the many
 side of a relationship is a semi-join, and metrics of several facts are
-stitched (both below). A metric that reads both sides of a one-to-many
-relationship, which symmetric aggregates would answer, waits for demand
-(#10).
+stitched (both below). A metric of the one side grouped by a dimension of
+the many side counts each of its rows once per group, over a spine of
+distinct keys ("A metric of the one side by the many side").
 
 The spec calls `to_columns` "Primary/unique key columns"; covering, a
 superset of a key, is how the reference validator reads it
@@ -691,9 +691,12 @@ The planner refuses both after it picks the root, on the rewritten tree
 (`APPROX_PERCENTILE` is an aggregate only after rewrite). Since 0.14.0 a
 model's metric whose aggregates each read one dataset is not checked this
 way: it is split into components ("Evaluate each aggregate over its own
-dataset", below), and `store_productivity` is answered. The checks
-remain for a metric of one dataset asked over another root, and for an
-aggregate whose arguments read several datasets:
+dataset", below), and `store_productivity` is answered. A metric of one
+dataset by a dimension its dataset does not reach is now answered over
+its own rows, joined to a spine of the question's rows ("A metric of the
+one side by the many side"), when the checks below refuse it over the
+root. The checks remain for a metric of one dataset asked over another
+root, and for an aggregate whose arguments read several datasets:
 
 - An aggregate whose argument reads joined datasets and no root column is
   refused unless repeats cannot change it (`MIN`, `MAX`, `DISTINCT`,
@@ -726,10 +729,14 @@ keys. The check covers selected metrics and aggregate filters, including
 metrics named in a filter. The error names what made the root (a metric,
 a dimension or a filter) so an agent can split the question.
 
-The cost: a correct question is refused when its intended population is
-the root's references, such as distinct users per purchased item through
-`sessions.user_id`. The planner cannot tell that from users next to
-revenue, where it would be wrong. Layer 3 (apache/ossie#653 section 5.2)
+The cost was that a correct question was refused when its intended
+population is the root's references, such as distinct users per
+purchased item through `sessions.user_id`. The planner cannot tell that
+from users next to revenue, where one `SELECT` over purchases would be
+wrong. A metric of sessions by a field of purchases is now answered over
+the sessions themselves, each once per item ("A metric of the one side by
+the many side"); next to revenue by a field of sessions, it counts
+sessions as before. Layer 3 (apache/ossie#653 section 5.2)
 now says which rows a model's metric is computed over: each aggregate
 call, the rows of the one dataset its arguments read. A metric declared
 on a dataset (apache/ossie#591) has that dataset as its home whatever its
@@ -834,7 +841,11 @@ filter), the metric, the aggregate and its home, and what would answer the
 question: a metric of a dataset that reaches the dimension and that the
 metric's other aggregates read, such as `COUNT(DISTINCT ss_customer_sk)`
 on `store_sales`. That counts the customers a sale references, which is
-the meaning of the question once a sale is the row.
+the meaning of the question once a sale is the row. A whole metric of
+`customer`, such as `customer_count`, by a field of `store_sales` is
+answered ("A metric of the one side by the many side"); a component is
+not, since section 5.3 asks every home of a metric to reach the
+dimension.
 
 A row filter is planned in each branch as a question of its own, as
 stitching does:
@@ -995,10 +1006,12 @@ Refused: a filter that mixes the root's datasets and M's in one
 expression (split it into two filters; an `OR` across the sides cannot be
 split), a dataset that both reaches the root and is reached by it
 (ambiguous, as before), and two paths from M to the root. A dimension of
-M and a metric that reads M, `FILTER (WHERE ...)` included, make M one of
-the question's datasets as before: the dimension is refused, and the
-metric is answered over M's rows (its per-row expression is the author's,
-as in the previous section). Inside a stitched question each group plans
+M makes M one of the question's datasets: the metric is answered over its
+own rows, joined to a spine of M's rows ("A metric of the one side by the
+many side"). A metric that reads M, `FILTER (WHERE ...)` included, makes M
+one of the question's datasets as before, and is answered over M's rows
+(its per-row expression is the author's, as in the previous section).
+Inside a stitched question each group plans
 its own semi-joins: `-m device_count -m reading_count -f "readings..."`
 filters readings with a `WHERE` and devices with an `IN`.
 
@@ -1125,6 +1138,83 @@ the data above, which adds an order with a large line of an untagged item
 and a small line of a tagged one: a join, a subquery that skips the
 products, and one subquery per filter each give another answer.
 
+## A metric of the one side by the many side
+
+A metric of a dataset H grouped by a field of a dataset whose rows
+reference H's, such as `orders.order_count` by `order_lines.product_id`
+or `customers.customer_count` by `orders.shipping_country`, was refused
+(#10): one `SELECT` over the many side counts each H row once per row
+that references it. On 2026-11-10, 92 questions nobody shaped to the
+model (42 from the default reports of Shopify and WooCommerce, 50 written
+by an agent in the role of a store owner) were asked of the `commerce`
+model of dactopus-data-models over a Shopify and a WooCommerce store, by
+Haiku 5.5 and Sonnet 5.5 through the MCP server of 0.14.0: 368 sessions.
+The planner refused this shape in 33 sessions on 18 questions, and 10 of
+the 18 ask for it: customers per product category, orders per product,
+new customers by shipping country. Agents then asked once per category
+with a filter, 20 and 25 queries for the categories of the WooCommerce
+store. The query compliance suite of apache/ossie asks the same in `b04`,
+`b18` and `b20`.
+
+The relational spec defines the answer (`relational_semantics.md`,
+section 8.1): the input set of a measure in a group is the set of its
+source rows from which at least one row of the group derives, each
+counted once, and a group whose input set is empty is kept with the
+empty-input value. Section 9 realizes it by reducing each group's rows to
+one per row-identity key. The planner writes it in two parts:
+
+- The spine: the question with its dimensions, the first declared key of
+  H and its row filters, and no metric. It is planned as any question:
+  its root is the dataset that reaches H and the dimensions, with its
+  `LEFT JOIN`s, `FINAL`, dictionaries and semi-joins, and its `GROUP BY`
+  gives the distinct pairs of dimension values and H key.
+- The branch: the metrics of H planned over H, joined to the spine with
+  `INNER JOIN` on the key and grouped by the spine's dimensions. An H row
+  joins once per pair, so once per group, and a NULL or orphan key joins
+  nothing.
+
+The branch is merged with the question's other metrics as a stitched
+branch ("Stitch metrics of several facts"), and the spine is merged too,
+with no values. A group made only of rows without an H row is kept, and a
+metric of H there takes its empty-input value: 0 customers for the line
+of an order whose customer does not exist. Aggregate filters run on the
+merged rows, as `b20` asks.
+
+- The groups are the root's rows, as everywhere in this planner. H rows
+  that no root row references are in no group, as an inner join leaves
+  them out in `b04`.
+- The root is a dataset the question names, as in "Through a fact the
+  question names". With items reached from order lines,
+  `customers.customer_count` by `items.category` is refused, and a filter
+  on the lines (`order_lines.order_id IS NOT NULL`) names the fact.
+  Layer 3 lists one-to-many paths through a bridge dataset, such as
+  `movies.total_gross` by `actors.height` through `appearances`, among
+  its future extensions (#653, Appendix A.1); a question that names no
+  such dataset stays refused.
+- Only whole metrics whose aggregates read H and nothing from the one
+  side of H (`Planner._carry`). A metric of components keeps the
+  reachability rule of #653 section 5.3 ("Reachability").
+- The spine is read twice, once in the branch and once in the merge.
+
+Layer 3 refuses these questions (#653 section 5.3: `E_NO_PATH`, or
+`E_PARTIAL_DIMENSION_REACHABILITY` next to a metric that reaches the
+dimension), and its section 7 sends them to Layer 2, which answers them
+as above: a row of "Answers beyond Layer 3".
+
+An answer can be literal. `session_conversion_rate` by
+`purchases.currency` counts the sessions with a purchase in each
+currency, so it is 1 in every group: the spec's answer to the question
+asked. On the GA4 sample it is 1.0 over 4,848 sessions in USD. The docs page, which showed that question refused, shows one that
+is still refused: revenue by an event's name, whose path runs from
+purchases to sessions and out to events.
+
+`tests/test_bridge.py` compares answers with DuckDB running the section 9
+strategy, on the data of the semi-join tests with one more line: an order
+with two lines of one item, a customer under two statuses, one without
+orders, orders with a NULL and a missing customer, an order updated in a
+`ReplacingMergeTree`, and a key of two columns. `b04`, `b18` and `b20`
+moved to the answered cases of `tests/test_compliance.py`.
+
 ## Answers beyond Layer 3
 
 apache/ossie#653 section 9 lets an engine answer a query the version
@@ -1161,6 +1251,7 @@ examples use the model of Appendix B.1 (`orders` and `returns` relate to
 | A model's metric with an aggregate that reads several datasets, or none, or whose `FILTER` reads another dataset: `SUM(orders.amount * customers.weight)`, `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST')`, `COUNT(*) FILTER (WHERE orders.amount > 100)`, `SUM(orders.amount) / COUNT(*)` (section 5.2) | One `SELECT` over one join rooted at the dataset the metric reads (`orders`); `COUNT(*)` counts the rows of that dataset. Aggregates that need other values of a key stored twice are answered in SELECTs of their own, merged on the dimensions ("A key stored twice on the one side"). Refused when another aggregate of the metric reads a dataset the first does not, as in `SUM(orders.amount) FILTER (WHERE customers.region = 'WEST') / COUNT(DISTINCT customers.customer_id)`: see the table of "Evaluate each aggregate over its own dataset" | `E_AMBIGUOUS_MEASURE_GRAIN` |
 | A window function over the grouped rows in a model's metric: `RANK() OVER (ORDER BY SUM(orders.amount) DESC)`, `SUM(SUM(orders.amount)) OVER ()` (section 5.2) | Answered in the same `SELECT`, over the grouped rows. The three window metrics of `tests/fixtures/tpcds.yaml`, Ossie's own example, rely on it. Refused when the metric's aggregates read several datasets, in a question that groups nothing, and in a stitched question; see the same table | `E_DEFERRED_WINDOWED_METRIC` |
 | An expression that reads two datasets next to a key stored twice: a filter on the root and the one side joined with `AND`, an aggregate over two datasets (`SUM(orders.amount * customers.weight)`) or with a `FILTER` on the one side | Answered as Layer 2 does, in a SELECT of its own when its neighbours need other values. An expression where two copies of a key could give the same result (`customers.weight > 0 OR orders.amount > 150`, `SUM(GREATEST(orders.amount, customers.weight))`) is refused, as #653 refuses it. See "A key stored twice on the one side" | `E_CROSS_DATASET_FILTER` for the filter; `E_AMBIGUOUS_MEASURE_GRAIN` for the aggregate |
+| A metric of a dataset by a field of a dataset whose rows reference it: `customers.customer_count` by a field of `orders` (section 5.3) | Each customer once in each group its orders make, over the distinct pairs of the field's value and customer key; see "A metric of the one side by the many side" | `E_NO_PATH`, or `E_PARTIAL_DIMENSION_REACHABILITY` next to a metric that reaches the field; section 7 sends it to Layer 2 |
 
 A ClickHouse `DateTime` is an instant; its zone decides how it prints and
 which calendar day or hour it falls on. A column without a zone, `now()`,

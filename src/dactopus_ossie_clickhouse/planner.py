@@ -1356,11 +1356,14 @@ class Planner:
         q: Query,
         components: dict[str, tuple[str, exp.Expression]] | None = None,
         nested: bool = False,
+        keys_of: OssieDataset | None = None,
     ) -> exp.Select:
         """``plan``. A branch of a stitched question (``nested``) is planned as a
         question of its own: it is never stitched again. Its ``components``
         name aggregates of a model's metric by internal alias, as (label, tree);
-        they stand in for metrics of the model."""
+        they stand in for metrics of the model. ``keys_of`` selects and groups
+        by the fields of that dataset's first declared key too, as __k0, __k1...
+        (_bridge)."""
         components = components or {}
         if not q.metrics and not q.dimensions:
             raise PlanError("a query needs at least one metric or dimension")
@@ -1391,6 +1394,11 @@ class Planner:
             e = rewrite_tree(self._field_expr(ds, f), self._zone)
             selects.append(e.as_(alias(f.name)))
             group.append(e.copy())
+        if keys_of is not None:
+            touched.setdefault(f"dataset {keys_of.name!r}", set()).add(keys_of.name)
+            for i, e in enumerate(self._keys(keys_of, list(declared_keys(keys_of)[0]))):
+                selects.append(e.as_(alias(f"__k{i}")))
+                group.append(e.copy())
 
         for name in q.metrics:
             if name in components:
@@ -2211,14 +2219,29 @@ class Planner:
             # group; a group of its own would add a row for every dimension value.
             loose = groups.pop((frozenset(), frozenset()))
             next(iter(groups.values())).extend(loose)
-        if len(groups) < 2:
+        spines: dict[int, exp.Select] = {}  # a bridged group -> its spine (_bridge)
+        if len(groups) == 1:
+            # One group is answered by plan() unless its home does not reach a
+            # dimension: then it is bridged, and merged with its spine below.
+            bridged = self._bridge(next(iter(groups.values())), q.dimensions, where)
+            if bridged is None:
+                return None
+            branches = [(next(iter(groups.values())), bridged[0])]
+            spines[0] = bridged[1]
+        if len(groups) < 2 and not spines:
             return None
         splitting = bool(outer)
-        branches = []
-        for members in groups.values():
+        branches = [] if not spines else branches
+        for g, members in enumerate(groups.values()):
+            if g in spines:
+                continue
             try:
                 branches.append(self._branch(members, q.dimensions, where))
             except PlanError as e:
+                if (bridged := self._bridge(members, q.dimensions, where)) is not None:
+                    branches.append((members, bridged[0]))
+                    spines[g] = bridged[1]
+                    continue
                 if not splitting:
                     try:
                         self.plan(Query(tuple(u.alias for u in members)))
@@ -2280,6 +2303,14 @@ class Planner:
             for arg in ("order", "settings"):
                 part.set(arg, None)
             parts.append(part)
+        for spine in spines.values():
+            # The groups a bridged branch's rows make, each with no value of its units
+            # (relational_semantics.md, section 8.1: a group whose input set is empty
+            # is kept and takes the empty-input value).
+            cols = [exp.column(d, table="__bridge").as_(d) for d in dims]
+            cols += [exp.Null().as_(f"__m{i}") for i in range(len(units))]
+            cols += [exp.Null().as_(f"__b{h}") for h in marked]
+            parts.append(exp.select(*cols).from_(spine.copy().subquery("__bridge")))
 
         def merged(i: int) -> exp.Expression:
             u = units[i]
@@ -2336,6 +2367,54 @@ class Planner:
         stand_in = {u.alias: (u.label, u.tree) for u in members if u.component}
         names = tuple(u.alias for u in members)
         return members, self._plan(Query(names, dimensions, tuple(where)), stand_in, nested=True)
+
+    def _bridge(
+        self, members: list[_Unit], dimensions: tuple[str, ...], where: list[str]
+    ) -> tuple[exp.Select, exp.Select] | None:
+        """A branch whose home H does not reach a dimension's dataset, answered over
+        the question's rows as relational_semantics.md section 8.1 defines it: each
+        H row counts once in each group that a row of the question derives from it,
+        and never in another. None when that does not apply, or it cannot be planned.
+
+        The spine is the question with the dimensions, H's key and the row filters
+        and no metric: the distinct (dimensions, key) pairs over the root that reaches
+        H and the dimensions, with its joins, FINAL, dictionaries and semi-joins.
+        The branch is the members planned over H, inner-joined to the spine on the
+        key and grouped by its dimensions: an H row joins once per pair, so once per
+        group, and a NULL or orphan key joins nothing. Only whole metrics whose
+        aggregates read H and nothing from the one side; a metric of components keeps
+        the reachability rule of apache/ossie#653 section 5.3 (docs/design.md, "A
+        metric of the one side by the many side")."""
+        if not dimensions or any(u.component or u.carry or len(u.key) != 1 for u in members):
+            return None
+        if len({u.key for u in members}) != 1:
+            return None
+        home = self.dataset(next(iter(members[0].key)))
+        reach = self._reachable(home.name)
+        if all(self.field_ref(d)[0].name in reach for d in dimensions):
+            return None  # not this case: plan() answers it or says why not
+        if not declared_keys(home):
+            return None
+        try:
+            spine = self._plan(Query((), dimensions, tuple(where)), nested=True, keys_of=home)
+            rows = self._plan(Query(tuple(u.alias for u in members)), nested=True)
+        except PlanError:
+            return None
+        for sel in (spine, rows):
+            for arg in ("order", "limit", "settings"):
+                sel.set(arg, None)
+        keys = self._keys(home, list(declared_keys(home)[0]))
+        on = exp.and_(
+            *(
+                exp.EQ(this=k, expression=exp.column(f"__k{i}", table="__bridge"))
+                for i, k in enumerate(keys)
+            )
+        )
+        dims = [self.field_ref(d)[1].name for d in dimensions]
+        rows = rows.join(spine.copy().subquery("__bridge"), on=on, join_type="inner")
+        rows = rows.select(*(exp.column(d, table="__bridge").as_(d) for d in dims))
+        rows = rows.group_by(*(exp.column(d, table="__bridge") for d in dims))
+        return rows, spine
 
     def _branch_error(
         self,

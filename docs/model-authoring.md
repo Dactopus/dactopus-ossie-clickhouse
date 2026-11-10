@@ -218,8 +218,23 @@ on another day. For absence, give the root a field
 mixes columns of both sides in one expression (write two filters; an
 `OR` across the sides cannot be split), a filter on `items` or
 `product_categories` alone with no filter on the order lines that link
-them to customers or orders, and a dimension
-of the many side next to a metric of the one side.
+them to customers or orders.
+
+A metric of the one side grouped by a field of the many side counts each
+of its rows once in each group. `-m orders.order_count -d
+order_lines.product_id` counts the orders with a line of each product,
+an order with two lines of one product once; `-m customers.customer_count
+-d orders.shipping_country` counts each customer once per country its
+orders ship to, so a customer can count under two countries. The groups
+are those of the many side's rows, as for any question: a customer
+without orders is in none, and the line of an order whose customer does
+not exist makes a group of 0 customers. Filters on the many side hold for
+the rows that make the group. The dataset whose field groups the question,
+or one a filter names, must reach the metric's: with items reached from
+order lines, `-m customers.customer_count -d items.category` is refused,
+and `-f "order_lines.order_id IS NOT NULL"` names the lines that link
+them. A metric whose aggregates read several datasets, such as sales per
+customer above, is not answered this way.
 
 ## Metrics on a dataset
 

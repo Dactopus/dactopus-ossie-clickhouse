@@ -62,8 +62,8 @@ def test_page_marks_every_sql_line_and_only_lines_that_exist():
     assert [line for line in lines if not any(line.startswith(s) for s in starts)] == []
 
 
-def test_page_quotes_the_fan_out_refusal():
-    q = Query(metrics=("session_conversion_rate",), dimensions=("purchases.currency",))
+def test_page_quotes_the_path_refusal():
+    q = Query(metrics=("revenue",), dimensions=("events.event_name",))
     assert STEPS[6][2] == refusal(Executor(fake_clickhouse(), MODEL), q)
 
 

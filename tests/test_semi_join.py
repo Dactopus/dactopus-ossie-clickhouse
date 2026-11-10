@@ -847,14 +847,6 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "ambiguous join from 'lines' to 'customers': relationship paths "
             "'lines_to_customer' and 'lines_to_order' -> 'orders_to_customer'",
         ),
-        # A dimension of the filtered dataset still makes it the root.
-        (
-            Planner(MODEL),
-            Query(("customer_count",), ("orders.status",), ("orders.total > 0",)),
-            "metric 'customer_count' aggregates customers rows, but this question is "
-            "answered over orders rows (because of dimension 'orders.status', filter "
-            "'orders.total > 0')",
-        ),
         # Two paths from lines to customers (apache/ossie#653 section 4).
         (
             _variant(

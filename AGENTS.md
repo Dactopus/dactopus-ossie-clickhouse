@@ -126,8 +126,12 @@ Planning:
   no one root answers together are stitched. A model's metric whose
   aggregates each read a different dataset is split into components, one
   per aggregate, answered over their own dataset's rows and stitched
-  (Layer 3, apache/ossie#653 section 5). The rules and the refusals are
-  in `docs/design.md`; the code is `planner.py`.
+  (Layer 3, apache/ossie#653 section 5). A whole metric of a dataset by
+  a field it does not reach is answered over its own rows joined to a
+  spine, the distinct (dimensions, key) pairs of a question rooted at a
+  dataset the question names (`Planner._bridge`); a metric of components
+  keeps #653 section 5.3. The rules and the refusals are in
+  `docs/design.md`; the code is `planner.py`.
 - The planner refuses a question it cannot answer with the right number:
   an aggregate that repeats could change, an aggregate over aggregates,
   two paths to one dataset. Errors name the nearest known object; agents

@@ -9,6 +9,19 @@ a minor release may change the Python API.
 
 ### Added
 
+- A metric of the one side grouped by a field of the many side is
+  answered, each of its rows counted once per group, as the relational
+  spec defines it (section 8.1): `orders.order_count` by
+  `order_lines.product_id` counts the orders with a line of each product,
+  `customers.customer_count` by `orders.shipping_country` the customers
+  whose orders ship to each country. It was refused; agents then asked
+  once per value with a filter, up to 25 queries for one answer (#10).
+  The Ossie compliance cases `b04`, `b18` and `b20` pass. A metric whose
+  aggregates read several datasets keeps the reachability rule, and the
+  dataset that links the two must be one the question names, as for
+  filters. `session_conversion_rate` by `purchases.currency`, which was
+  refused, is now 1 in every currency: only sessions with a purchase have
+  one.
 - `serve` says on stderr how much of the model the connected user is not
   served because the database lacks it or does not grant it, or because an
   expression does not translate: `not served to 'analyst': 2 fields, 1

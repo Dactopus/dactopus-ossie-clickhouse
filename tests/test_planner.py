@@ -703,11 +703,6 @@ def _with_metrics(**expressions: str) -> Planner:
             Query(metrics=("total_sales",), filters=("productivity_at_list_price > 1",)),
             "filter 'productivity_at_list_price > 1' applies SUM(store.s_number_employees)",
         ),
-        # Even a repeat-safe aggregate is about other rows: only customers who bought.
-        (
-            Query(metrics=("customers",), dimensions=("store_sales.ss_store_sk",)),
-            "(because of dimension 'store_sales.ss_store_sk')",
-        ),
         # Checked after rewrite: APPROX_PERCENTILE is an aggregate only then.
         # Nested in another rewrite: the check sees the inner one rewritten too.
         (
@@ -723,11 +718,6 @@ def _with_metrics(**expressions: str) -> Planner:
         (
             Query(metrics=("total_sales",), filters=("cnt > 1",)),
             "metric 'cnt' uses COUNT(*), which reads no column",
-        ),
-        # A FILTER column counts for its aggregate: this counts sales once per store.
-        (
-            Query(metrics=("tn_stores",), dimensions=("store_sales.ss_quantity",)),
-            "metric 'tn_stores' aggregates store rows",
         ),
         # Only the root's key makes a join one-to-one: sales repeat per store_extra row.
         (
@@ -757,6 +747,27 @@ def test_refuses_aggregates_over_other_rows_than_the_root(query, message):
     with pytest.raises(PlanError) as e:
         planner.sql(query)
     assert message in str(e.value)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Customers who bought at each store, each once (tests/test_bridge.py has values).
+        Query(metrics=("customers",), dimensions=("store_sales.ss_store_sk",)),
+        # A FILTER column counts for its aggregate: stores in TN, once per quantity.
+        Query(metrics=("tn_stores",), dimensions=("store_sales.ss_quantity",)),
+        # Two metrics of store, one branch over the same spine.
+        Query(metrics=("headcount", "tn_stores"), dimensions=("store_sales.ss_quantity",)),
+    ],
+)
+def test_counts_one_side_rows_once_by_a_dimension_of_the_many_side(query):
+    planner = _with_metrics(
+        headcount="SUM(store.s_number_employees)",
+        customers="COUNT(DISTINCT customer.c_customer_sk)",
+        tn_stores="COUNT(*) FILTER (WHERE store.s_state = 'TN')",
+    )
+    sql = planner.sql(query)
+    assert sql.count("INNER JOIN (SELECT store_sales.") == 1, sql
 
 
 def test_a_filter_on_rows_that_reference_the_root_is_a_semi_join():
@@ -885,11 +896,6 @@ def test_stitches_metrics_that_no_one_root_answers(query):
         (
             Query(metrics=("headcount", "items"), dimensions=("item.i_brand",)),
             "datasets ['item', 'store'] are not joined through many-to-one relationships",
-        ),
-        # Both read store: the dimension, not the mix of metrics, is the cause.
-        (
-            Query(metrics=("headcount", "stores"), dimensions=("store_sales.ss_quantity",)),
-            "metric 'headcount' aggregates store rows",
         ),
         # A window over merged rows would rank each side's rows apart.
         (

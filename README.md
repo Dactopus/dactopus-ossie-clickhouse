@@ -205,7 +205,7 @@ data must already be in ClickHouse.
 
 ## Status
 
-Version 0.x. The supported Ossie schema version is pinned (`0.2.0.dev0`)
+Version 0.x. The supported Ossie schema version is pinned (`0.3.0.dev0`)
 and checked on load, because the standard is still moving. Until the
 major version is 1, a minor release may change the Python API; the CLI
 and the MCP tools are the stable surface. Tested against the TPC-DS

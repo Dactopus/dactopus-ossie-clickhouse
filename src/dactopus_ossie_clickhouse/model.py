@@ -28,7 +28,7 @@ from dactopus_ossie_clickhouse._vendor.ossie import (
     OssieRelationship,
 )
 
-SUPPORTED_VERSION = "0.2.0.dev0"
+SUPPORTED_VERSION = "0.3.0.dev0"
 # Dialects of a `dialects` entry this executor reads, in order of preference. The
 # expression's own `sql` comes before them (expression_text).
 SUPPORTED_DIALECTS = ("OSSIE_SQL_2026", "ANSI_SQL")

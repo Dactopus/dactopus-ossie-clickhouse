@@ -1,1 +1,1 @@
-apache-ossie @ git+https://github.com/apache/ossie.git@fab4f632ba4d01da9a3fbcd2975c80ea26535952#subdirectory=python
+apache-ossie @ git+https://github.com/apache/ossie.git@d700cdeac41d15a7004eb2f9b0b38a2b1d517a18#subdirectory=python

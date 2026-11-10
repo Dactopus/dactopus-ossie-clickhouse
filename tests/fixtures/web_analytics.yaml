@@ -1,7 +1,7 @@
 # A copy of entities/web_analytics.yaml from
 # https://github.com/Dactopus/dactopus-data-models at 7c8d0fd, for the
 # walkthrough in docs/index.html. It need not follow upstream changes.
-version: "0.2.0.dev0"
+version: "0.3.0.dev0"
 
 name: web_analytics
 description: >

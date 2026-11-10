@@ -110,7 +110,7 @@ def test_backslash_in_a_column_name(tmp_path):
     # "a\x41" would read column aA. The server-side check is in test_executor.
     p = tmp_path / "esc.yaml"
     p.write_text(
-        'version: "0.2.0.dev0"\nname: esc\ndatasets:\n'
+        'version: "0.3.0.dev0"\nname: esc\ndatasets:\n'
         "  - name: esc\n    source: db.esc\n    fields:\n"
         "      - name: v\n"
         "        expression: {dialects: [{dialect: ANSI_SQL, expression: '\"a\\x41\"'}]}\n"

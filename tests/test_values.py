@@ -37,7 +37,7 @@ EXPRESSION = "{{dialects: [{{dialect: ANSI_SQL, expression: {}}}]}}"
 FIELDS = "".join(
     f"      - name: {c}\n        expression: {EXPRESSION.format(c)}\n" for c in ("id", *COLUMNS)
 )
-MODEL = f"""version: "0.2.0.dev0"
+MODEL = f"""version: "0.3.0.dev0"
 name: values_model
 datasets:
   - name: v

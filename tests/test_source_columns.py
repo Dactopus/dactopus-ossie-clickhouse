@@ -34,7 +34,7 @@ def field(name: str, text: str) -> dict:
 # `amount` is a field that differs from the column it shares a name with; `raw_amount`
 # reads the column as it is.
 BASE = {
-    "version": "0.2.0.dev0",
+    "version": "0.3.0.dev0",
     "name": "source_columns",
     "datasets": [
         {

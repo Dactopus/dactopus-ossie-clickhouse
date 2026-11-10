@@ -393,7 +393,7 @@ A model whose dates are a store's days names the store's zone, so that
 counts today's orders at any hour:
 
 ```yaml
-version: "0.2.0.dev0"
+version: "0.3.0.dev0"
 name: shop
 custom_extensions:
   - vendor_name: CLICKHOUSE
@@ -591,7 +591,7 @@ dactopus-ossie-clickhouse validate model.yaml
 dactopus-ossie-clickhouse validate model.yaml --url http://user:password@host:8123
 ```
 
-Without `--url`: schema, the pinned version (`0.2.0.dev0`), unique names,
+Without `--url`: schema, the pinned version (`0.3.0.dev0`), unique names,
 relationships that resolve, expressions in a translatable dialect,
 joins the planner accepts, and metrics no question can answer (such as
 one naming an unknown field, a model's metric with a bare `COUNT(*)`, or

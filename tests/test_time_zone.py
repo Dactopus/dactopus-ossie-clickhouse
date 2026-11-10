@@ -43,7 +43,7 @@ def model_text(zone: str | None) -> str:
         f"  - name: {n}\n    expression: {EXPRESSION.format(json.dumps(e))}\n"
         for n, e in METRICS.items()
     )
-    return f"""version: "0.2.0.dev0"
+    return f"""version: "0.3.0.dev0"
 name: zone_model
 {extension}datasets:
   - name: e

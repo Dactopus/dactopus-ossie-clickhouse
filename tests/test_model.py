@@ -103,7 +103,7 @@ def problems_of(tmp_path, data) -> list[str]:
 def test_wrong_version(tmp_path, tpcds):
     tpcds["version"] = "9.9.9"
     assert problems_of(tmp_path, tpcds) == [
-        "unsupported version '9.9.9'; this build supports '0.2.0.dev0'"
+        "unsupported version '9.9.9'; this build supports '0.3.0.dev0'"
     ]
 
 
@@ -142,9 +142,9 @@ def test_duplicate_key(tmp_path, suffix):
     # The SDK refuses a repeated key since apache/ossie#618; the last one used to win.
     p = tmp_path / f"m.{suffix}"
     p.write_text(
-        '{"version": "0.2.0.dev0", "name": "a", "name": "b", "datasets": []}'
+        '{"version": "0.3.0.dev0", "name": "a", "name": "b", "datasets": []}'
         if suffix == "json"
-        else "version: 0.2.0.dev0\nname: a\nname: b\ndatasets: []\n"
+        else "version: 0.3.0.dev0\nname: a\nname: b\ndatasets: []\n"
     )
     with pytest.raises(ModelError) as e:
         load_model(p)
@@ -414,7 +414,7 @@ def test_time_zone_given_refused(tmp_path, tpcds, zone):
     assert e.value.problems == [
         'time zone must be a time zone name such as "UTC" or "America/New_York", '
         f"got {json.dumps(zone)}",
-        "unsupported version '0.1'; this build supports '0.2.0.dev0'",
+        "unsupported version '0.1'; this build supports '0.3.0.dev0'",
     ]
 
 
@@ -602,7 +602,7 @@ def test_each_file_checked_against_the_schema(tmp_path, tpcds):
         load_model(a, b, missing)
     ps = e.value.problems
     assert ps[0].startswith(f"{a}: property set to null")
-    assert ps[1] == f"{b}: unsupported version '9.9.9'; this build supports '0.2.0.dev0'"
+    assert ps[1] == f"{b}: unsupported version '9.9.9'; this build supports '0.3.0.dev0'"
     assert ps[2].startswith(f"cannot read {missing}: ")  # names the file once
 
 

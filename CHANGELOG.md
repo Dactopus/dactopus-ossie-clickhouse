@@ -7,6 +7,15 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- The supported Ossie schema version is `0.3.0.dev0`, the version of
+  Ossie's `main` since apache/ossie#691; there will be no 0.2.0 release
+  of the standard. A model that declares `0.2.0.dev0` is refused with
+  `unsupported version '0.2.0.dev0'; this build supports '0.3.0.dev0'`:
+  change its `version` line, nothing else in a model changes. The
+  vendored `apache-ossie` is upstream's at `d700cde`.
+
 ## [0.14.0] - 2026-11-07
 
 ### Added

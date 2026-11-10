@@ -1,6 +1,6 @@
 # Test model: order lines and refunds reach customers only through orders,
 # a path of two relationships. Created by tests/test_paths.py.
-version: "0.2.0.dev0"
+version: "0.3.0.dev0"
 name: paths_model
 datasets:
   - name: customers

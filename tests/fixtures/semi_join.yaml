@@ -3,7 +3,7 @@
 # filters on logins, joined on a key of two columns. Order lines are counted
 # by the tags of their item or of their order's customer, which meet lines at
 # a dataset both reach. Created by tests/test_semi_join.py.
-version: "0.2.0.dev0"
+version: "0.3.0.dev0"
 name: semi_join_model
 datasets:
   - name: customers

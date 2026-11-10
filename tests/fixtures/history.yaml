@@ -1,6 +1,6 @@
 # Test model: a fact table with change history (ReplacingMergeTree) and a
 # dimension held in a ClickHouse dictionary. Created by tests/test_executor.py.
-version: "0.2.0.dev0"
+version: "0.3.0.dev0"
 name: history_model
 datasets:
   - name: orders

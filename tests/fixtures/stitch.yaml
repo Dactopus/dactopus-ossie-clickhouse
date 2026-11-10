@@ -1,7 +1,7 @@
 # Test model: two facts (orders, returns) sharing one dimension (customers),
 # the F_PRELUDE fixture of apache/ossie#237 with one more orphan return.
 # Created by tests/test_stitch.py.
-version: "0.2.0.dev0"
+version: "0.3.0.dev0"
 name: stitch_model
 datasets:
   - name: customers

@@ -79,7 +79,7 @@ The vendored Ossie package:
   `OssieDocument.from_ossie_yaml` or `from_ossie_json`; `model_validate`
   is for a document built in Python. `load_model` combines several files
   as a union; a name in two files is an error, never a merge.
-- The supported Ossie schema version is pinned (`0.2.0.dev0`) and checked
+- The supported Ossie schema version is pinned (`0.3.0.dev0`) and checked
   explicitly.
 
 Translation:

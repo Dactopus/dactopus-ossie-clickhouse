@@ -355,7 +355,7 @@ def test_backslash_in_a_column_name(ex, tmp_path):
     ex.client.command("INSERT INTO ossie_test.esc VALUES (1, 2)")
     p = tmp_path / "esc.yaml"
     p.write_text(
-        'version: "0.2.0.dev0"\nname: esc\ndatasets:\n'
+        'version: "0.3.0.dev0"\nname: esc\ndatasets:\n'
         "  - name: esc\n    source: ossie_test.esc\n    fields:\n"
         "      - name: v\n"
         "        expression: {dialects: [{dialect: ANSI_SQL, expression: '\"a\\x41\"'}]}\n"

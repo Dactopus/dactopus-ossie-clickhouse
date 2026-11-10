@@ -58,7 +58,7 @@ def relationship(frm: str, to: str, column: str, target: str = "id") -> dict:
 
 
 MODEL = {
-    "version": "0.2.0.dev0",
+    "version": "0.3.0.dev0",
     "name": "dedup",
     "datasets": [
         dataset(
@@ -611,7 +611,7 @@ def typed(clickhouse, tmp_path_factory):
     )  # every other column takes its default
     clickhouse.command(f"INSERT INTO {db}.orders VALUES (1, 1, 10), (2, 9, 5)")
     model = {
-        "version": "0.2.0.dev0",
+        "version": "0.3.0.dev0",
         "name": "typed",
         "datasets": [
             {

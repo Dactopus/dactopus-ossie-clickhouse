@@ -106,6 +106,17 @@ def _run(args: argparse.Namespace) -> int:
         print(
             f"dactopus-ossie-clickhouse: model {model.name!r} on {server.location}", file=sys.stderr
         )
+        if server.withheld:
+            # The agent is never told (a hidden object is invisible to its user),
+            # so a model ahead of its tables would be served short without a word.
+            parts = ", ".join(f"{n} {kind}" for kind, n in server.withheld.items())
+            print(
+                f"dactopus-ossie-clickhouse: not served to {server.user!r}: {parts} of the "
+                "model (a table or column that is missing or not granted, the policy, or "
+                "an expression that does not translate). `validate --url` lists what the "
+                "database lacks. The tables are read once, at start: restart after they change.",
+                file=sys.stderr,
+            )
         server.run()  # stdio
         return 0
 

@@ -170,6 +170,27 @@ def test_serve_names_the_database_on_stderr(tpcds, monkeypatch, capsys):
     assert out.err.endswith(f"on {tpcds.url} (database tpcds)\n")
 
 
+def test_serve_counts_what_it_does_not_serve(tpcds, monkeypatch, capsys, tmp_path):
+    """The agent never learns of a hidden object, so the operator is told how much
+    of the model the connected user is served without."""
+    from mcp.server import MCPServer
+
+    from dactopus_ossie_clickhouse.cli import main
+
+    monkeypatch.setattr(MCPServer, "run", lambda self: None)
+    user = tpcds.query("SELECT currentUser()").result_rows[0][0]
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(f"{user}:\n  hidden_datasets: [item]\n")
+    assert main(["serve", str(FIXTURE), "--url", server_url(), "--policy", str(policy)]) == 0
+    err = capsys.readouterr().err.splitlines()
+    assert err[0].endswith(f"on {tpcds.url} (database tpcds)")
+    fields = len(next(d for d in MODEL.datasets if d.name == "item").fields)
+    assert err[1].startswith(
+        f"dactopus-ossie-clickhouse: not served to {user!r}: 1 datasets, {fields} fields, "
+    )
+    assert "relationships of the model" in err[1] and "restart" in err[1]
+
+
 @pytest.mark.anyio
 async def test_tools_listed(client):
     tools = await client.list_tools()

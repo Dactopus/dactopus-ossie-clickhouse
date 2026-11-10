@@ -219,6 +219,22 @@ class Executor:
         self.model = restrict(model, hidden, reader=f"by {self.user!r} on {self.location}")
         self.planner = Planner(self.model, self.catalog)
 
+    def withheld(self) -> dict[str, int]:
+        """How many datasets, fields, metrics and relationships of the model this
+        user is not served, by kind, without the kinds that lose nothing. For the
+        operator (`serve` prints it): the user never learns of a hidden object."""
+
+        def counts(model: OssieDocument) -> dict[str, int]:
+            return {
+                "datasets": len(model.datasets),
+                "fields": sum(len(d.fields or []) for d in model.datasets),
+                "metrics": len(all_metrics(model)),
+                "relationships": len(model.relationships or []),
+            }
+
+        served = counts(self.model)
+        return {k: n - served[k] for k, n in counts(self.full_model).items() if n > served[k]}
+
     def _hidden_by_grants(self) -> Hidden:
         """ClickHouse lists in system.tables and system.columns only what the
         connected user may read, so anything the model names and the catalog

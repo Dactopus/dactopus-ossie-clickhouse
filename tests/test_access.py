@@ -215,6 +215,9 @@ def test_column_grant_hides_field_and_dependents(admin):
     assert {f.name for f in orders.fields} == {"order_id", "amount"}
     assert "country" in {d.name for d in ex.model.datasets}  # readable on its own
     assert ex.model.relationships == []  # the join needs country_code, which the clerk cannot read
+    withheld = ex.withheld()  # what `serve` tells the operator
+    assert withheld["relationships"] == 1 and withheld["fields"] > 0 and "datasets" not in withheld
+    assert Executor(admin, load_model(FIXTURE)).withheld() == {}
     assert ex.execute(Query(metrics=("revenue",))).rows == [(65.0,)]
     with pytest.raises(PlanError) as e:
         ex.execute(Query(metrics=("revenue",), dimensions=("country.name",)))

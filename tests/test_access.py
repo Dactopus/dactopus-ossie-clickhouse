@@ -216,7 +216,9 @@ def test_column_grant_hides_field_and_dependents(admin):
     assert "country" in {d.name for d in ex.model.datasets}  # readable on its own
     assert ex.model.relationships == []  # the join needs country_code, which the clerk cannot read
     withheld = ex.withheld()  # what `serve` tells the operator
-    assert withheld["relationships"] == 1 and withheld["fields"] > 0 and "datasets" not in withheld
+    assert list(withheld) == ["database"]
+    db = withheld["database"]
+    assert db["relationships"] == 1 and db["fields"] > 0 and "datasets" not in db
     assert Executor(admin, load_model(FIXTURE)).withheld() == {}
     assert ex.execute(Query(metrics=("revenue",))).rows == [(65.0,)]
     with pytest.raises(PlanError) as e:
@@ -233,6 +235,9 @@ def test_policy_file_hides_metric_for_role(admin):
     with pytest.raises(PlanError) as e:
         ex.execute(Query(metrics=("orders.amount",)))
     assert "metrics over it:" in str(e.value) and "spread" not in str(e.value)
+    # The grants hide country, the policy only spread: `serve` counts them apart.
+    withheld = ex.withheld()
+    assert withheld["database"]["datasets"] == 1 and withheld["policy"] == {"metrics": 1}
     unrestricted = Executor(admin, load_model(FIXTURE), Policy.load(POLICY))
     assert "spread" in {m.name for m in unrestricted.model.metrics}
 

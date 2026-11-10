@@ -106,15 +106,25 @@ def _run(args: argparse.Namespace) -> int:
         print(
             f"dactopus-ossie-clickhouse: model {model.name!r} on {server.location}", file=sys.stderr
         )
-        if server.withheld:
-            # The agent is never told (a hidden object is invisible to its user),
-            # so a model ahead of its tables would be served short without a word.
-            parts = ", ".join(f"{n} {kind}" for kind, n in server.withheld.items())
+        # The agent is never told (a hidden object is invisible to its user), so a
+        # model ahead of its tables would be served short without a word.
+        withheld = {
+            cause: ", ".join(f"{n} {kind if n > 1 else kind[:-1]}" for kind, n in kinds.items())
+            for cause, kinds in server.withheld.items()
+        }
+        if "database" in withheld:
             print(
-                f"dactopus-ossie-clickhouse: not served to {server.user!r}: {parts} of the "
-                "model (a table or column that is missing or not granted, the policy, or "
-                "an expression that does not translate). `validate --url` lists what the "
-                "database lacks. The tables are read once, at start: restart after they change.",
+                f"dactopus-ossie-clickhouse: not served to {server.user!r}: "
+                f"{withheld['database']} of the model (a table, column or function the "
+                "database lacks or does not grant, or an expression that does not translate). "
+                "`validate --url` lists them. The tables are read once, at start: restart "
+                "after they change.",
+                file=sys.stderr,
+            )
+        if "policy" in withheld:
+            print(
+                f"dactopus-ossie-clickhouse: hidden from {server.user!r} by the policy: "
+                f"{withheld['policy']} of the model",
                 file=sys.stderr,
             )
         server.run()  # stdio

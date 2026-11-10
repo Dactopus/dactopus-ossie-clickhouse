@@ -10,12 +10,16 @@ a minor release may change the Python API.
 ### Added
 
 - `serve` says on stderr how much of the model the connected user is not
-  served: `not served to 'analyst': 1 datasets, 14 fields, 9 metrics, 3
-  relationships of the model`. An agent is never told what is hidden from
-  it, so a model newer than its tables (a column a later release of the
-  model reads, a table not built yet) was served short without a word.
+  served because the database lacks it or does not grant it, or because an
+  expression does not translate: `not served to 'analyst': 2 fields, 1
+  metric of the model`. An agent is never told what is hidden from it, so
+  a model newer than its tables (a column a later release of the model
+  reads, a table not built yet) was served short without a word. What a
+  policy file hides is counted on a line of its own, `hidden from
+  'analyst' by the policy: ...`, so a policy does not drown the warning.
   `validate --url` lists what the database lacks; the server reads the
   tables once, at start, so it is restarted after they change.
+  `Executor.withheld()` returns the same counts by cause.
 
 ### Changed
 

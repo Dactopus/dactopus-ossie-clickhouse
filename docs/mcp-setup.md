@@ -51,12 +51,19 @@ short without a word to anyone. The server says so in that log (on
 stderr), with counts:
 
 ```text
-dactopus-ossie-clickhouse: not served to 'analyst': 1 datasets, 14 fields, 9 metrics, 3 relationships of the model (...)
+dactopus-ossie-clickhouse: not served to 'analyst': 2 fields, 1 metric of the model (...)
 ```
 
 `dactopus-ossie-clickhouse validate model.yaml --url ...`, run as a user
 who reads everything, lists each missing table and column. Restart the
 server after the tables change.
+
+What a policy file hides on purpose is counted on a line of its own, so
+it does not set off the warning above:
+
+```text
+dactopus-ossie-clickhouse: hidden from 'analyst' by the policy: 1 dataset, 14 fields, 3 relationships of the model
+```
 
 ## Claude Code and other clients
 

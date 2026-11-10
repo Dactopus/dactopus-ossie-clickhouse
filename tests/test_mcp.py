@@ -167,7 +167,7 @@ def test_serve_names_the_database_on_stderr(tpcds, monkeypatch, capsys):
     assert main(["serve", str(FIXTURE), "--url", server_url()]) == 0
     out = capsys.readouterr()
     assert out.out == ""  # stdout carries the protocol
-    assert out.err.endswith(f"on {tpcds.url} (database tpcds)\n")
+    assert out.err.splitlines()[0].endswith(f"on {tpcds.url} (database tpcds)")
 
 
 def test_serve_counts_what_it_does_not_serve(tpcds, monkeypatch, capsys, tmp_path):
@@ -185,10 +185,28 @@ def test_serve_counts_what_it_does_not_serve(tpcds, monkeypatch, capsys, tmp_pat
     err = capsys.readouterr().err.splitlines()
     assert err[0].endswith(f"on {tpcds.url} (database tpcds)")
     fields = len(next(d for d in MODEL.datasets if d.name == "item").fields)
-    assert err[1].startswith(
-        f"dactopus-ossie-clickhouse: not served to {user!r}: 1 datasets, {fields} fields, "
-    )
-    assert "relationships of the model" in err[1] and "restart" in err[1]
+    # The database lacks nothing here: only the policy's line, no warning.
+    assert err[1:] == [
+        f"dactopus-ossie-clickhouse: hidden from {user!r} by the policy: 1 dataset, "
+        f"{fields} fields, 1 relationship of the model"
+    ]
+
+
+def test_serve_warns_of_what_the_database_lacks(tpcds, monkeypatch, capsys, tmp_path):
+    """A model ahead of its tables: a field reads a column the table does not have."""
+    from mcp.server import MCPServer
+
+    from dactopus_ossie_clickhouse.cli import main
+
+    monkeypatch.setattr(MCPServer, "run", lambda self: None)
+    model = tmp_path / "model.yaml"
+    model.write_text(FIXTURE.read_text().replace("sql: i_item_desc", "sql: i_item_summary"))
+    user = tpcds.query("SELECT currentUser()").result_rows[0][0]
+    assert main(["serve", str(model), "--url", server_url()]) == 0
+    err = capsys.readouterr().err.splitlines()
+    assert len(err) == 2
+    assert err[1].startswith(f"dactopus-ossie-clickhouse: not served to {user!r}: 1 field of ")
+    assert "`validate --url` lists them" in err[1] and "restart" in err[1]
 
 
 @pytest.mark.anyio

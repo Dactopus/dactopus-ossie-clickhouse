@@ -5,9 +5,9 @@ name: Latest upstream
 # with scripts/vendor_ossie.py). Weekly, each of them over the lock: tests say
 # whether it breaks us, canaries (tests/test_canaries.py) whether a rule
 # here has lost its reason. The Ossie variant also runs the query compliance cases of
-# Ossie's main on ClickHouse (tests/test_compliance.py), so a case added there fails
-# here until it is listed there. The SQLGlot variant ignores the upper bound, so a red run
-# may also mean a new major version.
+# Ossie's main on ClickHouse (tests/test_compliance.py), so a case added upstream fails
+# here until that file lists it. The SQLGlot variant ignores the upper bound, so a red
+# run may also mean a new major version.
 
 on:
   schedule:

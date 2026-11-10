@@ -223,6 +223,8 @@ def test_every_case_has_its_question():
     assert len(known) == len(set(known)), "a case is listed twice"
     missing = [c for c in cases if c not in known]
     assert not missing, f"apache/ossie added cases without a question here: {missing}"
+    stale = [c for c in known if c not in cases]
+    assert not stale, f"cases listed here that apache/ossie no longer has: {stale}"
 
 
 @pytest.mark.parametrize("case", sorted(REFUSED))

@@ -160,8 +160,10 @@ that is no field, `ROLLUP`, a CTE, a subquery, a dataset read twice, a
 join on a range or on columns that are no key, `RIGHT`, `FULL` and
 `CROSS JOIN`, and a `LEFT JOIN` from the one side, which keeps a
 department without employees where a question keeps `emp` rows. Each is
-named with its form in `NOT_ASKED`. The suite demands standard SQL semantics, which
-every generated query already sets: `SUM` over no rows is NULL
+named with its form in `NOT_ASKED`.
+
+The suite demands standard SQL semantics, which every generated query
+already sets: `SUM` over no rows is NULL
 (`aggregate_functions_null_for_empty = 1`) and `COUNT` is 0.
 
 ## Exact percentiles

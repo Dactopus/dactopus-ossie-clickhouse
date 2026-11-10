@@ -44,6 +44,20 @@ the four tools below. Ask in business terms, for example "sales by item
 category in 1998"; the agent should call `list_model`, maybe
 `describe_object`, then `query`.
 
+The server reads the tables and columns once, at start, and serves the
+part of the model the connected user can read. An agent is never told
+what it is not shown, so a model newer than its tables would be served
+short without a word to anyone. The server says so in that log (on
+stderr), with counts:
+
+```text
+dactopus-ossie-clickhouse: not served to 'analyst': 1 datasets, 14 fields, 9 metrics, 3 relationships of the model (...)
+```
+
+`dactopus-ossie-clickhouse validate model.yaml --url ...`, run as a user
+who reads everything, lists each missing table and column. Restart the
+server after the tables change.
+
 ## Claude Code and other clients
 
 Any MCP client that supports stdio works the same way. For

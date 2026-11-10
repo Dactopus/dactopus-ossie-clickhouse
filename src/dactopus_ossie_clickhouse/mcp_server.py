@@ -181,6 +181,7 @@ def build_server(
         instructions=instructions(m),
     )
     server.location = executor.location  # for `serve` to print
+    server.user, server.withheld = executor.user, executor.withheld()
 
     @server.tool()
     def list_model() -> dict[str, Any]:

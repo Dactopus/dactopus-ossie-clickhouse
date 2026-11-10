@@ -214,15 +214,22 @@ class Executor:
             metrics=frozenset(self.untranslatable_metrics)
             | frozenset(unanswerable_metrics(model, self.catalog)),
         )
+        reader = f"by {self.user!r} on {self.location}"
+        # Kept apart from the policy's cut so withheld() can tell the operator what
+        # the database lacks from what the policy hides on purpose.
+        self.model = self._unpoliced = restrict(model, hidden, reader=reader)
         if policy:
             hidden |= policy.hidden_for(self.user, list(self.roles))
-        self.model = restrict(model, hidden, reader=f"by {self.user!r} on {self.location}")
+            self.model = restrict(model, hidden, reader=reader)
         self.planner = Planner(self.model, self.catalog)
 
-    def withheld(self) -> dict[str, int]:
+    def withheld(self) -> dict[str, dict[str, int]]:
         """How many datasets, fields, metrics and relationships of the model this
-        user is not served, by kind, without the kinds that lose nothing. For the
-        operator (`serve` prints it): the user never learns of a hidden object."""
+        user is not served, by cause and kind, without what loses nothing. Under
+        "database": a table, column or function the server lacks or does not grant,
+        or an expression that does not translate. Under "policy": what the policy
+        hides beyond that. For the operator (`serve` prints it): the user never
+        learns of a hidden object."""
 
         def counts(model: OssieDocument) -> dict[str, int]:
             return {
@@ -232,8 +239,15 @@ class Executor:
                 "relationships": len(model.relationships or []),
             }
 
-        served = counts(self.model)
-        return {k: n - served[k] for k, n in counts(self.full_model).items() if n > served[k]}
+        def lost(before: OssieDocument, after: OssieDocument) -> dict[str, int]:
+            kept = counts(after)
+            return {k: n - kept[k] for k, n in counts(before).items() if n > kept[k]}
+
+        out = {
+            "database": lost(self.full_model, self._unpoliced),
+            "policy": lost(self._unpoliced, self.model),
+        }
+        return {cause: kinds for cause, kinds in out.items() if kinds}
 
     def _hidden_by_grants(self) -> Hidden:
         """ClickHouse lists in system.tables and system.columns only what the

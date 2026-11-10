@@ -136,8 +136,31 @@ with its expected result as standard SQL over literals.
 reads the model as it is, runs each case as the question it asks and
 compares by the suite's README: columns by position, rows as multisets,
 exact numerics equal, approximate ones within 1e-9. The weekly workflow
-runs it on Ossie's `main`, so a case added upstream fails there until its
-question is written here. The suite demands standard SQL semantics, which
+runs it on Ossie's `main`, so a case added upstream fails there until it
+is listed here.
+
+On 2026-11-10, at apache/ossie `d700cde`, the suite has 32 cases
+(apache/ossie#628 added 31):
+
+| Cases | Count | Outcome |
+|-------|-------|---------|
+| `a01`-`a04`, `a06`, `a07`, `b01`, `b02` | 8 | asked as a question, the result equals the expected one |
+| `b04`, `b18`, `b20` | 3 | asked, refused |
+| the rest | 21 | no question has the query's form |
+
+The three refused cases ask for a metric of the one side (`dept_count`)
+grouped or filtered by the many side (`emp.job`). The Relational Query
+Interface counts each department once per group (section 9); the planner
+answers over the rows of one root and refuses
+("Refuse a metric over another dataset's rows"). The test checks the
+refusal, so a planner that starts to answer has to answer the expected
+value. The 21 other queries use a form a question does not have: an
+expression over measures in the `SELECT` list, grouping by an expression
+that is no field, `ROLLUP`, a CTE, a subquery, a dataset read twice, a
+join on a range or on columns that are no key, `RIGHT`, `FULL` and
+`CROSS JOIN`, and a `LEFT JOIN` from the one side, which keeps a
+department without employees where a question keeps `emp` rows. Each is
+named with its form in `NOT_ASKED`. The suite demands standard SQL semantics, which
 every generated query already sets: `SUM` over no rows is NULL
 (`aggregate_functions_null_for_empty = 1`) and `COUNT` is 0.
 

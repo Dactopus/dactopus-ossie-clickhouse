@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-11
+
 ### Added
 
 - A metric of the one side grouped by a field of the many side is
@@ -42,6 +44,7 @@ a minor release may change the Python API.
   `unsupported version '0.2.0.dev0'; this build supports '0.3.0.dev0'`:
   change its `version` line, nothing else in a model changes. The
   vendored `apache-ossie` is upstream's at `d700cde`.
+- `sqlglot>=30.31`, the current release; it makes no rewrite redundant.
 
 ## [0.14.0] - 2026-11-07
 

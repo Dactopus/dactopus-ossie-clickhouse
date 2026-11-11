@@ -34,8 +34,8 @@ INSTANT = dt.datetime(2026, 10, 21, 20, tzinfo=dt.UTC)
 
 def model_text(zone: str | None) -> str:
     extension = (
-        f"custom_extensions:\n  - vendor_name: CLICKHOUSE\n"
-        f"    data: '{json.dumps({'time_zone': zone})}'\n"
+        f"nonportable_extensions:\n  - vendor_name: CLICKHOUSE\n"
+        f"    data: {{time_zone: {json.dumps(zone)}}}\n"
         if zone
         else ""
     )

@@ -7,6 +7,25 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- The `CLICKHOUSE` entry of a model or a dataset (`time_zone`, `dedup`)
+  is read from `nonportable_extensions`, its `data` an object:
+
+  ```yaml
+  nonportable_extensions:
+    - vendor_name: CLICKHOUSE
+      data:
+        dedup: none
+  ```
+
+  Ossie renamed `custom_extensions` and made `data` an object instead of
+  a string holding JSON (apache/ossie#522), without changing the schema
+  version `0.3.0.dev0`. A model in the old form no longer loads: the
+  message names the property to rename, or the `data` to write as an
+  object. `load_model(..., time_zone=...)` writes the entry in the new
+  form. The vendored apache-ossie moves to apache/ossie@af7630c.
+
 ## [0.15.0] - 2026-11-11
 
 ### Added

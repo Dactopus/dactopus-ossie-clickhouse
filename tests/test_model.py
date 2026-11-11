@@ -120,11 +120,11 @@ def test_missing_version(tmp_path, tpcds):
 def test_unknown_key_in_nested_object(tmp_path, tpcds):
     # The SDK once dropped these silently (apache/ossie#530); a typo changed nothing.
     tpcds["datasets"][0]["fields"][0]["descriptionn"] = "typo"
-    tpcds["datasets"][1]["custom_extensions"] = [{"vendor_nam": "CLICKHOUSE", "data": "{}"}]
+    tpcds["datasets"][1]["nonportable_extensions"] = [{"vendor_nam": "CLICKHOUSE", "data": {}}]
     ps = problems_of(tmp_path, tpcds)
     assert "datasets.0.fields.0.descriptionn: Extra inputs are not permitted" in ps
-    assert "datasets.1.custom_extensions.0.vendor_nam: Extra inputs are not permitted" in ps
-    assert "datasets.1.custom_extensions.0.vendor_name: Field required" in ps
+    assert "datasets.1.nonportable_extensions.0.vendor_nam: Extra inputs are not permitted" in ps
+    assert "datasets.1.nonportable_extensions.0.vendor_name: Field required" in ps
 
 
 def test_null_property(tmp_path, tpcds):
@@ -286,54 +286,87 @@ def test_all_problems_reported_at_once(tmp_path, tpcds):
     assert len(problems_of(tmp_path, tpcds)) == 2
 
 
-def _clickhouse(data: str, vendor: str = "CLICKHOUSE") -> dict:
+def _clickhouse(data, vendor: str = "CLICKHOUSE") -> dict:
     return {"vendor_name": vendor, "data": data}
 
 
-@pytest.mark.parametrize("data", ['{"dedup": "none"}', '{"dedup": "final"}', "{}"])
+@pytest.mark.parametrize("data", [{"dedup": "none"}, {"dedup": "final"}, {}])
 def test_clickhouse_extension(tmp_path, tpcds, data):
-    tpcds["datasets"][0]["custom_extensions"] = [_clickhouse(data)]
+    tpcds["datasets"][0]["nonportable_extensions"] = [_clickhouse(data)]
     doc = load_model(write(tmp_path, tpcds))
-    assert overrides(doc.datasets[0]) == yaml.safe_load(data)
+    assert overrides(doc.datasets[0]) == data
 
 
 @pytest.mark.parametrize(
     ("data", "problem"),
     [
         # each of these once kept or dropped FINAL silently, or failed with a bare traceback
-        ('{"dedupe": "none"}', "unknown key 'dedupe'; known: dedup"),
-        ('{"dedup": "None"}', '\'dedup\' must be "final" or "none", got "None"'),
-        ('{"dedup": "Final"}', '\'dedup\' must be "final" or "none", got "Final"'),
-        ('{"dedup": null}', '\'dedup\' must be "final" or "none", got null'),
-        ("{dedup: none}", "data is not JSON (Expecting property name enclosed in double quotes)"),
-        ('"none"', 'data must be a JSON object, got "none"'),
-        ("[]", "data must be a JSON object, got []"),
-        ("null", "data must be a JSON object, got null"),
-        ('{"dedup": "final", "dedup": "none"}', "key 'dedup' is repeated; keep one"),
+        ({"dedupe": "none"}, "unknown key 'dedupe'; known: dedup"),
+        ({"dedup": "None"}, '\'dedup\' must be "final" or "none", got "None"'),
+        ({"dedup": "Final"}, '\'dedup\' must be "final" or "none", got "Final"'),
+        ({"dedup": None}, '\'dedup\' must be "final" or "none", got null'),
+        ({"dedup": {"on": True}}, '\'dedup\' must be "final" or "none", got {"on": true}'),
     ],
 )
 def test_clickhouse_extension_refused(tmp_path, tpcds, data, problem):
     ds = tpcds["datasets"][0]
-    ds["custom_extensions"] = [_clickhouse(data, vendor="ClickHouse")]  # any case
+    ds["nonportable_extensions"] = [_clickhouse(data, vendor="ClickHouse")]  # any case
     assert problems_of(tmp_path, tpcds) == [f"dataset {ds['name']!r}: CLICKHOUSE entry: {problem}"]
+
+
+def test_clickhouse_extension_data_not_an_object(tmp_path, tpcds):
+    # data was a string holding JSON before apache/ossie#522, under the same version.
+    ds = tpcds["datasets"][0]
+    ds["nonportable_extensions"] = [_clickhouse('{"dedup": "none"}')]
+    tpcds["nonportable_extensions"].append(_clickhouse([]))
+    n = len(tpcds["nonportable_extensions"]) - 1
+    assert problems_of(tmp_path, tpcds) == [
+        "datasets.0.nonportable_extensions.0.data: must be an object, not a JSON string "
+        "(apache/ossie#522)",
+        f"nonportable_extensions.{n}.data: Input should be a valid dictionary",
+    ]
+
+
+def test_clickhouse_extension_key_repeated(tmp_path):
+    # The SDK's loader refuses it; a dict would keep the last one silently.
+    path = tmp_path / "m.yaml"
+    path.write_text(
+        "version: 0.3.0.dev0\nname: m\ndatasets:\n  - name: d\n    source: t\n"
+        "nonportable_extensions:\n  - vendor_name: CLICKHOUSE\n"
+        "    data: {time_zone: UTC, time_zone: Europe/Berlin}\n"
+    )
+    with pytest.raises(ModelError, match="time_zone"):
+        load_model(path)
+
+
+def test_custom_extensions_renamed(tmp_path, tpcds):
+    # The name before apache/ossie#522, which kept the version: say what to write instead.
+    tpcds["custom_extensions"] = tpcds.pop("nonportable_extensions")
+    tpcds["datasets"][0]["custom_extensions"] = [_clickhouse('{"dedup": "none"}')]
+    assert problems_of(tmp_path, tpcds) == [
+        "datasets.0.custom_extensions: renamed nonportable_extensions, with data an object "
+        "(apache/ossie#522)",
+        "custom_extensions: renamed nonportable_extensions, with data an object (apache/ossie#522)",
+    ]
 
 
 def test_clickhouse_extension_twice(tmp_path, tpcds):
     ds = tpcds["datasets"][0]
-    ds["custom_extensions"] = [_clickhouse('{"dedup": "none"}'), _clickhouse('{"dedup": "final"}')]
+    ds["nonportable_extensions"] = [_clickhouse({"dedup": "none"}), _clickhouse({"dedup": "final"})]
     assert problems_of(tmp_path, tpcds) == [
-        f"dataset {ds['name']!r}: CLICKHOUSE entry appears 2 times in custom_extensions; keep one"
+        f"dataset {ds['name']!r}: CLICKHOUSE entry appears 2 times in nonportable_extensions; "
+        "keep one"
     ]
 
 
 def test_clickhouse_extension_read_on_the_model_and_datasets_only(tmp_path, tpcds):
-    entry = _clickhouse('{"dedup": "none"}')
+    entry = _clickhouse({"dedup": "none"})
     ds, metric, rel = tpcds["datasets"][0], tpcds["metrics"][0], tpcds["relationships"][0]
-    ds["fields"][0]["custom_extensions"] = [entry]
-    metric["custom_extensions"] = [entry]
-    rel["custom_extensions"] = [entry]
-    ds["metrics"][0]["custom_extensions"] = [entry]
-    tail = "a CLICKHOUSE entry in custom_extensions is read on the model and datasets only"
+    ds["fields"][0]["nonportable_extensions"] = [entry]
+    metric["nonportable_extensions"] = [entry]
+    rel["nonportable_extensions"] = [entry]
+    ds["metrics"][0]["nonportable_extensions"] = [entry]
+    tail = "a CLICKHOUSE entry in nonportable_extensions is read on the model and datasets only"
     assert problems_of(tmp_path, tpcds) == [
         f"field {ds['name']}.{ds['fields'][0]['name']}: {tail}",
         f"metric {metric['name']!r}: {tail}",
@@ -346,23 +379,23 @@ def test_clickhouse_extension_read_on_the_model_and_datasets_only(tmp_path, tpcd
 def test_model_time_zone(tmp_path, tpcds, zone):
     assert time_zone(load_model(write(tmp_path, tpcds))) == "UTC"  # without an entry
     # beside other vendors' entries, which stay
-    tpcds["custom_extensions"].append(_clickhouse(json.dumps({"time_zone": zone})))
+    tpcds["nonportable_extensions"].append(_clickhouse({"time_zone": zone}))
     assert time_zone(load_model(write(tmp_path, tpcds))) == zone
 
 
 @pytest.mark.parametrize(
     ("data", "problem"),
     [
-        ('{"time_zone": "Moscow"}', '"Moscow"'),
+        ({"time_zone": "Moscow"}, '"Moscow"'),
         # ClickHouse matches zone names case-sensitively
-        ('{"time_zone": "utc"}', '"utc"'),
-        ('{"time_zone": "+03:00"}', '"+03:00"'),
-        ('{"time_zone": null}', "null"),
-        ('{"time_zone": ["UTC"]}', '["UTC"]'),
+        ({"time_zone": "utc"}, '"utc"'),
+        ({"time_zone": "+03:00"}, '"+03:00"'),
+        ({"time_zone": None}, "null"),
+        ({"time_zone": ["UTC"]}, '["UTC"]'),
     ],
 )
 def test_model_time_zone_refused(tmp_path, tpcds, data, problem):
-    tpcds["custom_extensions"] = [_clickhouse(data)]
+    tpcds["nonportable_extensions"] = [_clickhouse(data)]
     assert problems_of(tmp_path, tpcds) == [
         "model: CLICKHOUSE entry: 'time_zone' must be a time zone name such as \"UTC\" "
         f'or "America/New_York", got {problem}'
@@ -371,8 +404,8 @@ def test_model_time_zone_refused(tmp_path, tpcds, data, problem):
 
 def test_model_and_dataset_keys_stay_apart(tmp_path, tpcds):
     ds = tpcds["datasets"][0]
-    tpcds["custom_extensions"] = [_clickhouse('{"dedup": "none"}')]
-    ds["custom_extensions"] = [_clickhouse('{"time_zone": "UTC"}')]
+    tpcds["nonportable_extensions"] = [_clickhouse({"dedup": "none"})]
+    ds["nonportable_extensions"] = [_clickhouse({"time_zone": "UTC"})]
     assert problems_of(tmp_path, tpcds) == [
         "model: CLICKHOUSE entry: unknown key 'dedup'; known: time_zone",
         f"dataset {ds['name']!r}: CLICKHOUSE entry: unknown key 'time_zone'; known: dedup",
@@ -380,27 +413,27 @@ def test_model_and_dataset_keys_stay_apart(tmp_path, tpcds):
 
 
 def test_time_zone_checks_a_document_built_in_python(tpcds):
-    tpcds["custom_extensions"] = [_clickhouse('{"time_zone": "Mars/Olympus"}')]
+    tpcds["nonportable_extensions"] = [_clickhouse({"time_zone": "Mars/Olympus"})]
     with pytest.raises(ModelError, match="'time_zone' must be"):
         time_zone(OssieDocument.model_validate(tpcds))
 
 
 def test_time_zone_given_replaces_the_model_s(tmp_path, tpcds):
     """A deployment's zone, from --time-zone, over the zone a shared model names (#54)."""
-    others = list(tpcds["custom_extensions"])
+    others = list(tpcds["nonportable_extensions"])
     doc = load_model(write(tmp_path, tpcds), time_zone="America/New_York")
     assert time_zone(doc) == "America/New_York"
-    tpcds["custom_extensions"].append(_clickhouse('{"time_zone": "Pacific/Kiritimati"}'))
+    tpcds["nonportable_extensions"].append(_clickhouse({"time_zone": "Pacific/Kiritimati"}))
     doc = load_model(write(tmp_path, tpcds), time_zone="America/New_York")
     assert time_zone(doc) == "America/New_York"  # one entry: time_zone() refuses two
-    kept = [e.model_dump() for e in doc.custom_extensions if e.vendor_name != "CLICKHOUSE"]
+    kept = [e.model_dump() for e in doc.nonportable_extensions if e.vendor_name != "CLICKHOUSE"]
     assert kept == others  # other vendors' entries stay
     assert time_zone(load_model(write(tmp_path, tpcds))) == "Pacific/Kiritimati"
 
 
 def test_time_zone_given_replaces_it_in_a_model_of_several_files(tmp_path, tpcds):
     sales, rest = split(tpcds)
-    rest["custom_extensions"] = [_clickhouse('{"time_zone": "Pacific/Kiritimati"}')]
+    rest["nonportable_extensions"] = [_clickhouse({"time_zone": "Pacific/Kiritimati"})]
     a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
     assert time_zone(load_model(a, b, time_zone="Europe/Berlin")) == "Europe/Berlin"
 
@@ -420,7 +453,7 @@ def test_time_zone_given_refused(tmp_path, tpcds, zone):
 
 def test_cli_time_zone(tmp_path, tpcds, capsys, monkeypatch):
     monkeypatch.delenv("OSSIE_CLICKHOUSE_TIME_ZONE", raising=False)
-    tpcds["custom_extensions"].append(_clickhouse('{"time_zone": "Pacific/Kiritimati"}'))
+    tpcds["nonportable_extensions"].append(_clickhouse({"time_zone": "Pacific/Kiritimati"}))
     p = str(write(tmp_path, tpcds))
     q = ["sql", p, "-m", "total_sales", "-f", "date_dim.d_date = CURRENT_DATE"]
 
@@ -444,7 +477,7 @@ def test_cli_time_zone(tmp_path, tpcds, capsys, monkeypatch):
 
 def test_overrides_checks_a_document_built_in_python(tpcds):
     # Executor accepts an OssieDocument that never went through load_model.
-    tpcds["datasets"][0]["custom_extensions"] = [_clickhouse('{"dedup": "None"}')]
+    tpcds["datasets"][0]["nonportable_extensions"] = [_clickhouse({"dedup": "None"})]
     doc = OssieDocument.model_validate(tpcds)
     with pytest.raises(ModelError, match="'dedup' must be"):
         overrides(doc.datasets[0])
@@ -543,7 +576,7 @@ def test_file_problems_reported_with_the_clashes(tmp_path, tpcds):
     sales, rest = split(tpcds)
     rest["metrics"].append(copy.deepcopy(rest["metrics"][0]))
     rest["metrics"].append(copy.deepcopy(sales["metrics"][0]))
-    rest["custom_extensions"] = [_clickhouse('{"dedup": "none"}')]
+    rest["nonportable_extensions"] = [_clickhouse({"dedup": "none"})]
     a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
     with pytest.raises(ModelError) as e:
         load_model(a, b)
@@ -581,11 +614,11 @@ def test_name_defined_in_two_files(tmp_path, tpcds):
 
 def test_model_time_zone_in_one_file_of_several(tmp_path, tpcds):
     sales, rest = split(tpcds)
-    rest["custom_extensions"] = [_clickhouse('{"time_zone": "America/New_York"}')]
+    rest["nonportable_extensions"] = [_clickhouse({"time_zone": "America/New_York"})]
     a, b = write(tmp_path, sales, "a.yaml"), write(tmp_path, rest, "b.yaml")
     assert time_zone(load_model(a, b)) == "America/New_York"
     # In two files, even the same zone: one of them would be edited and not the other.
-    sales["custom_extensions"] = [_clickhouse('{"time_zone": "America/New_York"}')]
+    sales["nonportable_extensions"] = [_clickhouse({"time_zone": "America/New_York"})]
     write(tmp_path, sales, "a.yaml")
     with pytest.raises(ModelError) as e:
         load_model(a, b)

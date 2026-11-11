@@ -12,6 +12,7 @@ from __future__ import annotations
 import difflib
 import json
 import zoneinfo
+from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
 
@@ -20,11 +21,11 @@ from pydantic import ValidationError
 
 from dactopus_ossie_clickhouse._vendor.ossie import (
     OssieAIContextObject,
-    OssieCustomExtension,
     OssieDataset,
     OssieDocument,
     OssieExpression,
     OssieMetric,
+    OssieNonportableExtension,
     OssieRelationship,
 )
 
@@ -32,8 +33,8 @@ SUPPORTED_VERSION = "0.3.0.dev0"
 # Dialects of a `dialects` entry this executor reads, in order of preference. The
 # expression's own `sql` comes before them (expression_text).
 SUPPORTED_DIALECTS = ("OSSIE_SQL_2026", "ANSI_SQL")
-# The custom_extensions namespace this project owns (docs/model-authoring.md):
-# a JSON object on a dataset or on the model, with these keys and values.
+# The nonportable_extensions namespace this project owns (docs/model-authoring.md):
+# a data object on a dataset or on the model, with these keys and values.
 VENDOR = "CLICKHOUSE"
 DEFAULT_TIME_ZONE = "UTC"
 # In a dataset's metric, `source.column` reads a column of the dataset's source (spec,
@@ -95,9 +96,10 @@ def load_model(*paths: str | Path, time_zone: str | None = None) -> OssieDocumen
 def _with_zone(doc: OssieDocument, zone: str) -> OssieDocument:
     """``doc`` with ``zone`` in its CLICKHOUSE entry, whatever zone that entry names."""
     data, _ = _extension(doc)  # load_model() checked it
-    entry = OssieCustomExtension(vendor_name=VENDOR, data=json.dumps(data | {"time_zone": zone}))
-    others = [e for e in doc.custom_extensions or [] if e.vendor_name.upper() != VENDOR]
-    return doc.model_copy(update={"custom_extensions": [*others, entry]})
+    # A new dict, not data itself: the SDK may hand data out read-only (apache/ossie#713).
+    entry = OssieNonportableExtension(vendor_name=VENDOR, data={**data, "time_zone": zone})
+    others = [e for e in doc.nonportable_extensions or [] if e.vendor_name.upper() != VENDOR]
+    return doc.model_copy(update={"nonportable_extensions": [*others, entry]})
 
 
 def _read(path: Path, label: str) -> OssieDocument:
@@ -158,7 +160,7 @@ def _combine(docs: list[OssieDocument]) -> OssieDocument:
             "datasets": union("datasets"),
             "relationships": union("relationships"),
             "metrics": union("metrics"),
-            "custom_extensions": union("custom_extensions"),
+            "nonportable_extensions": union("nonportable_extensions"),
             "ai_context": _ai_context(docs),
         }
     )
@@ -267,7 +269,7 @@ def _check_whole(doc: OssieDocument) -> list[str]:
     for what, node in elsewhere:
         if _entries(node):
             problems.append(
-                f"{what}: a {VENDOR} entry in custom_extensions is read on the model and "
+                f"{what}: a {VENDOR} entry in nonportable_extensions is read on the model and "
                 "datasets only"
             )
     return problems
@@ -369,7 +371,7 @@ def _duplicates(kind: str, names: list[str]) -> list[str]:
 
 
 def _entries(node) -> list:
-    return [e for e in node.custom_extensions or [] if e.vendor_name.upper() == VENDOR]
+    return [e for e in node.nonportable_extensions or [] if e.vendor_name.upper() == VENDOR]
 
 
 @cache
@@ -405,31 +407,21 @@ def _extension(node: OssieDataset | OssieDocument) -> tuple[dict, list[str]]:
     if not entries:
         return {}, []
     if len(entries) > 1:
-        return {}, [f"{where} appears {len(entries)} times in custom_extensions; keep one"]
-    try:
-        data = json.loads(entries[0].data, object_pairs_hook=_pairs)
-    except json.JSONDecodeError as e:
-        return {}, [f"{where}: data is not JSON ({e.msg})"]
-    except ValueError as e:  # a repeated key, from _pairs
-        return {}, [f"{where}: {e}"]
-    if not isinstance(data, dict):
-        return {}, [f"{where}: data must be a JSON object, got {json.dumps(data)}"]
+        return {}, [f"{where} appears {len(entries)} times in nonportable_extensions; keep one"]
+    # An object by the schema; the SDK's loaders refuse a repeated key in it.
+    data = dict(entries[0].data)
     known = ", ".join(keys)
     problems = [f"{where}: unknown key {k!r}; known: {known}" for k in data if k not in keys]
     for key, check in keys.items():
         if key in data and (must := check(data[key])):
-            problems.append(f"{where}: {key!r} must be {must}, got {json.dumps(data[key])}")
+            problems.append(f"{where}: {key!r} must be {must}, got {_json(data[key])}")
     return ({}, problems) if problems else (data, [])
 
 
-def _pairs(pairs: list[tuple[str, object]]) -> dict:
-    """dict(pairs), refusing a repeated key: json.loads would keep the last one silently."""
-    seen: set[str] = set()
-    for k, _ in pairs:
-        if k in seen:
-            raise ValueError(f"key {k!r} is repeated; keep one")
-        seen.add(k)
-    return dict(pairs)
+def _json(value) -> str:
+    """``value`` as JSON, for a message; data the SDK freezes (apache/ossie#713) holds
+    read-only mappings, which json.dumps does not take."""
+    return json.dumps(value, default=lambda v: dict(v) if isinstance(v, Mapping) else str(v))
 
 
 def expression_text(expression: OssieExpression) -> str | None:
@@ -466,4 +458,9 @@ def _format(err: dict) -> str:
         # An empty file or a list; pydantic's message names the SDK class.
         return "document: top level must be a mapping"
     loc = ".".join(str(p) for p in err["loc"]) or "document"
+    if err["loc"][-1:] == ("custom_extensions",) and err["type"] == "extra_forbidden":
+        # The name before apache/ossie#522; the version did not change with it.
+        return f"{loc}: renamed nonportable_extensions, with data an object (apache/ossie#522)"
+    if err["loc"][-3::2] == ("nonportable_extensions", "data") and isinstance(err["input"], str):
+        return f"{loc}: must be an object, not a JSON string (apache/ossie#522)"
     return f"{loc}: {err['msg']}"

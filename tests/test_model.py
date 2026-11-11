@@ -321,7 +321,7 @@ def test_clickhouse_extension_data_not_an_object(tmp_path, tpcds):
     tpcds["nonportable_extensions"].append(_clickhouse([]))
     n = len(tpcds["nonportable_extensions"]) - 1
     assert problems_of(tmp_path, tpcds) == [
-        "datasets.0.nonportable_extensions.0.data: must be an object, not a JSON string "
+        "datasets.0.nonportable_extensions.0.data: must be an object, not a string "
         "(apache/ossie#522)",
         f"nonportable_extensions.{n}.data: Input should be a valid dictionary",
     ]

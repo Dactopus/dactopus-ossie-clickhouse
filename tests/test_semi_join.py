@@ -643,9 +643,9 @@ def _with_line_promos(planner: Planner | None = None) -> Planner:
     ],
 )
 def test_a_fact_every_link_passes_through_is_named_by_the_planner(query):
-    """Dactopus/upstream#103: line_promos links orders to items through lines, so
-    lines is the one reading, as in a model without line_promos; naming it in a
-    filter gives the same subquery with that filter."""
+    """line_promos links orders to items through lines, so lines is the one
+    reading, as in a model without line_promos; naming it in a filter gives the
+    same subquery with that filter."""
     sql = _with_line_promos().sql(query)
     assert sql == Planner(MODEL).sql(query)
     named = replace(query, filters=(*query.filters, "lines.id IS NOT NULL"))

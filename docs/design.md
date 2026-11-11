@@ -1121,8 +1121,10 @@ orders.order_id IN (SELECT order_lines.order_id FROM order_lines
   `line_brands -> order_lines` and `line_categories -> order_lines`
   link orders to products too, but their rows are order lines, one per
   brand or category, and reading through them drops the lines without
-  one: the order lines are the reading (Dactopus/upstream#103). A model
-  with one fact is the same case.
+  one: the order lines are the reading. A model with one fact is the
+  same case. Filters on two datasets the fact reaches, the dates and the
+  items of a sale, go into its one subquery, as when a filter names it:
+  one sale passes both.
 - Otherwise it is refused with each dataset a filter could name to link
   them, as the planner would plan it, with such a filter on each as an
   example. A fact that meets the root at a shared dataset counts too

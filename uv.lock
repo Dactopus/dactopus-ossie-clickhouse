@@ -369,7 +369,7 @@ wheels = [
 
 [[package]]
 name = "dactopus-ossie-clickhouse"
-version = "0.15.0"
+version = "0.16.0"
 source = { editable = "." }
 dependencies = [
     { name = "clickhouse-connect" },

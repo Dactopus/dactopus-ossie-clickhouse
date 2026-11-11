@@ -7,6 +7,8 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-11
+
 ### Changed
 
 - The `CLICKHOUSE` entry of a model or a dataset (`time_zone`, `dedup`)

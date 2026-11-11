@@ -980,10 +980,9 @@ and why.
   subquery joined by `AND`, so one row of M passes all of them, as one
   joined row would: `-f "lines.qty > 1" -f "orders.status = 'paid'"`
   keeps a customer with a paid order that has such a line. M is the
-  dataset among those filters that reaches the others. It must be named,
-  as the root must (above): a filter on `items` alone, which reaches no
-  customer, is refused with the dataset that links them (`lines`) in the
-  message, since which fact links two datasets is a choice of meaning.
+  dataset among those filters that reaches the others. A filter on
+  `items` alone, which reaches no customer, is read through the fact
+  that links them when there is one (next sections).
 - The subquery is planned as a question over M: its own `LEFT JOIN`s,
   `FINAL` and dictionaries. M reaches the root along one path of
   relationships (two are ambiguous, section 6.9), with one `IN` per step,
@@ -1081,18 +1080,15 @@ exist, a line on the order of a missing customer and NULL keys: a join, a
 subquery that skips the shared dataset, and one that skips the orders on
 the way each give another answer.
 
-### Through a fact the question names
+### Through a fact that links them
 
 "Orders with a line in Clothing" has a root two steps from M: orders do
 not reach products, and the categories meet nothing orders reach. A fact
-reaches both, the order lines, but the fact is a choice of meaning. With
-`refund_lines -> orders` and `refund_lines -> products` next to the order
-lines, the same words through refunds count the orders where Clothing was
-refunded, a smaller number. A planner that took the only fact a model
-has would answer the refunds one without a word in a model that relates
-only refunds, and adding the order lines later would turn an answer into
-a refusal. So the question names the fact with a filter on it, as a
-filter on `items` for customers already must (above):
+reaches both, the order lines. With `refund_lines -> orders` and
+`refund_lines -> products` next to the order lines, the same words
+through refunds count the orders where Clothing was refunded, a smaller
+number: two facts that link them apart are two meanings, and the
+question names one with a filter on it:
 
 ```
 -m orders.order_count -f "order_lines.order_id IS NOT NULL" -f "product_categories.category = 'Clothing'"
@@ -1118,13 +1114,30 @@ orders.order_id IN (SELECT order_lines.order_id FROM order_lines
   order, since a line without an order keeps none. It does bind: every
   filter on a dataset the lines reach, `orders.status = 'paid'` too, then
   holds for the same line, as a filter on the lines always makes it, and
-  an order without lines no longer passes it. A question without the
-  fact is refused with each dataset a filter could name to link them, as
-  the planner would plan it, with such a filter on each as an example.
-  A fact that meets the root at a shared dataset counts too
+  an order without lines no longer passes it.
+- A question that names no fact is read through the one fact that every
+  fact linking them passes through on each of its ways to the root and
+  to M (`Planner._link`), as if a filter named it with no condition.
+  `line_brands -> order_lines` and `line_categories -> order_lines`
+  link orders to products too, but their rows are order lines, one per
+  brand or category, and reading through them drops the lines without
+  one: the order lines are the reading (Dactopus/upstream#103). A model
+  with one fact is the same case.
+- Otherwise it is refused with each dataset a filter could name to link
+  them, as the planner would plan it, with such a filter on each as an
+  example. A fact that meets the root at a shared dataset counts too
   (`favorites (customer_id, item_id)` for orders through customers), and
   one with two paths to the root, or one that M meets at two datasets,
   is left out, since naming it would be refused.
+- This planner first refused a question that named no fact even when
+  one fact linked them: a model that relates orders to products only
+  through refund lines would answer "orders with Clothing" as refunded
+  ones without a word. The refusal did not prevent that. With one fact
+  its message names only that fact, and agents add the filter it
+  suggests as written; with lines by brand next to the lines, a weaker
+  agent could name the brands and lose the lines without one. The
+  refusal stays where it asks for a choice, between facts that link
+  them apart.
 - A filter dataset that meets two named facts (`order_lines` and
   `refund_lines` both filtered) is refused with both named, since an
   order could be kept through either. The rules of the previous section
@@ -1183,10 +1196,10 @@ merged rows, as `b20` asks.
 - The groups are the root's rows, as everywhere in this planner. H rows
   that no root row references are in no group, as an inner join leaves
   them out in `b04`.
-- The root is a dataset the question names, as in "Through a fact the
-  question names". With items reached from order lines,
-  `customers.customer_count` by `items.category` is refused, and a filter
-  on the lines (`order_lines.order_id IS NOT NULL`) names the fact.
+- The root is a dataset the question names. With items reached from
+  order lines, `customers.customer_count` by `items.category` is
+  refused, and a filter on the lines (`order_lines.order_id IS NOT
+  NULL`) names the fact.
   Layer 3 lists one-to-many paths through a bridge dataset, such as
   `movies.total_gross` by `actors.height` through `appearances`, among
   its future extensions (#653, Appendix A.1); a question that names no

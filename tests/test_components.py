@@ -413,12 +413,17 @@ def test_customer_lifetime_value_by_a_dimension_customer_does_not_reach(dimensio
 
 
 def test_customer_lifetime_value_filtered_on_a_dataset_customer_does_not_reach():
-    message = refusal(
-        Planner(TPCDS_MODEL),
-        Query(("customer_lifetime_value",), (), ("date_dim.d_year = 2000",)),
+    """store_sales is the one fact that links customer to date_dim, so the customers
+    counted are those with a sale in 2000 (Dactopus/upstream#103)."""
+    sql = Planner(TPCDS_MODEL).sql(
+        Query(("customer_lifetime_value",), (), ("date_dim.d_year = 2000",))
     )
-    assert "row filter 'date_dim.d_year = 2000' cannot be with metric" in message
-    assert "'customer_lifetime_value'" in message and "date_dim" in message
+    assert (
+        "FROM tpcds.customer AS customer WHERE customer.c_customer_sk IN (SELECT "
+        "store_sales.ss_customer_sk FROM tpcds.store_sales AS store_sales LEFT JOIN "
+        "tpcds.date_dim AS date_dim ON store_sales.ss_sold_date_sk = date_dim.d_date_sk "
+        "WHERE date_dim.d_year = 2000)"
+    ) in sql
 
 
 def test_a_dimension_one_component_reaches_and_another_does_not_names_the_second():

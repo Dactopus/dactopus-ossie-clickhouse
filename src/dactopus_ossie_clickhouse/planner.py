@@ -1820,7 +1820,9 @@ class Planner:
         the semi-join keeps S rows, and the root's rows that reach one of them.
         An M that meets no dataset the root reaches does so in the subquery of
         the one fact another filter names that M meets: orders by the categories
-        of their lines' products, with a filter on the lines (#69 item 2)."""
+        of their lines' products, with a filter on the lines (#69 item 2). With
+        no such filter, the fact is the one every fact that links them passes
+        through (_link)."""
         core = {label: ds for label, ds in touched.items() if label not in rows}
         if not set().union(*core.values()):
             return None
@@ -1878,12 +1880,24 @@ class Planner:
         # meets, as a filter of the question over that fact's rows (#69 item 2).
         direct = [t for t in group if root.name in reach[t] or self._meets(t, near)]
         extra: dict[str, list[exp.Expression]] = {t: [] for t in direct}
-        for top, labels in group.items():
+        named: dict[str, str] = {}  # a fact no filter names -> the filter that needs it
+        for top, labels in list(group.items()):
             if top in extra:
                 continue
             carriers = [t for t in direct if self._meets(top, reach[t])]
             if not carriers:
-                raise PlanError(self._unlinked(labels[0], top, root, near))
+                # The one fact every link between them passes through: orders by
+                # their lines' products, where lines by brand are lines too.
+                link = self._link(labels[0], top, root, near)
+                reach[link] = self._reachable(link)
+                direct.append(link)
+                extra[link] = []
+                if top in reach[link]:  # as if the question named it in a filter
+                    group[link] = group.pop(top)
+                    continue
+                group[link] = []
+                named[link] = labels[0]
+                carriers = [link]
             if len(carriers) > 1:
                 raise PlanError(
                     f"{labels[0]} reads {top}, which meets {root.name} through "
@@ -1904,7 +1918,9 @@ class Planner:
                 )
             else:
                 semi_joins.append(
-                    self._through(group[top][0], top, root, near, filters, used, extra[top])
+                    self._through(
+                        named.get(top) or group[top][0], top, root, near, filters, used, extra[top]
+                    )
                 )
         return root, joined, semi_joins
 
@@ -1933,12 +1949,68 @@ class Planner:
         on_shared = self._semi_join(shared, self.dataset(m), filters, used, extra)
         return self._semi_join_to(at, shared, on_shared)
 
-    def _unlinked(self, label: str, m: str, root: OssieDataset, near: set[str]) -> str:
+    def _link(self, label: str, m: str, root: OssieDataset, near: set[str]) -> str:
+        """The fact that links ``m`` to ``root`` for a filter on ``m`` alone, when
+        every fact that links them passes through it on each of its ways to both:
+        its rows are rows of that fact (lines by brand are lines), so naming it
+        only narrows the question. Two facts that link them apart, lines and
+        refunds, are two meanings, and the question names one (#69 item 2)."""
+        examples = self._links(m, root, near)
+        found = [
+            d
+            for d in examples
+            if all(self._passes(c, d, ts) for c, ts in self._linkers(m, root, near) if c != d)
+        ]
+        if len(found) == 1:
+            return found[0]
+        raise PlanError(self._unlinked(label, m, root, near, examples))
+
+    def _linkers(self, m: str, root: OssieDataset, near: set[str]) -> list[tuple[str, list[str]]]:
+        """Each fact that links ``m`` to ``root``, with the datasets it ends at on
+        either way: the root or where it meets the datasets the root reaches, and
+        ``m`` or where ``m`` meets the datasets it reaches."""
+        out = []
+        for d in self.model.datasets:
+            if d.name in near or d.name == m:
+                continue
+            to_root = [root.name] if self._paths(d.name, root.name) else self._meets(d.name, near)
+            reach = self._reachable(d.name)
+            to_m = [m] if m in reach else self._meets(m, reach)
+            if to_root and to_m:
+                out.append((d.name, to_root + to_m))
+        return out
+
+    def _passes(self, start: str, via: str, targets: list[str]) -> bool:
+        """Whether the one path from ``start`` to each of ``targets`` reads ``via``."""
+        for t in targets:
+            paths = self._paths(start, t)
+            if len(paths) != 1 or via not in {self.dataset(r.to).name for r in paths[0]}:
+                return False
+        return True
+
+    def _unlinked(
+        self, label: str, m: str, root: OssieDataset, near: set[str], examples: dict[str, str]
+    ) -> str:
         """Why a filter on ``m`` keeps no ``root`` row, with each fact a filter could
-        name to link them, as _split_filters would plan it: which one does is a
-        choice of meaning, so the question names it. The example filter keeps
-        every row of the fact that references a root row, or the dataset S it
-        meets the root at."""
+        name to link them (_links): which one does is a choice of meaning, so the
+        question names it."""
+        message = (
+            f"{label} reads {m}, which {root.name} does not join to and which does not "
+            f"reach {root.name} through many-to-one relationships"
+        )
+        if not examples:
+            return message
+        via = sorted(examples)
+        which = "the dataset that links" if len(via) == 1 else "one of the datasets that link"
+        return (
+            f"{message}; name {which} them ({', '.join(via)}) in a filter, such as "
+            f"{' or '.join(examples[d] for d in via)}"
+        )
+
+    def _links(self, m: str, root: OssieDataset, near: set[str]) -> dict[str, str]:
+        """Each fact a filter could name to link ``m`` to ``root``, as _split_filters
+        would plan it, with a filter on it that keeps every row of the fact that
+        references a root row, or the dataset S it meets the root at."""
         examples = {}  # dataset -> a filter on it that drops none of its rows that count
         for d in self.model.datasets:
             if d.name in near or d.name == m:
@@ -1959,18 +2031,7 @@ class Planner:
                 ok = ok and len(meets) == 1 and self._one_way(m, self.dataset(d.name), meets[0])
             if ok:
                 examples[d.name] = f"{d.name}.{paths[0][0].from_columns[0]} IS NOT NULL"
-        message = (
-            f"{label} reads {m}, which {root.name} does not join to and which does not "
-            f"reach {root.name} through many-to-one relationships"
-        )
-        if not examples:
-            return message
-        via = sorted(examples)
-        which = "the dataset that links" if len(via) == 1 else "one of the datasets that link"
-        return (
-            f"{message}; name {which} them ({', '.join(via)}) in a filter, such as "
-            f"{' or '.join(examples[d] for d in via)}"
-        )
+        return examples
 
     def _one_way(self, m: str, at: OssieDataset, shared: OssieDataset | str) -> bool:
         """Whether _through plans ``m`` meeting ``at`` at ``shared``: one path each
@@ -2061,7 +2122,8 @@ class Planner:
         first = path[0]
         sub = exp.select(*self._keys(m, first.from_columns))
         sub, dict_keys = self._from(sub, m, used)
-        sub = sub.where(exp.and_(*filters))
+        if filters:
+            sub = sub.where(exp.and_(*filters))
         if dict_keys:
             sub = sub.transform(lambda n: self._dict_get(n, dict_keys))
         if extra:  # after the transform: their subqueries read datasets of their own

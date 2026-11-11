@@ -7,6 +7,18 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Changed
+
+- A row filter on a dataset the question's root does not reach, with no
+  filter naming the fact that links them, is read through that fact
+  when every fact linking them passes through it: `orders.order_count`
+  with `-f "products.status = 'archived'"` counts the orders with a line
+  of an archived product, where lines by brand or by category are order
+  lines too. It was refused with the facts to name in a filter. Facts
+  that link them apart, order lines and refunds, are still refused, as
+  a choice of meaning. Filters on several such datasets hold for one row
+  of the fact, as when a filter names it.
+
 ## [0.16.0] - 2026-11-11
 
 ### Changed
@@ -27,14 +39,6 @@ a minor release may change the Python API.
   message names the property to rename, or the `data` to write as an
   object. `load_model(..., time_zone=...)` writes the entry in the new
   form. The vendored apache-ossie moves to apache/ossie@af7630c.
-- A row filter on a dataset the question's root does not reach, with no
-  filter naming the fact that links them, is read through that fact
-  when every fact linking them passes through it: `orders.order_count`
-  with `-f "products.status = 'archived'"` counts the orders with a line
-  of an archived product, where lines by brand or by category are order
-  lines too. It was refused with the facts to name in a filter. Facts
-  that link them apart, order lines and refunds, are still refused, as
-  a choice of meaning.
 
 ## [0.15.0] - 2026-11-11
 

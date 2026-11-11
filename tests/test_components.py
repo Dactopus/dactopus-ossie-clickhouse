@@ -414,7 +414,7 @@ def test_customer_lifetime_value_by_a_dimension_customer_does_not_reach(dimensio
 
 def test_customer_lifetime_value_filtered_on_a_dataset_customer_does_not_reach():
     """store_sales is the one fact that links customer to date_dim, so the customers
-    counted are those with a sale in 2000 (Dactopus/upstream#103)."""
+    counted are those with a sale in 2000."""
     sql = Planner(TPCDS_MODEL).sql(
         Query(("customer_lifetime_value",), (), ("date_dim.d_year = 2000",))
     )
@@ -423,6 +423,26 @@ def test_customer_lifetime_value_filtered_on_a_dataset_customer_does_not_reach()
         "store_sales.ss_customer_sk FROM tpcds.store_sales AS store_sales LEFT JOIN "
         "tpcds.date_dim AS date_dim ON store_sales.ss_sold_date_sk = date_dim.d_date_sk "
         "WHERE date_dim.d_year = 2000)"
+    ) in sql
+
+
+@pytest.mark.parametrize(
+    "filters",
+    [
+        ("date_dim.d_year = 2000", "item.i_category = 'Books'"),
+        ("item.i_category = 'Books'", "date_dim.d_year = 2000"),
+    ],
+)
+def test_two_filters_read_through_one_linked_fact_hold_for_one_of_its_rows(filters):
+    """Both filters reach customer only through store_sales: one sale passes both,
+    as when a filter names store_sales, and neither is dropped."""
+    sql = Planner(TPCDS_MODEL).sql(Query(("customer_lifetime_value",), (), filters))
+    assert (
+        "FROM tpcds.customer AS customer WHERE customer.c_customer_sk IN (SELECT "
+        "store_sales.ss_customer_sk FROM tpcds.store_sales AS store_sales LEFT JOIN "
+        "tpcds.date_dim AS date_dim ON store_sales.ss_sold_date_sk = date_dim.d_date_sk "
+        "LEFT JOIN tpcds.item AS item ON store_sales.ss_item_sk = item.i_item_sk "
+        f"WHERE {filters[0]} AND {filters[1]}) UNION ALL"
     ) in sql
 
 

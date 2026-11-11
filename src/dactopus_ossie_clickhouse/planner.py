@@ -1884,6 +1884,12 @@ class Planner:
         for top, labels in list(group.items()):
             if top in extra:
                 continue
+            # A fact linked for an earlier filter that reaches this M reads both
+            # filters in its one subquery, as if the question named it. (A fact a
+            # filter names reaches no M: M would not be a top.)
+            if owner := next((t for t in direct if top in reach[t]), None):
+                group[owner].extend(group.pop(top))
+                continue
             carriers = [t for t in direct if self._meets(top, reach[t])]
             if not carriers:
                 # The one fact every link between them passes through: orders by
@@ -1956,11 +1962,8 @@ class Planner:
         only narrows the question. Two facts that link them apart, lines and
         refunds, are two meanings, and the question names one (#69 item 2)."""
         examples = self._links(m, root, near)
-        found = [
-            d
-            for d in examples
-            if all(self._passes(c, d, ts) for c, ts in self._linkers(m, root, near) if c != d)
-        ]
+        linkers = self._linkers(m, root, near)
+        found = [d for d in examples if all(self._passes(c, d, ts) for c, ts in linkers if c != d)]
         if len(found) == 1:
             return found[0]
         raise PlanError(self._unlinked(label, m, root, near, examples))

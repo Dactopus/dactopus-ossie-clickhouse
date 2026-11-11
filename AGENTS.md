@@ -100,9 +100,9 @@ Translation:
 - ClickHouse specifics (`FINAL`, dictionaries, the server's functions)
   come from introspecting `system.tables`, `system.columns`,
   `system.dictionaries` and `system.functions`; the user is never asked.
-  Overrides live in `custom_extensions` under `vendor_name: CLICKHOUSE`,
-  a dataset's (`dedup`) or the model's (`time_zone`); `model._extension`
-  is the one parser.
+  Overrides live in `nonportable_extensions` under
+  `vendor_name: CLICKHOUSE`, a dataset's (`dedup`) or the model's
+  (`time_zone`); `model._extension` is the one parser.
 - `CURRENT_*`, ClickHouse's `now()` and `today()`, timestamp literals and
   `DATEDIFF` use the model's zone (`model.time_zone`, UTC by default),
   never the server's zone or `session_timezone`.

@@ -140,7 +140,9 @@ def test_view_target_unknown_before_clickhouse_26_6():
 def test_dedup_final_forces_final(tmp_path):
     # For a source whose stored rows this user cannot see.
     p = tmp_path / "forced.yaml"
-    p.write_text(FIXTURE.read_text().replace('{"dedup": "none"}', '{"dedup": "final"}'))
+    text = FIXTURE.read_text()
+    assert "{dedup: none}" in text
+    p.write_text(text.replace("{dedup: none}", "{dedup: final}"))
     tables = {("ossie_test", "orders"): distributed("orders_local")}
     ex = Executor(FakeClickHouse(tables), load_model(p))
     assert ex.catalog["orders_raw"].dedup and not ex.catalog["orders"].dedup
@@ -559,8 +561,8 @@ def test_check_reports_a_time_zone_the_server_lacks(tmp_path):
 
     p = tmp_path / "zone.yaml"
     entry = (
-        "custom_extensions:\n  - vendor_name: CLICKHOUSE\n"
-        '    data: \'{"time_zone": "Asia/Makassar"}\'\n'
+        "nonportable_extensions:\n  - vendor_name: CLICKHOUSE\n"
+        "    data: {time_zone: Asia/Makassar}\n"
     )
     p.write_text(FIXTURE.read_text().replace("datasets:\n", entry + "datasets:\n", 1))
     client = Older(

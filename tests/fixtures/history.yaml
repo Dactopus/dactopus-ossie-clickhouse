@@ -16,9 +16,9 @@ datasets:
   - name: orders_raw
     source: ossie_test.orders
     primary_key: [order_id]
-    custom_extensions:
+    nonportable_extensions:
       - vendor_name: CLICKHOUSE
-        data: '{"dedup": "none"}'
+        data: {dedup: none}
     fields:
       - name: order_id
         expression: {dialects: [{dialect: ANSI_SQL, expression: order_id}]}

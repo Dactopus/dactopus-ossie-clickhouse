@@ -2,7 +2,7 @@
 
 Learns what it needs from the server (`system.tables`, `system.columns`,
 `system.dictionaries`) rather than from the user, and lets a dataset's
-`custom_extensions` entry with `vendor_name: CLICKHOUSE` override it.
+`nonportable_extensions` entry with `vendor_name: CLICKHOUSE` override it.
 """
 
 from __future__ import annotations

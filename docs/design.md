@@ -540,7 +540,7 @@ the memory limit.
 Decision of 2026-11-06: always on, with no switch. The stores this is built
 for have up to a million orders, where it adds about 0.1 s, and a wrong
 revenue is worse than a slow one. If a deployment needs to turn it off, the
-place is the dataset's `custom_extensions` entry under `CLICKHOUSE`, beside
+place is the dataset's `nonportable_extensions` entry under `CLICKHOUSE`, beside
 `dedup`, such as `unique_key: trusted`, where the model author vouches for
 the key. It is added on demand.
 
@@ -1220,7 +1220,7 @@ moved to the answered cases of `tests/test_compliance.py`.
 apache/ossie#653 section 9 lets an engine answer a query the version
 rejects "only when the query or the model requests that behavior
 explicitly", for example through an engine-defined query property or a
-`custom_extensions` entry. Otherwise the engine raises the error of
+`nonportable_extensions` entry. Otherwise the engine raises the error of
 section 8. The rule binds an engine that claims conformance through a
 binding. `query` (the API, the CLI and the MCP tool) is not one: it takes
 several filters, aggregate filters, sorting and limits, which #653 leaves
@@ -1234,7 +1234,7 @@ An answer that could be wrong is refused instead, as #653 refuses it (the
 last row).
 
 A future Layer 3 binding (the `execute_query` profile) refuses each of
-them unless a query property or a `custom_extensions` entry asks for it.
+them unless a query property or a `nonportable_extensions` entry asks for it.
 It also carries the section 8 error codes and their order (the table in
 section 8: the first row whose condition holds wins). The planner's
 messages have no codes today, and nothing orders them by that table. The

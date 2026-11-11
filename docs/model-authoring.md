@@ -410,9 +410,10 @@ counts today's orders at any hour:
 ```yaml
 version: "0.3.0.dev0"
 name: shop
-custom_extensions:
+nonportable_extensions:
   - vendor_name: CLICKHOUSE
-    data: '{"time_zone": "America/New_York"}'
+    data:
+      time_zone: America/New_York
 datasets: ...
 ```
 
@@ -503,9 +504,10 @@ run it with their URL, or say so in the model:
 ```yaml
 - name: orders
   source: shop.orders
-  custom_extensions:
+  nonportable_extensions:
     - vendor_name: CLICKHOUSE
-      data: '{"dedup": "final"}'
+      data:
+        dedup: final
 ```
 
 `"final"` adds `FINAL` whatever the engine, an error if the stored rows
@@ -515,21 +517,26 @@ versions), turn it off per dataset:
 ```yaml
 - name: orders_raw
   source: shop.orders
-  custom_extensions:
+  nonportable_extensions:
     - vendor_name: CLICKHOUSE
-      data: '{"dedup": "none"}'
+      data:
+        dedup: none
 ```
 
-`custom_extensions`, the spec's escape hatch for vendor settings, with
-`vendor_name: CLICKHOUSE` (in any case) is the namespace this project
-owns. The entry is read on a dataset and on the model, once on each, and
-its `data` is a JSON object. A dataset's only key is `dedup` (`"final"`
-or `"none"`); the model's is `time_zone` ([Time zone](#time-zone)).
+`nonportable_extensions`, the spec's escape hatch for vendor settings,
+with `vendor_name: CLICKHOUSE` (in any case) is the namespace this
+project owns. The entry is read on a dataset and on the model, once on
+each, and its `data` is an object. A dataset's only key is `dedup`
+(`final` or `none`); the model's is `time_zone` ([Time zone](#time-zone)).
 Loading the model refuses anything else: an unknown key, another value
-(`"None"`, `null`), a key written twice, text that is not a JSON object,
-a second entry on the dataset or the model, an entry on a field, a metric
-or a relationship. A typo would otherwise change how the dataset is read
-without an error.
+(`None`, `null`), a key written twice, a second entry on the dataset or
+the model, an entry on a field, a metric or a relationship. A typo would
+otherwise change how the dataset is read without an error.
+
+Before apache/ossie#522 the property was `custom_extensions` and `data` a
+string holding JSON (`data: '{"dedup": "none"}'`), under the same schema
+version. A model in that form is refused with a message that names the
+change: rename the property and write `data` as an object.
 
 `FINAL` drops deleted rows only when the engine declares its delete
 column, as in `ReplacingMergeTree(version, is_deleted)`. CDC tools that

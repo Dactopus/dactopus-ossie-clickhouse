@@ -19,7 +19,7 @@ A `Distributed` table, materialized view or `Merge` table is read with
 to the tables that support it and skips the rest. When the table read is
 hidden from the connected user, the dataset is read without `FINAL` and
 `validate` reports it: guessing `FINAL` would break queries over plain
-tables that work today, and `{"dedup": "final"}` settles it per dataset.
+tables that work today, and `dedup: final` settles it per dataset.
 `engine_full` names a `Distributed` or `Merge` table's tables as quoted
 strings on 26.1 through 26.9; `system.tables` names a view's target only
 from 26.6 on, so the introspection query does not select it.

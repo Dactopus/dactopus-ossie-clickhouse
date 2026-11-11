@@ -96,8 +96,7 @@ def load_model(*paths: str | Path, time_zone: str | None = None) -> OssieDocumen
 def _with_zone(doc: OssieDocument, zone: str) -> OssieDocument:
     """``doc`` with ``zone`` in its CLICKHOUSE entry, whatever zone that entry names."""
     data, _ = _extension(doc)  # load_model() checked it
-    # A new dict, not data itself: the SDK may hand data out read-only (apache/ossie#713).
-    entry = OssieNonportableExtension(vendor_name=VENDOR, data={**data, "time_zone": zone})
+    entry = OssieNonportableExtension(vendor_name=VENDOR, data=data | {"time_zone": zone})
     others = [e for e in doc.nonportable_extensions or [] if e.vendor_name.upper() != VENDOR]
     return doc.model_copy(update={"nonportable_extensions": [*others, entry]})
 
@@ -462,5 +461,5 @@ def _format(err: dict) -> str:
         # The name before apache/ossie#522; the version did not change with it.
         return f"{loc}: renamed nonportable_extensions, with data an object (apache/ossie#522)"
     if err["loc"][-3::2] == ("nonportable_extensions", "data") and isinstance(err["input"], str):
-        return f"{loc}: must be an object, not a JSON string (apache/ossie#522)"
+        return f"{loc}: must be an object, not a string (apache/ossie#522)"
     return f"{loc}: {err['msg']}"

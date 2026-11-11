@@ -510,7 +510,7 @@ run it with their URL, or say so in the model:
         dedup: final
 ```
 
-`"final"` adds `FINAL` whatever the engine, an error if the stored rows
+`final` adds `FINAL` whatever the engine, an error if the stored rows
 are in a plain `MergeTree`. To read a table raw (for example, to count
 versions), turn it off per dataset:
 

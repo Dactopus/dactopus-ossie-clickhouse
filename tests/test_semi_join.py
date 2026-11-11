@@ -233,6 +233,16 @@ CASES = [
         Query(("order_count",), (), ("lines.order_id IS NOT NULL", "item_tags.tag = 'sale'")),
         _orders(f"{ORDER_LINE_TAGS} t.tag = 'sale'"),
     ),
+    # The same question without lines named: every fact that links orders to tags
+    # is lines, so the planner names it.
+    (
+        Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
+        _orders(f"{ORDER_LINE_TAGS} t.tag = 'sale'"),
+    ),
+    (
+        Query(("customer_count",), ("customers.region",), ("items.category = 'books'",)),
+        _customers(f"{LINES} i.category = 'books'"),
+    ),
     # One line passes both: order 14's line of 3 is of an untagged item.
     (
         Query(("order_count",), (), ("lines.qty > 1", "item_tags.tag = 'kids'")),
@@ -601,6 +611,68 @@ def test_a_named_fact_that_meets_the_root_at_a_shared_dataset_carries_the_filter
     ) in sql
 
 
+def _with_line_promos(planner: Planner | None = None) -> Planner:
+    """The model with the promotions of each line: rows of lines, one per promotion,
+    a fact that links orders to items through lines."""
+    m = (planner.model if planner else MODEL).model_dump(by_alias=True, exclude_none=True)
+    m["datasets"].append(
+        {
+            "name": "line_promos",
+            "source": "ossie_semi.line_promos",
+            "primary_key": ["line_id", "promo"],
+            "fields": [_field("line_id"), _field("promo")],
+        }
+    )
+    m["relationships"].append(
+        {
+            "name": "line_promos_to_lines",
+            "from": "line_promos",
+            "to": "lines",
+            "from_columns": ["line_id"],
+            "to_columns": ["id"],
+        }
+    )
+    return Planner(OssieDocument.model_validate(m))
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
+        Query(("customer_count",), ("customers.region",), ("items.category = 'books'",)),
+    ],
+)
+def test_a_fact_every_link_passes_through_is_named_by_the_planner(query):
+    """Dactopus/upstream#103: line_promos links orders to items through lines, so
+    lines is the one reading, as in a model without line_promos; naming it in a
+    filter gives the same subquery with that filter."""
+    sql = _with_line_promos().sql(query)
+    assert sql == Planner(MODEL).sql(query)
+    named = replace(query, filters=(*query.filters, "lines.id IS NOT NULL"))
+    unnamed = re.sub(
+        r"NOT \(lines\.id IS NULL\) AND | AND NOT \(lines\.id IS NULL\)",
+        "",
+        Planner(MODEL).sql(named),
+    )
+    assert unnamed == sql
+
+
+def test_the_one_fact_that_meets_the_root_at_a_shared_dataset_is_named():
+    """favorites, the only fact between orders and item tags, meets orders at
+    customers; the tags ride in its subquery as if a filter named it."""
+    sql = _with_favorites(drop_lines_to_order=True).sql(
+        Query(("order_count",), (), ("item_tags.tag = 'kids'",))
+    )
+    assert (
+        "WHERE orders.customer_id IN (SELECT customers.id FROM ossie_semi.customers AS "
+        "customers WHERE customers.id IN (SELECT favorites.customer_id FROM "
+        "ossie_semi.favorites AS favorites WHERE favorites.item_id IN "
+        "(SELECT items.id FROM ossie_semi.items AS items WHERE items.id IN (SELECT "
+        "item_tags.item_id FROM ossie_semi.item_tags AS item_tags WHERE item_tags.tag = "
+        "'kids'))))"
+    ) in sql
+
+
 def test_named_fact_subquery_reads_its_own_dictionaries_only():
     """A dictionary the fact joins is read with dictGetOrNull in the fact's own
     filters; the subquery of the dataset it carries reads items as a table."""
@@ -737,13 +809,6 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "side; an OR across the sides cannot be split, and this version cannot answer it",
         ),
         # items does not reach customers; lines, which links them, is not named.
-        (
-            Planner(MODEL),
-            Query(("customer_count",), (), ("items.category = 'books'",)),
-            "filter \"items.category = 'books'\" reads items, which customers does not join "
-            "to and which does not reach customers through many-to-one relationships; name "
-            "the dataset that links them (lines) in a filter, such as lines.order_id IS NOT NULL",
-        ),
         # item_tags meets lines at items and at customers (#69 item 3).
         (
             _variant(
@@ -776,15 +841,8 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "filter \"customer_tags.tag = 'vip'\" reads customer_tags, which meets lines at "
             "customers and orders: a lines row could be kept through either",
         ),
-        # Orders by their lines' item tags: the fact between them is a choice of
-        # meaning, so the question names it (#69 item 2).
-        (
-            Planner(MODEL),
-            Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
-            "filter \"item_tags.tag = 'sale'\" reads item_tags, which orders does not join to "
-            "and which does not reach orders through many-to-one relationships; name the "
-            "dataset that links them (lines) in a filter, such as lines.order_id IS NOT NULL",
-        ),
+        # Orders by their lines' or their refunds' item tags: two facts link them
+        # apart, a choice of meaning, so the question names one (#69 item 2).
         (
             _with_refunds(),
             Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
@@ -798,11 +856,11 @@ def _variant(*relationships: dict, metrics: dict | None = None) -> Planner:
             "name one of the datasets that link them (favorites, lines) in a filter, such as "
             "favorites.customer_id IS NOT NULL or lines.order_id IS NOT NULL",
         ),
+        # Lines by promotion are lines, but refunds link orders to tags apart.
         (
-            _with_favorites(drop_lines_to_order=True),
-            Query(("order_count",), (), ("item_tags.tag = 'kids'",)),
-            "name the dataset that links them (favorites) in a filter, such as "
-            "favorites.customer_id IS NOT NULL",
+            _with_line_promos(_with_refunds()),
+            Query(("order_count",), (), ("item_tags.tag = 'sale'",)),
+            "name one of the datasets that link them (line_promos, lines, refunds) in a filter",
         ),
         # Both facts named: an order could be kept through a line or a refund.
         (

@@ -770,6 +770,17 @@ def test_counts_one_side_rows_once_by_a_dimension_of_the_many_side(query):
     assert sql.count("INNER JOIN (SELECT store_sales.") == 1, sql
 
 
+def test_a_window_metric_by_the_many_side_keeps_the_single_root_refusal():
+    # A window over merged rows is not answered; the refusal names the rows, not a
+    # stitch the question did not ask for.
+    planner = _with_metrics(
+        headcount_rank="RANK() OVER (ORDER BY SUM(store.s_number_employees) DESC)"
+    )
+    q = Query(metrics=("headcount_rank",), dimensions=("store_sales.ss_quantity",))
+    with pytest.raises(PlanError, match="aggregates store rows, but this question is answered"):
+        planner.plan(q)
+
+
 def test_a_filter_on_rows_that_reference_the_root_is_a_semi_join():
     """Customers who bought more than one of an item: a semi-join on store_sales,
     not an answer over sales rows (tests/test_semi_join.py has the values)."""

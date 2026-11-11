@@ -2219,19 +2219,20 @@ class Planner:
             # group; a group of its own would add a row for every dimension value.
             loose = groups.pop((frozenset(), frozenset()))
             next(iter(groups.values())).extend(loose)
+        branches: list[tuple[list[_Unit], exp.Select]] = []
         spines: dict[int, exp.Select] = {}  # a bridged group -> its spine (_bridge)
         if len(groups) == 1:
             # One group is answered by plan() unless its home does not reach a
             # dimension: then it is bridged, and merged with its spine below.
-            bridged = self._bridge(next(iter(groups.values())), q.dimensions, where)
+            members = next(iter(groups.values()))
+            bridged = self._bridge(members, q.dimensions, where)
             if bridged is None:
                 return None
-            branches = [(next(iter(groups.values())), bridged[0])]
+            branches.append((members, bridged[0]))
             spines[0] = bridged[1]
-        if len(groups) < 2 and not spines:
+        if not groups:
             return None
         splitting = bool(outer)
-        branches = [] if not spines else branches
         for g, members in enumerate(groups.values()):
             if g in spines:
                 continue
@@ -2384,8 +2385,11 @@ class Planner:
         group, and a NULL or orphan key joins nothing. Only whole metrics whose
         aggregates read H and nothing from the one side; a metric of components keeps
         the reachability rule of apache/ossie#653 section 5.3 (docs/design.md, "A
-        metric of the one side by the many side")."""
-        if not dimensions or any(u.component or u.carry or len(u.key) != 1 for u in members):
+        metric of the one side by the many side"). Not a window metric: _stitch
+        cannot rank merged rows, and the single-root refusal says why it is asked."""
+        if not dimensions or any(
+            u.component or u.carry or len(u.key) != 1 or u.tree.find(exp.Window) for u in members
+        ):
             return None
         if len({u.key for u in members}) != 1:
             return None

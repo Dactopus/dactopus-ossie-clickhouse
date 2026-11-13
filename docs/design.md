@@ -4,7 +4,9 @@ Decisions that rest on a measurement or an evaluation, each in its own
 file under [decisions/](decisions/) with its evidence, so it is not
 relitigated without new evidence. A new decision gets a file there and a
 line here. What a model author sees of them, with examples, is in
-[model-authoring.md](model-authoring.md); the release history is in
+[model-authoring.md](model-authoring.md) and
+[questions-across-datasets.md](questions-across-datasets.md); the
+release history is in
 [CHANGELOG.md](../CHANGELOG.md).
 
 ## Scope and process

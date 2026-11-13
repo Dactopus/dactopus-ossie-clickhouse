@@ -103,7 +103,9 @@ mean" hint reaches the agent.
 the question's own dimensions. A window metric cannot be filtered:
 select it and filter the rows. A filter is one expression, never a
 statement, and its functions reach ClickHouse as written: what a caller
-may run there is decided by ClickHouse grants and quotas. `order_by` names metrics or dimensions,
+may run there is decided by ClickHouse grants and quotas. A filter on a
+dataset whose rows reference the metric's keeps each counted row once
+([Filters on the many side](questions-across-datasets.md#filters-on-the-many-side)). `order_by` names metrics or dimensions,
 `"name desc"` for descending; empty means the first metric descending.
 Ties are broken by the dimensions, ascending. Rows without a value come
 last either way, so `limit` may cut them off. A `Time` or `DateTime` value

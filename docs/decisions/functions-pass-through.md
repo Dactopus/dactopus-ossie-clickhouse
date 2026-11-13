@@ -51,7 +51,7 @@ from SQLGlot 30.23's list, among them `medianExact`, `group_concat`,
 One over a joined dataset alone is refused unless repeats cannot change
 it. `system.functions` does not say which do, so the planner lists them
 (`_CLICKHOUSE_REPEAT_SAFE`; the list is in
-[model authoring](../model-authoring.md#keys-decide-which-joins-are-allowed)),
+[Questions across datasets](../questions-across-datasets.md#rows-that-would-count-twice)),
 each checked on ClickHouse 26.9 against
 its input with rows repeated. A combinator keeps that only if it is `If`,
 `OrNull`, `OrDefault`, or `Distinct`, which makes any aggregate

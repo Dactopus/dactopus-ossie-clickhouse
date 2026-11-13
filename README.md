@@ -97,7 +97,7 @@ questions it refuses.
   rows, each counts once per group. Metrics of different facts, and
   each aggregate of a metric over several datasets, are computed over
   their own rows and merged on the dimensions, as the Layer 3 spec
-  requires. [Model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#keys-decide-which-joins-are-allowed)
+  requires. [Questions across datasets](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/questions-across-datasets.md)
   has the rules with examples.
 - SQL semantics, not ClickHouse defaults: every query sets
   [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls),
@@ -146,6 +146,8 @@ file per subject area ([docs/model-authoring.md](https://github.com/Dactopus/dac
 
 - [Model authoring for ClickHouse](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md): sources,
   keys, expressions, deduplication, dictionaries, validation.
+- [Questions across datasets](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/questions-across-datasets.md): what a
+  question that touches several datasets answers, and what it refuses.
 - [Access control](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/access-control.md): ClickHouse users, roles and
   row policies decide; the policy file hides more.
 - [MCP setup](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/mcp-setup.md): Claude Desktop, Claude Code and other
@@ -168,7 +170,7 @@ data must already be in ClickHouse.
 - A metric over several datasets needs every dimension and row filter
   reachable from the dataset of each of its aggregates, as Layer 3
   requires; otherwise the question is refused with a message that says
-  what would answer it ([model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#a-metric-over-two-datasets)).
+  what would answer it ([questions across datasets](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/questions-across-datasets.md#a-metric-over-two-datasets)).
 - No time grain and no derived-dimension syntax: declare a field per
   grain or band (see [model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md)). The
   spec has no such attributes yet, and this project does not invent them.

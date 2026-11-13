@@ -41,7 +41,7 @@ def test_the_index_lists_every_decision():
     on_disk = {path.name for path in DECISIONS.glob("*.md")}
     assert on_disk - listed == set(), "not in docs/design.md"
     others = {name for name in listed if name not in on_disk}
-    assert others == {"model-authoring.md", "CHANGELOG.md"}
+    assert others == {"model-authoring.md", "questions-across-datasets.md", "CHANGELOG.md"}
 
 
 def test_links_between_decisions_resolve():

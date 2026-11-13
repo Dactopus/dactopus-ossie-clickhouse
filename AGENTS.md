@@ -173,5 +173,6 @@ uv run dactopus-ossie-clickhouse query tests/fixtures/tpcds.yaml -m total_sales 
 uv run dactopus-ossie-clickhouse serve tests/fixtures/tpcds.yaml   # MCP over stdio
 ```
 
-`README.md` is the PyPI page, so its links are absolute. Releases follow
-`CONTRIBUTING.md`, "Releasing".
+`README.md` is the PyPI page, so its links are absolute. A change a user
+of the package sees adds a `CHANGELOG.md` entry by the rules in
+`CONTRIBUTING.md`, "Changelog"; releases follow its "Releasing".

@@ -1,1097 +1,668 @@
 # Changelog
 
-All notable changes to this project are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
-[Semantic Versioning](https://semver.org/). While the major version is 0,
-a minor release may change the Python API.
+What changes for you from one version to the next. **Breaking:** marks a
+change that needs something from you: a model that no longer loads, a
+question or metric refused that was answered, a renamed or removed
+command or API, with what to do. "Answers change" marks a change after
+which a question returns another number. Why each change was made is in
+[docs/decisions/](https://github.com/Dactopus/dactopus-ossie-clickhouse/tree/main/docs/decisions).
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
+versions follow [Semantic Versioning](https://semver.org/). While the major
+version is 0, a minor release may change the Python API.
 
 ## [Unreleased]
+
+### Changed
+
+- **Breaking:** `x IN ()`, which ClickHouse answered as false, and
+  `SUM(DISTINCT)` without an argument are refused, as the spec's
+  fixtures require; `validate` reports a field or metric that writes
+  them. Write `FALSE` for `x IN ()`. `NULLS FIRST | LAST` is accepted in `WITHIN GROUP (ORDER BY ...)`,
+  where it changes nothing.
 
 ### Fixed
 
 - `ROUND` rounds a value exactly halfway away from zero, as the spec
-  now requires (apache/ossie#687): `ROUND(2.5)` is 3 and
-  `ROUND(0.125, 2)` is 0.13 on a `Float64`, where ClickHouse's `round`
-  gave 2 and 0.12. Integers and `Decimal` already rounded so; a
-  `Decimal` keeps its type and scale. A `d` read from a column keeps
-  ClickHouse's `round`, which still rounds a `Float64` tie to even.
-- `MOD(a, b)` and `a % b` of a `Decimal`: ClickHouse's modulo ignores
-  the scale, so `MOD(125.50, 7)` on a `Decimal(18, 2)` was 0.06. It is
-  6.5, through `intDiv`.
-
-### Changed
-
-- `NULLS FIRST | LAST` is accepted in `WITHIN GROUP (ORDER BY ...)`, as
-  the spec's reference grammar has it (apache/ossie#657); a percentile
-  skips NULLs, so it changes nothing. `x IN ()`, which ClickHouse
-  answered as false, and `SUM(DISTINCT)` without an argument, which it
-  could not run, are refused, as the spec's fixtures require.
+  requires (apache/ossie#687). Answers change for a `Float64`:
+  `ROUND(2.5)` is 3, was 2; `ROUND(0.125, 2)` is 0.13, was 0.12. A `d`
+  read from a column keeps ClickHouse's `round`, which rounds a `Float64`
+  tie to even
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/round-and-mod.md)).
+- `MOD(a, b)` and `a % b` of a `Decimal` align the scales. Answers change:
+  `MOD(125.50, 7)` on a `Decimal(18, 2)` is 6.5, was 0.06.
 
 ## [0.16.0] - 2026-11-11
 
 ### Changed
 
-- The `CLICKHOUSE` entry of a model or a dataset (`time_zone`, `dedup`)
-  is read from `nonportable_extensions`, its `data` an object:
-
-  ```yaml
-  nonportable_extensions:
-    - vendor_name: CLICKHOUSE
-      data:
-        dedup: none
-  ```
-
-  Ossie renamed `custom_extensions` and made `data` an object instead of
-  a string holding JSON (apache/ossie#522), without changing the schema
-  version `0.3.0.dev0`. A model in the old form no longer loads: the
-  message names the property to rename, or the `data` to write as an
-  object. `load_model(..., time_zone=...)` writes the entry in the new
-  form. The vendored apache-ossie moves to apache/ossie@af7630c.
-- A row filter on a dataset the question's root does not reach, with no
-  filter naming the fact that links them, is read through that fact
-  when every fact linking them passes through it: `orders.order_count`
-  with `-f "products.status = 'archived'"` counts the orders with a line
-  of an archived product, where lines by brand or by category are order
-  lines too. It was refused with the facts to name in a filter. Facts
-  that link them apart, order lines and refunds, are still refused, as
-  a choice of meaning. Filters on several such datasets hold for one row
-  of the fact, as when a filter names it.
+- **Breaking:** the `CLICKHOUSE` entry of a model or a dataset (`time_zone`,
+  `dedup`) is read from `nonportable_extensions`, with `data` an object, as
+  Ossie renamed `custom_extensions` (apache/ossie#522). A model in the old
+  form no longer loads, and the message says what to rename. Write
+  `nonportable_extensions: [{vendor_name: CLICKHOUSE, data: {dedup: none}}]`.
+- A row filter on a dataset the root does not reach, with no fact named in
+  a filter, is read through the one fact every linking fact passes through:
+  `orders.order_count -f "products.status = 'archived'"` counts the orders
+  with a line of an archived product. It was refused
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/semi-joins.md#through-a-fact-that-links-them)).
 
 ## [0.15.0] - 2026-11-11
 
-### Added
-
-- A metric of the one side grouped by a field of the many side is
-  answered, each of its rows counted once per group, as the relational
-  spec defines it (section 8.1): `orders.order_count` by
-  `order_lines.product_id` counts the orders with a line of each product,
-  `customers.customer_count` by `orders.shipping_country` the customers
-  whose orders ship to each country. It was refused; agents then asked
-  once per value with a filter, up to 25 queries for one answer (#10).
-  The Ossie compliance cases `b04`, `b18` and `b20` pass. A metric whose
-  aggregates read several datasets keeps the reachability rule, and the
-  dataset that links the two must be one the question names, as for
-  filters. `session_conversion_rate` by `purchases.currency`, which was
-  refused, is now 1 in every currency: only sessions with a purchase have
-  one.
-- `serve` says on stderr how much of the model the connected user is not
-  served because the database lacks it or does not grant it, or because an
-  expression does not translate: `not served to 'analyst': 2 fields, 1
-  metric of the model`. An agent is never told what is hidden from it, so
-  a model newer than its tables (a column a later release of the model
-  reads, a table not built yet) was served short without a word. What a
-  policy file hides is counted on a line of its own, `hidden from
-  'analyst' by the policy: ...`, so a policy does not drown the warning.
-  `validate --url` lists what the database lacks; the server reads the
-  tables once, at start, so it is restarted after they change.
-  `Executor.withheld()` returns the same counts by cause.
-
 ### Changed
 
-- The supported Ossie schema version is `0.3.0.dev0`, the version of
-  Ossie's `main` since apache/ossie#691; there will be no 0.2.0 release
-  of the standard. A model that declares `0.2.0.dev0` is refused with
-  `unsupported version '0.2.0.dev0'; this build supports '0.3.0.dev0'`:
-  change its `version` line, nothing else in a model changes. The
-  vendored `apache-ossie` is upstream's at `d700cde`.
-- `sqlglot>=30.31`, the current release; it makes no rewrite redundant.
+- **Breaking:** the supported Ossie schema version is `0.3.0.dev0`, and a
+  model that declares `0.2.0.dev0` is refused. Change its `version` line;
+  nothing else in a model changes.
+- `sqlglot>=30.31`.
+
+### Added
+
+- A metric grouped by a field of rows that reference its dataset counts
+  each of its rows once per group (#10): `orders.order_count` by
+  `order_lines.product_id`, `customers.customer_count` by
+  `orders.shipping_country`. It was refused. The dataset that links them
+  must be one the question names
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/one-side-by-many-side.md)).
+- `serve` says on stderr how much of the model the connected user is not
+  served, and why: missing in the database, not granted, does not
+  translate, or hidden by the policy. `Executor.withheld()` gives the counts.
 
 ## [0.14.0] - 2026-11-07
 
-### Added
-
-- A dataset's metric may read a column of the dataset's `source` as
-  `source.column`, as the spec says since apache/ossie#633:
-  `SUM(source.quantity)` is `SUM(orders.quantity)` in the query, without
-  the dataset declaring a field for the column. The qualifier is case
-  insensitive, `source.amount` is the column even when a field `amount`
-  reads something else, and in a dataset that declares a field named
-  `source` the qualifier is refused. A model's metric, a key and a
-  relationship still cannot reach source columns. `validate --url` checks
-  the column, a metric over a column the connected user cannot read is
-  hidden from them, and a policy file that hides a field also hides the
-  dataset metrics that read its column as `source.column`
-  (`docs/design.md`, "Source columns in a dataset's metric").
-
 ### Changed
 
-- Each aggregate of a model's metric is evaluated over the rows of its own
-  dataset, as the Layer 3 spec requires since apache/ossie#653
-  (section 5.2); the metric's expression is then evaluated over the
-  values. A metric such as `SUM(orders.amount) / COUNT(DISTINCT
-  customers.customer_id)` was one `SELECT` over `orders LEFT JOIN
-  customers`, so it divided by the customers with an order. It now divides
-  by all customers: the sum and the count are computed in two branches
-  that are merged on the question's dimensions, as metrics of several
-  facts already were (`docs/design.md`, "Evaluate each aggregate over its
-  own dataset"). A metric whose aggregates all read one dataset, a
-  dataset's metric, and an aggregate that reads several datasets
-  (`SUM(lines.qty * products.price)`) are planned as before. Answers that
-  move, on the TPC-DS data in ClickHouse:
-  - `customer_lifetime_value` in total is 52624.706465200004 (total sales
-    over all 100,000 customers), where 0.13.0 gave 57919.727998855364
-    (over the 90,858 customers with a sale).
-  - `customer_lifetime_value` by `customer.c_first_name` for James is
-    51477.36549461814, where 0.13.0 gave 56327.72859226023. The NULL group,
-    customers without a first name and the store sales without a matching
-    customer, is 86156.84807560137, where it was 95148.54948766604.
-  - `store_productivity`, sales per employee, is answered: 1654864.98318239
-    in total, and by `store.s_state`. It was refused in every question and
-    hidden from agents; `validate` no longer reports it.
+- **Breaking:** a metric over several datasets is refused for a dimension
+  or filter one of its datasets cannot reach; it was answered over the
+  buyers only. On TPC-DS, ask `customer_lifetime_value` by a field of
+  `store`, `date_dim` or `item` with a metric of `store_sales` instead,
+  such as `COUNT(DISTINCT ss_customer_sk)`
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/components.md#reachability)).
+- **Breaking:** refused in every question and reported by `validate`: a
+  model's metric with an aggregate over several datasets (or a `FILTER` on
+  another) next to one over a dataset the first does not read, and a
+  metric over several datasets with a window function or a column outside
+  every aggregate. A `COUNT(*) FILTER (WHERE ...)` names no dataset and is
+  refused next to an aggregate of another. Declare the ratio on one
+  dataset, or write two metrics.
+- **Breaking:** refused in a question: a window metric or an aggregate
+  written in a filter next to a metric over several datasets, and a
+  written filter that mixes aggregates of different datasets
+  (`SUM(a.x) / COUNT(DISTINCT b.k) > 5`,
+  `total_sales > COUNT(DISTINCT store.s_store_sk)`); name a metric instead.
+- **Breaking:** a call of `AGG` in any capitalization is refused, as the
+  spec reserves the name (apache/ossie#662); a field, metric or column
+  named `agg` is unaffected.
+- Each aggregate of a model's metric is computed over its own dataset's
+  rows, as Layer 3 requires (apache/ossie#653). Answers change: on TPC-DS,
+  `customer_lifetime_value` divides by all 100,000 customers and is
+  52,624.71, was 57,919.73; `store_productivity`, refused before, is
+  answered. A filter comparing metrics of different datasets
+  (`total_sales > store_count`) is answered over each one's own rows
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/components.md)).
+- A window's `ORDER BY` without `NULLS FIRST | LAST` sorts NULL as the
+  largest value, as the spec says (apache/ossie#587). Answers change for
+  `DESC` over a key with NULLs: `RANK() OVER (ORDER BY d_year DESC)` ranks
+  the rows without a year 1, not last
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/null-placement.md)).
+- `sqlglot>=30.30`.
 
-- A question that asks a metric over several datasets for a dimension or
-  a filter that one of its datasets cannot reach is refused, where it was
-  answered over a join. The message names the dimension or filter, the
-  metric and the dataset that cannot reach it, and what would answer it.
-  Every dimension and row filter must be reachable through many-to-one
-  relationships from the dataset of each aggregate (section 5.3), and so
-  must the datasets of a metric named in an aggregate filter. In the
-  TPC-DS model, `customer_lifetime_value` by a field of `store`,
-  `date_dim`, `item` or `store_sales`, and filtered on a field of
-  `date_dim`, `item` or `store`, was answered over the buyers only.
-  `customer` reaches none of them. A metric of `store_sales` answers those
-  questions, such as `COUNT(DISTINCT ss_customer_sk)`. A filter on
-  `customer`, or on `store_sales` as a semi-join, is still answered, and
-  `customer_lifetime_value` filtered on `store_sales.ss_quantity > 50` is
-  42297.0777721388, as before. Also refused: a filter
-  that writes aggregates of different datasets, such as `SUM(a.x) /
-  COUNT(DISTINCT b.k) > 5` (name a metric instead), and a metric whose
-  aggregates read different datasets and that has a window function or a
-  column outside every aggregate (reported by `validate`).
+### Added
 
-- A model's metric with an aggregate over several datasets (or a `FILTER`
-  on another dataset) next to an aggregate over a dataset the first does
-  not read is refused in every question and reported by `validate`, as
-  section 5.2 rejects the metric. It was planned over one join, which counted
-  the second aggregate's dataset over the first's rows: `SUM(orders.amount)
-  FILTER (WHERE customers.segment = 'retail') / COUNT(DISTINCT
-  customers.id)` divided by the customers with an order. A metric whose
-  aggregates stay within the datasets of the one that reads several
-  (`SUM(lines.qty * products.price) / SUM(lines.qty)`) is planned as before.
-  An aggregate's `FILTER` no longer gives its dataset: `COUNT(*) FILTER
-  (WHERE customers.segment = 'retail')` names none, and is refused next to
-  an aggregate of another dataset.
-- Also refused: a window metric in a question with a metric of components
-  (as with stitched metrics, a window would run over the merged rows), and
-  a written aggregate filter next to one, such as `-m
-  customer_lifetime_value -f "SUM(store_sales.ss_quantity) > 5"`, which
-  was one `SELECT` before. A written filter that splits or mixes
-  aggregates is refused even with a `COUNT(*)` beside them, and so is one
-  that compares a metric with a written aggregate of another dataset,
-  `total_sales > COUNT(DISTINCT store.s_store_sk)`. A filter that compares
-  metrics of different datasets, `total_sales > store_count`, has each
-  answered over its own dataset's rows, as when they are selected; it was
-  one `SELECT` that counted the stores with a sale.
-
-- A call of `AGG` in any capitalization is refused, as the spec reserves
-  the name since apache/ossie#662. It was sent to ClickHouse as an unknown
-  function. A field, a metric or a column named `agg` is unaffected. The
-  refusal covers `sql`, `OSSIE_SQL_2026` and `ANSI_SQL` expressions and an
-  agent's filters (`docs/design.md`, "AGG is reserved").
-
-- A window's `ORDER BY` without `NULLS FIRST` or `NULLS LAST` now sorts
-  NULL as the largest value, as the spec says since apache/ossie#587:
-  last for `ASC`, first for `DESC`. The executor sorted NULLs last in both
-  directions, so a window metric ordered `DESC` over a key with NULLs
-  gives different numbers: `RANK() OVER (ORDER BY d_year DESC)` ranks the
-  rows without a year 1, not last, and a running total in `DESC` order
-  starts from them. `ASC` and an explicit clause are unchanged. The rows
-  of a query, and `ORDER BY` inside `WITHIN GROUP`, still sort NULLs last
-  in both directions. The generated SQL says `DESC NULLS FIRST`
-  (`docs/design.md`, "NULL placement in ORDER BY").
-- `sqlglot>=30.30`, the current release; it makes no rewrite redundant.
+- A dataset's metric may read a column of its `source` as `source.column`
+  (apache/ossie#633), checked and hidden like a field's column
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/source-columns.md)).
 
 ### Fixed
 
-- A question with a window metric, no dimensions and no aggregate outside a
-  window, such as `SUM(orders.amount) OVER (ORDER BY orders.order_id)`, is
-  refused, naming the metric. Nothing grouped the rows, so it returned one
-  row per order. With a dimension, or beside a metric with an aggregate,
-  the question is planned as before, and so is a window over grouped rows
-  (`RANK() OVER (ORDER BY d_year DESC)` by `d_year`).
-- A model's metric that reads a field outside every aggregate, such as
-  `SUM(orders.amount) * customers.weight`, is refused, naming the metric and
-  the field, whether or not the question groups by that field (spec
-  `E_UNAGGREGATED_FINER_GRAIN_REFERENCE`). ClickHouse rejected it with
-  error 215 unless the field was a dimension. `validate` and the MCP
-  server hide the metric.
-- A key stored twice in a dataset on the one side of a relationship no
-  longer counts the root's rows twice. ClickHouse does not enforce
-  uniqueness, so with customer C1 written two times, both EAST,
-  `orders.total_revenue` by `customers.region` gave EAST 650 where the
-  answer is 350. A root row now counts once in each group it matches, as
-  the Layer 3 spec requires (apache/ossie#653, `wide_table_semantics.md`
-  section 4, which defers to Layer 2). Aggregates that need other values
-  of the repeated dataset than their neighbours do, such as `SUM(amount)
-  FILTER (WHERE customers.region = 'WEST')` next to `SUM(amount)`, are
-  answered in SELECTs of their own and merged on the dimensions, as
-  metrics of several facts are; one metric with such aggregates is split
-  the same way, and so is an aggregate written in a filter
-  (`COUNT(orders.id) > 2`), which joins the SELECT of the aggregates
-  that need the same values. The generated SQL changes: in a question
-  with an aggregate that repeated rows change (`SUM`, `COUNT(x)`, `AVG`)
-  and a join, each joined dataset is a derived table, `LEFT JOIN (SELECT
-  DISTINCT key, values ...) AS customers`, of the values the question
-  reads from it. A question with only `MIN`, `MAX`, `DISTINCT` and
-  `uniq` aggregates or none, a dictionary read with `dictGetOrNull`, and
-  a semi-join keep their SQL, and so do the answers on data without a
-  repeated key. Now refused, with a message that names the reason: a
-  window metric over aggregates that need other values of the repeated
-  dataset, such as `RANK() OVER (ORDER BY SUM(x) FILTER (WHERE
-  customers.region = 'WEST') / SUM(x))` (`validate` reports it and the
-  MCP server hides it; it was answered over one join, with the numbers
-  above), and a window metric in a question with metrics that are
-  answered apart. Also refused, on any data, since the planner does not
-  read it: an expression that reads the root and the joined dataset
-  together where two copies of a key could give one result, so a root
-  row would count once for each. Such are a condition joined with `OR`
-  (`customers.weight > 0 OR orders.amount > 150` gave EAST 550 where the
-  answer is 350), `SUM(GREATEST(orders.amount, customers.weight))` and
-  `COUNT(orders.amount * customers.weight)`; #653 rejects them too.
-  `validate` reports such a metric and the MCP server hides it.
-  Conditions joined with `AND`, `SUM(lines.qty * products.price)`, `+`
-  and `-`, a `FILTER` or `CASE WHEN` on the joined dataset, and several
-  factors of the joined dataset in one product (`SUM(lines.qty *
-  products.price * (1 - products.discount))`, read as one value) are
-  answered (`docs/design.md`, "A key stored twice on the one side"). A
-  large table on the one side costs more: order lines
-  grouped by an order field took 3.0 s against 0.85 s on 10 million
-  orders.
+- **Breaking:** a key stored twice on the one side of a relationship no
+  longer counts the root's rows twice. Answers change on such data: with
+  customer C1 written twice, `orders.total_revenue` by region gives EAST
+  350, was 650. An expression where two copies of a key could give one
+  result (`customers.weight > 0 OR orders.amount > 150`) is refused on any
+  data, and so is a window metric over aggregates that need other values
+  of the repeated dataset, or next to metrics answered apart. A large table on the one side costs more: 3.0 s against 0.85 s on
+  10 million orders
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/key-stored-twice.md)).
+- **Breaking:** a question with a window metric and nothing that groups rows
+  (`SUM(orders.amount) OVER (ORDER BY orders.order_id)` alone) is refused;
+  it returned one row per order.
+- **Breaking:** a model's metric that reads a field outside every
+  aggregate (`SUM(orders.amount) * customers.weight`) is refused and
+  hidden; ClickHouse rejected it unless the field was a dimension. Every
+  field of a model's metric goes inside an aggregate.
 
 ## [0.13.0] - 2026-11-01
 
 ### Changed
 
-- The package carries a copy of `apache-ossie` at Ossie's commit
-  `fab4f63`, in `dactopus_ossie_clickhouse._vendor.ossie`, in place of a
-  git dependency on it, so that the package can be on PyPI.
-  `load_model` returns the copy's `OssieDocument`, a
-  class distinct from an installed apache-ossie's: import the types from
-  `dactopus_ossie_clickhouse._vendor.ossie`, not `ossie`. `Executor`
-  refuses a document built with an installed apache-ossie, whose code is
-  never imported. pydantic is now a direct
-  dependency. `scripts/vendor_ossie.py` moves the copy, and CI checks that
-  it is upstream's (`docs/design.md`, "apache-ossie is vendored until it
-  reaches PyPI"). Since `d13bb6a`, the commit 0.12.1 pinned, Ossie's
-  package has added the `CLICKHOUSE`, `TRINO` and `SPARQL` dialects and
-  four vendor names, nothing else.
-- `sqlglot>=30.27`, the current release; it makes no rewrite redundant.
+- **Breaking:** the package carries its own copy of apache-ossie, at
+  `fab4f63`, so that it can be on PyPI. `load_model` returns the copy's
+  `OssieDocument`: import types from `dactopus_ossie_clickhouse._vendor.ossie`,
+  not `ossie`. `Executor` refuses a document built with an installed
+  apache-ossie
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/vendored-ossie.md)).
+- `sqlglot>=30.27`.
 
 ### Added
 
-- On PyPI (closes #3): `pip install "dactopus-ossie-clickhouse[mcp]"`.
-  A release on GitHub publishes its tag (`.github/workflows/publish.yml`,
-  trusted publishing); run by hand, the workflow uploads a dev version to
-  TestPyPI as a rehearsal. CI builds the package, checks that its README
-  renders as the PyPI page, and runs the wheel outside the checkout. The
-  README's links and images are absolute, so they work on PyPI.
-- The query compliance cases of apache/ossie (`compliance/query`, merged
-  there on 2026-10-30) run against ClickHouse in `tests/test_compliance.py`
-  on a checkout at `OSSIE_REPO`, each case as the question its `AGG()`
-  query asks, with the results compared by the suite's rules. Case A1
-  passes, and so does `SUM` over no rows as NULL with `COUNT` 0. The
-  weekly workflow runs the cases on Ossie's `main`; a case added there
-  fails the run until its question is written here. The executor stays a
-  compiler of questions and does not read layer-2 SQL (`docs/design.md`,
-  "Questions are the only query input").
+- On PyPI: `pip install "dactopus-ossie-clickhouse[mcp]"` (#3).
+- The query compliance cases of apache/ossie run against ClickHouse, each
+  as the question its `AGG()` query asks
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/questions-only.md)).
 
 ## [0.12.1] - 2026-10-30
 
 ### Added
 
 - A filter on a dataset that meets the root nowhere is answered through a
-  fact another filter names (closes #69). `-m orders.order_count -f
+  fact another filter names (#69): `-m orders.order_count -f
   "order_lines.order_id IS NOT NULL" -f "product_categories.category =
-  'Clothing'"` counts the orders with a line in Clothing, each order
-  once; 0.12.0 refused it with or without the filter on the lines. The
-  filters on the lines and on the categories hold for one line. The fact
-  is named, never picked by the planner, since refund lines could link
-  orders and products too and mean other orders. Without it the question
-  is refused with each fact the planner would accept named and a filter
-  on it that keeps all its rows; a filter on a dataset the fact reaches,
-  such as `orders.status`, then holds for the same line. A filter dataset
-  that meets two named facts is refused with both named.
+  'Clothing'"` counts the orders with a line in Clothing. Without the named
+  fact, the refusal lists the facts to name
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/semi-joins.md#through-a-fact-that-links-them)).
 
 ## [0.12.0] - 2026-10-27
 
 ### Changed
 
-- Requires SQLGlot 30.25 or later. Its ClickHouse generator parenthesizes
-  `CONTAINS`, printed as `POSITION(...) > 0`, under another operator
-  (tobymao/sqlglot#8782), so the rule this project carried for it is gone.
-  Values are unchanged; `NOT CONTAINS(s, 'a')` now prints as
-  `NOT POSITION(s, 'a') > 0`, which ClickHouse reads the same way.
-- `EXTRACT(MILLISECOND FROM ts)` is sent as written instead of as
-  `toMillisecond(ts)`: ClickHouse reads it as that call, so the value is
-  unchanged.
+- `sqlglot>=30.25`. The SQL changes, the values do not: `NOT CONTAINS(s,
+  'a')` prints as `NOT POSITION(s, 'a') > 0`, and `EXTRACT(MILLISECOND
+  FROM ts)` is sent as written.
 
 ## [0.11.0] - 2026-10-27
 
-### Added
-
-- A row filter on a dataset that meets the root at a dataset both reach
-  is a semi-join through it (part of #69). With `order_lines -> products`
-  and `product_categories -> products`, `-m order_lines.line_revenue -f
-  "product_categories.category = 'Clothing'"` adds up the lines whose
-  product has a Clothing row, each line once; 0.10.1 refused it. The
-  shared dataset and each one on the root's path to it are read, with
-  `FINAL` where needed, so a category of a product that does not exist
-  keeps no line. A filter dataset that meets the root at two datasets,
-  even when one of them reaches the other, is refused with both named.
-  Only a dataset of properties qualifies: a key of the filter dataset
-  must hold its columns to the shared one, as `(product_id, category)`
-  holds `product_id`. `returns (return_id) -> customers` may be a fact of
-  its own, and `-m order_count -f "returns.reason = 'damaged'"` would
-  count the orders of customers with a damaged return, not the orders
-  returned, so it stays refused, with what to declare or relate in the
-  message. A dataset that declares no key is refused the same way.
-- An expression may be written in `sql`, the spec's portable form in
-  OSSIE_SQL_2026 (apache/ossie#617), with or without `dialects`. `sql` is
-  read first and wins over an `OSSIE_SQL_2026` entry, as the spec says;
-  without it, an `OSSIE_SQL_2026` entry is read, then `ANSI_SQL`. A
-  dialect is any string now, and an expression with neither `sql` nor a
-  dialect this executor reads is reported by `validate`, as before.
-
 ### Changed
 
-- Breaking: `apache-ossie` is pinned to apache/ossie commit `d13bb6a`.
-  A model file with a repeated key, such as two `name:` lines in one
-  dataset, fails to load (apache/ossie#618); before, the last one won
-  without a word. An empty `sql`, `expression`, `dialect` or
-  `vendor_name` fails to load too.
+- **Breaking:** a model file with a repeated key (two `name:` lines in one
+  dataset), or with an empty `sql`, `expression`, `dialect` or
+  `vendor_name`, no longer loads (apache/ossie#618). The last key used to
+  win without a word.
+
+### Added
+
+- A row filter on a dataset that meets the root at a dataset both reach is
+  a semi-join through it (#69): `-m order_lines.line_revenue -f
+  "product_categories.category = 'Clothing'"` adds up the lines whose
+  product is in Clothing, each once. A filter dataset that does not list
+  properties of the shared one is refused, with what to declare
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/semi-joins.md#through-a-dataset-both-reach)).
+- An expression may be written in `sql`, the spec's portable form
+  (apache/ossie#617). `sql` is read first, then an `OSSIE_SQL_2026` entry,
+  then `ANSI_SQL`; a dialect name is any string.
 
 ### Fixed
 
-- `SPLIT_PART` returned `''` for a NULL string, so a count of the parts
-  counted rows without one and `IS NULL` missed them; a NULL delimiter
-  split the string into characters. Both now give NULL, as in DuckDB:
-  ClickHouse's `splitByString` returns an array, which is never NULL.
+- `SPLIT_PART` of a NULL string, or with a NULL delimiter, is NULL, as in
+  DuckDB. Answers change: it was `''`, so a count of the parts counted rows
+  without one.
 
 ## [0.10.1] - 2026-10-25
 
 ### Changed
 
-- `LOG(x)`, outside the spec, is refused: ClickHouse reads it as the
-  natural logarithm, Postgres and DuckDB as base 10. A field or metric
-  that writes it is hidden from agents after the upgrade, and `validate`
-  reports it with the fix, `LN(x)` or `LOG(10, x)`.
+- **Breaking:** `LOG(x)`, outside the spec, is refused: ClickHouse reads it
+  as the natural logarithm, Postgres and DuckDB as base 10. A field or
+  metric that writes it is hidden from agents and reported by `validate`:
+  write `LN(x)` or `LOG(10, x)`.
 
 ### Fixed
 
-- A field asked for as a metric, such as `refunds.refunded_amount`, got
-  the metrics nearest in spelling, which add up other fields (#66).
-  Since 0.10.0 a dataset's metric is asked for as `dataset.metric`, so a
-  field reads like one. The error now says that the name is a field and
-  lists the metrics whose expressions read it, or says that none does;
-  a bare name that is a field gets the same answer, with any dataset's
-  metric of that name. A name that is neither keeps the suggestions by
-  spelling.
-- `search_model` returned the first 20 matches, datasets and fields
-  before metrics, so a broad word could leave every metric out: in the
-  commerce model of dactopus-data-models, "refund" matches 36 objects
-  and `refunds_total` came 36th. It now returns up to 20 datasets and
-  fields, then up to 20 metrics.
-- `REGEXP_LIKE(s, 'iphone', 'i')` ran as `match(s, 'iphone')`: the flag
-  was dropped and the match was case-sensitive, with no error. Thirteen
-  more functions of the spec's catalog lost arguments the same way in
-  SQLGlot's translation: `MOD(x, y, z)` ran as `x % y`, `LOG10()` as
-  `LOG(10)`, and `LENGTH`, `LTRIM`, `RTRIM`, `FLOOR`, `CEIL`, `CEILING`,
-  `DATE_TRUNC`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `POSITION` and
-  `CHARINDEX` dropped their extra arguments likewise. Each now refuses
-  the arguments its translation would lose, and `validate` reports a
-  field or metric that passes them. Longer forms that reach ClickHouse
-  whole and mean there what they mean in DuckDB, Snowflake or Postgres keep
-  working: `FLOOR(x, 1)`, `CEIL(x, 1)`, `LTRIM(s, 'ab')`, `RTRIM`,
-  `CHARINDEX(substr, str, start)`, `POSITION` likewise and `DATE_TRUNC`
-  with a zone.
-- `REGEXP_EXTRACT(s, 'a(b.)')` returned the capture group, `bc`, where
-  the spec extracts the first match, `abc`: ClickHouse's `regexpExtract`
-  returns the first group of a pattern that has one. It now returns the
-  whole match, as DuckDB does; `REGEXP_EXTRACT(s, p, n)` still returns
-  group `n`.
-- `LOG(base, x)` with a base other than 2 or 10 failed in ClickHouse,
-  whose `log` takes one argument. It now runs as `LN(x) / LN(base)`.
-  `LOG(-2, x)` and `LOG(-10, x)` ran as `log2(x)` and `log10(x)`, a value
-  where there is none; they now give none. A base written `2.0` or `10.0`
-  runs as `log2` and `log10`, so `LOG(10.0, 1000)` is exactly 3.
+- **Breaking:** fourteen catalog functions dropped arguments without an
+  error: `REGEXP_LIKE(s, 'iphone', 'i')` ran case-sensitive, `MOD(x, y, z)`
+  as `x % y`. Each now refuses the arguments it would lose, and `validate`
+  reports them; longer forms that mean the same in ClickHouse
+  (`FLOOR(x, 1)`, `LTRIM(s, 'ab')`) keep working
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/catalog-signatures.md)).
+- `REGEXP_EXTRACT(s, 'a(b.)')` returns the whole match, `abc`, as the spec
+  says. Answers change: it returned the capture group, `bc`.
+- `LOG(base, x)` runs for any base. Answers change: `LOG(-2, x)` and
+  `LOG(-10, x)` are NULL, were `log2(x)` and `log10(x)`.
+- A field asked for as a metric gets an error that says it is a field and
+  lists the metrics that read it (#66).
+- `search_model` returns up to 20 datasets and fields, then up to 20
+  metrics; a broad word could leave every metric out.
 
 ## [0.10.0] - 2026-10-23
 
-### Added
-
-- Metrics declared on a dataset (`datasets[].metrics`, apache/ossie#591)
-  load and answer questions. Questions, filters, `order_by`, result
-  columns and the policy file name one `dataset.metric`. Its expression
-  names its dataset's fields without the dataset; one that names
-  anything else is refused in every question and reported by `validate`,
-  as apache/ossie's validator refuses it. It aggregates its own dataset's
-  rows, so its `COUNT(*)` needs no other aggregate to say whose rows it
-  counts. A field and a metric of one dataset with the same name fail to
-  load. `list_model`, `search_model` and `describe_object` list both
-  levels, and a dataset's description lists its metrics. The TPC-DS
-  fixture carries the example's `store_sales.total_quantity`.
-- The MCP `query` tool says whether `limit` cut off rows: `truncated`
-  is true when there were more, and its description tells the agent to
-  draw no conclusion about the whole set then. Without a `limit` the
-  tool still returns 100 rows; before, nothing told the agent they might
-  not be all. The executor reads one row past the limit to tell;
-  `Result.truncated` carries it, and `query` in the CLI notes it on
-  stderr.
-
 ### Changed
 
-- Breaking: `primary_key`, `unique_keys`, `from_columns` and `to_columns`
-  name fields of their dataset, as the spec now says (apache/ossie#486),
-  not columns of its source. A model whose key or relationship names
-  something other than a declared field fails to load, naming the nearest
-  field; declare the field. Joins and semi-joins read the columns the
-  fields read, so a key field may be named unlike its column (`order_id`
-  over `o_orderkey`) or be an expression; before, the name went into the
-  SQL as a column. A relationship or a key is hidden from a user who
-  cannot read one of its fields, as by grants or a policy file. The models of
-  dactopus-data-models already name fields after their columns and load
-  unchanged.
-- `apache-ossie` is pinned to apache/ossie commit `7205e15`, whose SDK
-  reads metrics declared on a dataset.
-- A failure to connect is one line that names the step, the location
-  without credentials and what to check: the server cannot be reached
-  (refused, unknown host, timeout, TLS on a plain port), refuses the
-  user, or lacks the URL's database (#62). Before, the driver's retry
-  trace or the server's advice on resetting a password came as it was.
-  The error is `executor.ConnectError`, an `OperationalError`.
-- A negative `limit` is refused. ClickHouse read `LIMIT -n` as the
-  last n rows, which no question means.
+- **Breaking:** `primary_key`, `unique_keys`, `from_columns` and
+  `to_columns` name fields of their dataset, not columns of its source
+  (apache/ossie#486). A model whose key or relationship names anything
+  else no longer loads; declare the field. A key or relationship is hidden
+  from a user who cannot read one of its fields
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/keys-name-fields.md)).
+- **Breaking:** a negative `limit` is refused; ClickHouse read it as the
+  last rows.
+- A failure to connect is one line naming the step, the location without
+  credentials and what to check (#62); the error is `executor.ConnectError`.
+
+### Added
+
+- Metrics declared on a dataset (`datasets[].metrics`, apache/ossie#591),
+  asked for as `dataset.metric`. A field and a metric of one dataset with
+  the same name fail to load.
+- The MCP `query` tool returns `truncated` when `limit` cut off rows; the
+  CLI notes it on stderr, and `Result.truncated` carries it.
 
 ### Fixed
 
-- A metric with an aggregate over aggregates outside a window, such as
-  `AVG(COUNT(x))`, passed `validate` and reached agents, and every
-  question with it failed in ClickHouse (`ILLEGAL_AGGREGATION`). It is
-  refused in every question, reported by `validate` and hidden, and so
-  is such a filter. `SUM(SUM(x)) OVER ()` still passes.
+- A metric with an aggregate over aggregates outside a window
+  (`AVG(COUNT(x))`) is refused, reported by `validate` and hidden; every
+  question with it failed in ClickHouse.
 
 ## [0.9.5] - 2026-10-22
 
 ### Fixed
 
-- An `https://` URL connected without TLS unless its port was 443 or
-  8443, sending the user and password in the clear (#60).
-  clickhouse-connect, checked on 1.9.0 and 1.11.0, ignores a URL's
-  scheme and turns TLS on by the port; the scheme now decides it on
-  every port, both ways, for `--url` and `OSSIE_CLICKHOUSE_URL` alike.
-  An `http://` URL on port 443 or 8443, which used to get TLS, now
-  goes without it: write `https://`. A URL with any other scheme, or
-  none, or without a host (which connected to localhost) is refused
-  before anything connects.
+- **Breaking:** an `https://` URL connected without TLS unless its port was
+  443 or 8443, sending the password in the clear (#60). The scheme now
+  decides on every port, so an `http://` URL on 443 or 8443 goes without
+  TLS: write `https://`. A URL with another scheme, without one (such as
+  `host:8123`) or without a host is refused.
 
 ## [0.9.4] - 2026-10-22
 
 ### Added
 
-- `list_model` returns `today` and `now`, the date and time in the zone
-  in effect by the server's clock, so an agent can name the day it
-  answered for (#56).
+- `list_model` returns `today` and `now` in the zone in effect, by the
+  server's clock (#56).
 
 ### Fixed
 
-- Agents asked about today wrote the date they knew, their user's, as a
-  literal, and where the deployment's date differed, answered for the
-  wrong day (#56). The MCP server's instructions and the `query` tool's
-  description now say to write today and periods counted from it with
-  `CURRENT_DATE` or `CURRENT_TIMESTAMP`, never a known date, and that
-  SQL goes in filters, where they said never to write SQL. In fresh
-  sessions with Haiku 5.5 and Sonnet 5.5 on a store a day behind the
-  agent, none of six wrote `CURRENT_DATE` before and all six did after,
-  answering right.
-- ClickHouse's own `today()`, `yesterday()`, `now()` and `now64()`
-  (and the aliases `curdate()` and `localtimestamp()`) without a zone,
-  in a filter or a model, were the server's date and time; they are now
-  the model's zone, as `CURRENT_DATE` is (#56). An agent that wrote
-  `today()` on a server a day ahead of the store answered that no order
-  was placed today.
-- A plain string compared with a time field (`placed_at <
-  '2026-09-01 00:00:00'`) was read in the column's zone, UTC in
-  dactopus-data-models, while `TIMESTAMP '2026-09-01 00:00:00'` was read
-  in the deployment's (#58). In a store in New York the first counted 2
-  orders before September 1 and the second 3. A string compared directly
-  with a field or metric whose `datatype` is `DateTime` or `DateTimeTz`,
-  with `=`, `<`, `BETWEEN`, `IN` and the like, in a filter or a model's
-  metric, is now read as a `TIMESTAMP` literal; one with an offset still
-  names its instant. A field without `datatype` keeps ClickHouse's
-  reading. A field declared `DateTime` over a `String` column, which
-  compared as text before, now fails in such a comparison: parse the
-  column in the field's expression (`parseDateTimeBestEffort(created_at)`).
+- **Breaking:** a string compared with a `DateTime` or `DateTimeTz` field is
+  read as a `TIMESTAMP` literal in the model's zone, not the column's
+  (#58). Answers change: in a New York store, the orders before
+  `'2026-09-01 00:00:00'` are 3, were 2. A field declared `DateTime` over a
+  `String` column fails in such a comparison: parse the column in the
+  field's expression
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/time-zone.md)).
+- ClickHouse's `today()`, `yesterday()`, `now()` and `now64()` without a
+  zone are read in the model's zone (#56). Answers change on a server in
+  another zone.
+- Agents asked about today wrote the date they knew and answered for the
+  wrong day (#56); the server's instructions now ask for `CURRENT_DATE` or
+  `CURRENT_TIMESTAMP` in filters.
 
 ## [0.9.3] - 2026-10-22
 
 ### Added
 
-- `validate`, `sql`, `query` and `serve` take `--time-zone`, with
-  `OSSIE_CLICKHOUSE_TIME_ZONE` as the default, and `load_model` a
-  `time_zone` argument (#54). The zone replaces the one the model names
-  for `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, timestamps
-  without an offset and `DATEDIFF`, so a model shared by stores in
-  several zones, such as dactopus-data-models' `commerce`, counts each
-  store's orders of today without a copy of the model per store. A
-  wrong name is refused before anything runs; `validate --url` checks
-  the zone in effect, and `list_model` and the MCP server's
-  instructions name it.
+- `--time-zone`, with `OSSIE_CLICKHOUSE_TIME_ZONE` as the default, and
+  `load_model(time_zone=...)` replace the model's zone, so one model serves
+  stores in several zones (#54).
 
 ## [0.9.2] - 2026-10-22
-
-### Added
-
-- A model names the zone of its dates in its own `CLICKHOUSE` entry,
-  `{"time_zone": "America/New_York"}`, UTC without one (#52).
-  `CURRENT_DATE` is the date there, so `order_date = CURRENT_DATE`
-  counts a store's orders of today at any hour, and `CURRENT_TIMESTAMP`
-  and `CURRENT_TIME` show its wall clock. `list_model` and the MCP
-  server's instructions name the zone, and `validate --url` checks that
-  the server knows it.
-- A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is
-  answered without a dimension, without `FROM`, where it failed
-  although `validate` accepted it (#52).
 
 ### Changed
 
 - `CURRENT_DATE`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, timestamp literals
-  and `CAST` or `TRY_CAST` of a string to a timestamp type, without an
-  offset, and `TO_TIMESTAMP` of a string use the model's zone, UTC by
-  default, not the server's, and `DATEDIFF` counts days and hours
-  there. On a server outside UTC, answers that
-  used them change.
+  and string casts to a timestamp without an offset, and `DATEDIFF`, use
+  the model's zone, UTC by default, not the server's. Answers change on a
+  server outside UTC
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/time-zone.md)).
 - The CLI and the MCP server show a `DateTime` with its offset from UTC,
-  `2024-03-15 10:30:45+00:00`: without it a column in the server's zone
-  could not be told from one in UTC. It still works as a filter literal.
+  `2024-03-15 10:30:45+00:00`, which still works as a filter literal.
+
+### Added
+
+- A model names the zone of its dates in its `CLICKHOUSE` entry
+  (`time_zone`), UTC without one (#52).
+- A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is answered
+  without `FROM` (#52).
 
 ### Fixed
 
-- A value shown for a `DateTime` column in another zone than the
-  server's, filtered back as `TIMESTAMP '...'`, matched no row: the
-  literal was read in the server's zone. A literal's fraction of a
-  second was dropped.
-- `DATEDIFF` in hours or longer between values in two zones, such as a
-  `DateTime('UTC')` column and `CURRENT_TIMESTAMP` on a server outside
-  UTC, gave a wrong count: 20 hours for 7.
-- `COUNT(*)` in a model of one dataset failed in every question, though
-  `validate` accepted it.
-- The refusal of an aggregate that reads no column, such as
-  `MAX(CURRENT_TIMESTAMP)`, no longer says it counts rows, and says to
-  leave out the aggregate for a value that reads no dataset.
+- A `DateTime` value filtered back as `TIMESTAMP '...'` matched no row when
+  the column's zone differed from the server's; a fraction of a second was
+  dropped.
+- `DATEDIFF` in hours or longer between values in two zones gave a wrong
+  count: 20 hours for 7.
+- `COUNT(*)` in a model of one dataset failed in every question.
 
 ## [0.9.1] - 2026-10-21
+
+### Changed
+
+- The SQL sets `transform_null_in = 0`, so a NULL key matches nothing in
+  `IN` even when the user's profile sets 1.
 
 ### Added
 
 - A row filter on a dataset whose rows reference the root's is a
-  semi-join: `-m sessions -f "purchases.revenue > 0"` counts each session
-  with at least one such purchase once, where it was refused because a
-  join would count it once per purchase (#10). Filters on one such
-  dataset and on the datasets it reaches hold for the same row; a path of
-  several relationships nests one `IN` per step, a key of several columns
-  is a tuple, and the subquery reads `FINAL` and dictionaries like any
-  question. It works inside a stitched question too. `NOT` stays inside
-  the subquery, so it cannot ask for rows without a match. A filter that
-  mixes both sides in one expression is refused. Metrics that read both
-  sides of such a relationship are still refused.
+  semi-join (#10): `-m sessions -f "purchases.revenue > 0"` counts each
+  session with such a purchase once. It was refused
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/semi-joins.md)).
+
+## [0.9.0] - 2026-10-21
 
 ### Changed
 
-- Generated SQL also sets `transform_null_in = 0`, so a NULL key matches
-  nothing in `IN` even when the user's profile sets 1.
-
-## [0.9.0] - 2026-10-21
+- **Breaking:** a function outside the spec's catalog reaches ClickHouse as
+  written (#35). Other engines' spellings SQLGlot used to translate
+  (`ARG_MAX`, `COUNT_IF`, `LEN`) no longer become `argMax`, `countIf`,
+  `CHAR_LENGTH`: write ClickHouse's name or the spec's
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/functions-pass-through.md)).
+- `ANY_VALUE`, `BOOL_AND` and `BOOL_OR` no longer read a joined dataset on
+  their own; `ANY_VALUE` still does when a server lists it as `any`.
+- `sqlglot>=30.24`.
 
 ### Added
 
 - `validate --url` reports a field or metric that calls a function the
-  server does not have, with the nearest names it has, and the executor
-  hides it like one that does not translate. Names are matched as
-  ClickHouse matches them: as written, in any case for the functions it
-  marks case-insensitive, and with aggregate combinators (`sumIf`,
-  `uniqExactOrNull`); user-defined functions count.
-- The planner treats a function outside the spec that the server lists
-  as an aggregate (`countIf`, `uniq`, `sumIfOrNull`) as one: a filter on
-  it goes to `HAVING`, and over joined rows that repeat it is refused
-  unless repeats cannot change it (`uniqExact`, `anyLast`, `argMax`,
-  `sumDistinct`). Stitched with metrics of other datasets, its value over
-  no rows comes from ClickHouse: 0 for `countIf` and `uniq`, NULL for
-  `sumIf`. Without a server (`sql` and `validate` without `--url`)
-  SQLGlot's list of ClickHouse aggregates decides, combinators included;
-  it lacks about half of them (`medianExact`, `group_concat`), which
-  are then planned as plain functions.
-- `validate --url` reports a server whose `system.functions` cannot be
-  read: functions outside the spec then go unchecked, and an aggregate
-  missing from SQLGlot's list (`medianExact`, a user-defined one) is
-  planned as a plain function.
-
-### Changed
-
-- Requires SQLGlot 30.24 or later. None of this project's rewrites
-  became redundant: SQLGlot 30.24 changed nothing in its ClickHouse
-  generator that they cover.
-- A function outside the spec's catalog reaches ClickHouse as written
-  (#35). SQLGlot knows the functions of other engines and renamed them in
-  ClickHouse SQL: `DAYOFWEEK(d)` became `DAY_OF_WEEK(d)` and `BOOL_AND(x)`
-  became `LOGICAL_AND(x)`, which ClickHouse does not have, so the query failed
-  and `validate` said nothing. Now `DAYOFWEEK(d)` runs as ClickHouse's own
-  `DAYOFWEEK`, and `DAYOFMONTH(d)` prints as written instead of
-  `toDayOfMonth(d)`. Other engines' spellings SQLGlot used to translate
-  (`ARG_MAX`, `COUNT_IF`, `LEN`) are sent as written too; the spec's
-  aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`) still translate.
-  ClickHouse's `any(x)` is sent as written too; it was read as the
-  `ANY (subquery)` predicate and printed as `ANY(x)`, which ClickHouse
-  does not have.
-- `ANY_VALUE`, `BOOL_AND` and `BOOL_OR` are no longer among the aggregates
-  the planner lets read a joined dataset on their own: they are not the
-  spec's. `BOOL_AND` and `BOOL_OR` never ran on ClickHouse; `ANY_VALUE`
-  runs as ClickHouse's alias of `any`, which a planner connected to a
-  server still lets read a joined dataset on its own.
+  server lacks, with the nearest names, and the executor hides it. It also
+  reports a server whose `system.functions` cannot be read.
+- An aggregate the server lists outside the spec (`countIf`, `uniq`) is
+  planned as an aggregate: a filter on it goes to `HAVING`, and over
+  repeated joined rows it is refused unless repeats cannot change it.
 
 ### Fixed
 
 - An expression with an alias (`SUM(x) AS total`) or ClickHouse's
-  parametric form (`quantile(0.9)(x)`, which SQLGlot read as
-  `quantile(0.9) AS (x)`) does not translate: it is hidden and reported
-  by `validate`. Before, it passed and every question with it failed with
-  a syntax error.
+  parametric form (`quantile(0.9)(x)`) is hidden and reported by
+  `validate`; every question with it failed.
+- `DAYOFWEEK(d)` and ClickHouse's `any(x)` run; SQLGlot printed them as
+  `DAY_OF_WEEK(d)` and `ANY(x)`, which ClickHouse does not have.
 
 ## [0.8.0] - 2026-10-15
 
-### Added
-
-- Every command takes several model files, read as one model: one file
-  per subject area can be served by one MCP server (#32). Each file is
-  checked on its own for the schema, its version, repeated names and a
-  misplaced CLICKHOUSE entry, with the problem named after the file;
-  references are checked on the whole, so a relationship may join
-  datasets of two files. A name defined in two files is an error naming
-  both. The root name and description come from the first file; every
-  file's root `ai_context` is kept: instructions joined, synonyms and
-  examples united. `load_model` takes the paths as arguments.
-
 ### Changed
 
-- Requires SQLGlot 30.23 or later. Its ClickHouse generator translates
-  `REGEXP_COUNT` to `countMatches` (tobymao/sqlglot#8616), so the rewrite
-  this project carried for it is gone. The SQL and values are unchanged;
-  `REGEXP_COUNT` still takes the spec's two arguments.
+- `sqlglot>=30.23`; the SQL and the values are unchanged.
+
+### Added
+
+- Every command takes several model files, read as one model (#32); a
+  name defined in two files is an error.
 
 ### Fixed
 
-- The `CLICKHOUSE` entry in `custom_extensions` is checked when the model
-  loads, so `validate` without `--url` reports it too (#30). A typo in its
-  key or value (`{"dedupe": "none"}`, `{"dedup": "None"}`,
-  `{"dedup": null}`) used to change silently whether a dataset was read
-  with `FINAL`; text that is not a JSON object failed later with a Python
-  error that named no dataset. Now each is a model problem naming the
-  dataset and the allowed values. So are a key written twice in the
-  object, where the last one used to win, a second entry on one dataset,
-  which used to be ignored, and an entry on the model, a field, a metric
-  or a relationship, which nothing reads.
-- A dataset, metric or relationship name repeated in another case
-  (`Revenue` and `revenue`) is reported as a duplicate. Names resolve
-  case-insensitively, so one of the two was silently unreachable.
+- **Breaking:** the `CLICKHOUSE` entry is checked when the model loads
+  (#30). A typo in its key or value, text that is not a JSON object, a
+  repeated key, a second entry on one dataset or an entry where nothing
+  reads it is a model problem; a typo used to change silently whether a
+  dataset was read with `FINAL`.
+- **Breaking:** a name repeated in another case (`Revenue` and `revenue`)
+  is a duplicate, and the model does not load: rename one. One of the two
+  was unreachable.
 
 ## [0.7.1] - 2026-10-14
 
-### Added
-
-- A window's `ORDER BY` accepts `NULLS FIRST` and `NULLS LAST`, now in the
-  spec's syntax (apache/ossie#577); a model that writes them used to fail
-  to load. They place NULLs regardless of direction. Without the clause
-  NULLs still sort last in both directions. `WITHIN GROUP (ORDER BY ...)`
-  still rejects it.
-
 ### Changed
 
-- Breaking: `apache-ossie` is pinned to apache/ossie commit `7496811`,
-  the one that adds the `NULLS` clause to the spec. Its SDK refuses an
-  empty `primary_key` and an empty unique key (apache/ossie#574): a model
-  that writes `primary_key: []` or `unique_keys: [[]]` now fails to load.
-  None of the models in this repository or in dactopus-data-models has
-  one.
+- **Breaking:** `primary_key: []` and `unique_keys: [[]]` no longer load
+  (apache/ossie#574).
+
+### Added
+
+- A window's `ORDER BY` accepts `NULLS FIRST` and `NULLS LAST`
+  (apache/ossie#577).
 
 ## [0.7.0] - 2026-10-13
 
 ### Changed
 
-- `apache-ossie` is pinned to apache/ossie commit `e49a0f0`, where the
-  SDK refuses what the schema refuses. A model now fails to load with an
-  unknown property in any object (`descriptionn` on a field, `vendor_nam`
-  in `custom_extensions`; the SDK used to drop these silently,
-  apache/ossie#530), a property set to null (`primary_key: null`; omit it
-  instead), a `version` missing or other than `0.2.0.dev0`, or a NaN or
-  infinite number. `load_model` reads files with the SDK's
-  `from_ossie_yaml` and `from_ossie_json`. A wrong version is reported on
-  its own, before the checks of names and dialects, since the SDK stops
-  at it.
+- **Breaking:** a model fails to load with an unknown property (a typo
+  such as `descriptionn`), a property set to null (omit it), a `version`
+  missing or other than `0.2.0.dev0`, or a NaN or infinite number
+  (apache/ossie#530). These used to be dropped silently.
 
 ## [0.6.0] - 2026-10-13
+
+### Changed
+
+- **Breaking:** a direct relationship next to a longer path to the same
+  dataset is refused as ambiguous, where 0.5.0 joined along the direct one
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/paths.md)).
 
 ### Added
 
 - Joins along a path of several relationships, such as order lines to
-  orders to customers: a question about line revenue by customer region
-  is answered, where it was refused. The dataset in the middle joins like
-  any other, so a row filter may read it. Two paths to a dataset a
-  question touches are refused as ambiguous, as apache/ossie#246 §6.9
-  says.
-
-### Changed
-
-- Breaking: a direct relationship next to a longer path to the same
-  dataset is refused as ambiguous (apache/ossie#246 §6.9), where 0.5.0
-  joined along the direct one. None of the models in this repository or
-  in dactopus-data-models has such a pair.
+  orders to customers.
 
 ### Fixed
 
-- Division of a `Decimal` lost digits: ClickHouse keeps the dividend's
-  scale, so `SUM(refunds.amount) / SUM(orders.amount)` gave 0.02 where
-  Postgres and DuckDB give 0.0286. The dividend of `/` is now `Float64`,
-  as DuckDB divides, so a ratio of `Decimal` values is a float
-  (`customer_lifetime_value` of the TPC-DS model is 57919.727998855364
-  in the CLI, where it was 57919.72). Division by zero no longer fails
-  the query: the value is shown as NULL, but inside the query it is
-  infinite (NaN for 0 / 0), so it sorts before or after every number and
-  a positive one passes a filter such as `ratio > 1`, as division of
-  integers already did. Division of integers
-  is unchanged: it was already `Float64`.
+- Division of a `Decimal` is in `Float64`. Answers change:
+  `SUM(refunds.amount) / SUM(orders.amount)` gives 0.0286, was 0.02. A
+  division by zero shows NULL instead of failing the query, but inside it
+  is infinite, so a positive one passes a filter such as `ratio > 1`
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/division-to-float64.md)).
 
 ## [0.5.0] - 2026-10-12
 
-### Added
-
-- Metrics of several facts in one question, such as revenue and returns
-  by region: each fact is aggregated on its own and the results are
-  merged on the dimensions, as apache/ossie#246 describes. Every region
-  of either fact appears, a NULL region from both makes one row, and a
-  fact without rows in a region gives what its metric gives over no rows
-  (NULL for a sum, 0 for a count). Without dimensions the answer is one
-  row of totals. Such questions were refused, and so was a metric of a
-  dimension table next to a fact's, such as staff next to sales by state.
-
-### Fixed
-
-- An aggregate over no rows is NULL, as the spec and SQL say, not 0: a
-  total whose filter matches nothing, and `SUM(x) FILTER (WHERE ...)` in a
-  group where nothing matches. ClickHouse answered 0 for `SUM`, `MIN`,
-  `MAX` and `ANY_VALUE`; generated SQL now sets
-  `aggregate_functions_null_for_empty = 1`. Counts stay 0.
-
-- Rows that tie on the requested or default order, such as the regions a
-  stitched question gives no revenue, came back in whatever order
-  ClickHouse produced them, so a `limit` could keep different rows on each
-  run, and a question without metrics was not ordered at all. Ties are now
-  broken by the dimensions, ascending (#42).
-
-- A `Time` value read differently in the CLI and over MCP, and neither
-  form was ClickHouse's: `-01:02:03` came out as `-1 day, 22:57:57` in
-  the CLI and `-PT1H2M3S` over MCP, `100:00:00` as `4 days, 4:00:00` and
-  `P4DT4H` (#40).
-
 ### Changed
 
-- `Time`, `Time64`, `DateTime` and `DateTime64` values in the CLI's output
-  and the MCP server's rows are ClickHouse's text, the same in both and
-  usable as a filter literal: `2024-03-15 10:30:45.123` with the column's
-  fraction digits, without the time zone offset the CLI added and the `T`
-  MCP used. `Result.rows` keeps Python values; `Result.shown_rows()` gives
-  the text, and `Result.types` the ClickHouse type of each column.
+- `Time`, `Time64`, `DateTime` and `DateTime64` values read the same in the
+  CLI and over MCP, as ClickHouse's text, usable as a filter literal (#40).
+  `Result.shown_rows()` gives the text, `Result.types` the types.
+
+### Added
+
+- Metrics of several facts in one question, such as revenue and returns by
+  region, are each aggregated on their own and merged on the dimensions.
+  They were refused
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/stitching.md)).
 
 ### Removed
 
-- The advice to ask for each metric in its own question: it was given only
-  when each metric could be answered alone, and such questions are now
-  answered together.
-
-- The `ossie-clickhouse` command, the name before 0.4.0: run
+- **Breaking:** the `ossie-clickhouse` command. Run
   `dactopus-ossie-clickhouse`, and point an MCP client's configuration at
-  it (`docs/mcp-setup.md`).
+  it.
+
+### Fixed
+
+- An aggregate over no rows is NULL, as the spec says. Answers change: a
+  `SUM`, `MIN`, `MAX` or `ANY_VALUE` whose filter matches nothing gave 0;
+  counts stay 0.
+- Rows that tie on the order are ordered by the dimensions, so a `limit`
+  keeps the same rows on every run (#42).
 
 ## [0.4.0] - 2026-10-10
 
+Renamed from `ossie-clickhouse` to `dactopus-ossie-clickhouse`.
+
 ### Changed
 
-- Renamed from `ossie-clickhouse` to `dactopus-ossie-clickhouse`: the
-  package, the command, the repository (`Dactopus/dactopus-ossie-clickhouse`;
-  GitHub redirects the old URLs) and the MCP server's name. Apache Ossie's
-  own converters are named `ossie-<vendor>` with a module `ossie_<vendor>`,
-  and one for ClickHouse is proposed under the old name; the two could not
-  be installed together. To migrate:
-  - uninstall `ossie-clickhouse` (`pip uninstall`, `uv tool uninstall`),
-    then install `dactopus-ossie-clickhouse`. In this order: both packages
-    install an `ossie-clickhouse` command, so `uv tool` refuses the new one
-    while the old one is installed, and uninstalling the old one
-    afterwards removes the command from the new one too;
-  - import `dactopus_ossie_clickhouse` instead of `ossie_clickhouse`;
-  - run `dactopus-ossie-clickhouse` instead of `ossie-clickhouse`. The old
-    command still works in 0.4.x, with a note on stderr, and is removed in
-    0.5.0;
-  - in an MCP client's configuration, rename the server and point it at the
-    new command (`docs/mcp-setup.md`).
+- **Breaking:** the package, the command, the module, the repository and
+  the MCP server's name change. To migrate:
+  - uninstall `ossie-clickhouse` first, then install
+    `dactopus-ossie-clickhouse`: both install an `ossie-clickhouse`
+    command, and the other order breaks the new one;
+  - import `dactopus_ossie_clickhouse`;
+  - run `dactopus-ossie-clickhouse`; the old command works in 0.4.x;
+  - in an MCP client's configuration, rename the server and point it at
+    the new command.
 
-  `OSSIE_CLICKHOUSE_URL` keeps its name. The diagram's interactive page
-  moves to <https://dactopus.github.io/dactopus-ossie-clickhouse/>; the old
-  address does not redirect.
+  `OSSIE_CLICKHOUSE_URL` keeps its name. The interactive page moves to
+  <https://dactopus.github.io/dactopus-ossie-clickhouse/>.
 
 ## [0.3.1] - 2026-10-10
 
 ### Fixed
 
-- `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec requires. They
-  were translated to ClickHouse's `quantile` and `median`, which keep a
-  sample of 8,192 values: on larger groups the answer was approximate and
-  could change between runs (the median of 100,000 values came out 49,505
-  instead of 49,999.5). They now read every value, so memory grows with
-  the group, as it already did for `PERCENTILE_DISC`; `APPROX_PERCENTILE`
-  remains the fast approximate choice. Both return `Float64` (`Decimal`
-  before, for a `Decimal` column) and NULL for an empty set. Over a
-  `Date`, `DateTime` or `String` column ClickHouse now refuses the
-  query: the spec, like Postgres, defines them for numbers only. For a
-  median date, use `PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY ...)`.
+- **Breaking:** `PERCENTILE_CONT` and `MEDIAN` are exact, as the spec
+  requires; ClickHouse's `quantile` samples 8,192 values. Answers change:
+  the median of 100,000 values is 49,999.5, was 49,505. They return
+  `Float64`, where a `Decimal` column gave a `Decimal`. A `Date`,
+  `DateTime` or `String` column is refused; for a median date, use
+  `PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY ...)`
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/exact-percentiles.md)).
 - `PERCENTILE_DISC(...) WITHIN GROUP (...) FILTER (WHERE ...)` runs.
-  The condition went to the expression `PERCENTILE_DISC` is rewritten to,
-  and ClickHouse refused it (`ifIf` does not exist); it now applies to
-  each aggregate inside.
-- `PERCENTILE_DISC(...) WITHIN GROUP (...) OVER (...)` is rejected when
-  the model is read, with a clear error; it produced SQL ClickHouse
-  refused. `PERCENTILE_CONT` and `MEDIAN` with `OVER` work as before.
-- `FILTER (WHERE ...)` on an expression that is not an aggregate, such as
-  `COALESCE(SUM(x), 0) FILTER (...)`, is rejected when the model is read,
-  as the spec requires; ClickHouse refused it.
+- `PERCENTILE_DISC` with `OVER`, and `FILTER` on an expression that is not
+  an aggregate, are rejected when the model is read; ClickHouse refused
+  them.
 
 ## [0.3.0] - 2026-10-10
 
 ### Changed
 
-- Requires SQLGlot 30.22 or later. Its ClickHouse generator now doubles
-  `\` in quoted names and translates `CONTAINS` and `DAYOFYEAR`, so the
-  rewrites this project carried for them are gone. Values are unchanged;
-  the SQL spells `POSITION` in capitals.
-
-### Fixed
-
-- `DAYOFMONTH(d)` runs: SQLGlot 30.22 translates it to `toDayOfMonth`
-  instead of `DAY_OF_MONTH`, which ClickHouse does not have.
+- `sqlglot>=30.22`; the values are unchanged.
 
 ### Removed
 
-- `translate.CLICKHOUSE`, the dialect that doubled `\` in quoted names.
-  Generate SQL with `dialect="clickhouse"`.
+- **Breaking:** `translate.CLICKHOUSE`. Generate SQL with
+  `dialect="clickhouse"`.
+
+### Fixed
+
+- `DAYOFMONTH(d)` runs.
 
 ## [0.2.5] - 2026-10-06
 
-### Fixed
-
-- Tables with `ReplicatedReplacingMergeTree`, on a cluster, and
-  `SharedReplacingMergeTree`, which ClickHouse Cloud makes of every
-  `ReplacingMergeTree`, are read with `FINAL`. Before, only plain
-  `ReplacingMergeTree` was, and metrics over these tables counted every
-  stored version of a row (#29).
-- A `Distributed` table, materialized view or `Merge` table over a
-  `ReplacingMergeTree` table is read with `FINAL`. Before, it was read
-  raw: on a cluster, where models point at the `Distributed` table,
-  metrics counted every stored version of a row. When the table it reads
-  is hidden from the connected user, `validate --url` reports the
-  dataset, which is read without `FINAL` as before.
-
 ### Changed
 
-- `{"dedup": "final"}` in a dataset's `custom_extensions` adds `FINAL`
-  whatever the engine, for a source whose stored rows the connected user
-  cannot see. Before, it meant the default.
+- `{"dedup": "final"}` adds `FINAL` whatever the engine; it meant the
+  default.
+
+### Fixed
+
+- Replicated and ClickHouse Cloud `ReplacingMergeTree` tables, and
+  `Distributed` tables, materialized views and `Merge` tables over one, are
+  read with `FINAL` (#29). Answers change: metrics over them counted every
+  stored version of a row
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/final.md)).
 
 ## [0.2.4] - 2026-10-05
 
-### Fixed
-
-- A dataset `source` with quoted parts (`` `shop`.`orders` ``,
-  `"Sales DB".orders`), as dbt-clickhouse writes it, is read as the table
-  it names. Before, the quotes stayed in the name, the table was not
-  found, and the dataset disappeared from the model (#26).
-- A dataset `source` with a backslash is refused and reported by
-  `validate --url`. Before, the generated query read another table than
-  the one checked in ClickHouse, or broke: ClickHouse reads `\` in a
-  quoted name as an escape.
-- A column whose name has a backslash is read as named. Before, the
-  backslash went into the query undoubled, and a field over column
-  `a\x41` read column `aA`.
-
 ### Changed
 
-- `--` and `/*` outside quotes in a dataset `source`, likely a pasted
-  comment, refuse it; 0.2.3 read them as part of the table name. Quote
-  the part if the table is really named so.
+- **Breaking:** `--` and `/*` outside quotes in a dataset `source` refuse
+  it; quote the part if the table is really named so.
 
 ### Added
 
-- `docs/model-authoring.md`: tables replicated by ClickPipes or PeerDB
-  keep deleted rows under `FINAL`; read them through a view that filters
-  `_peerdb_is_deleted`.
+- A note in model authoring on tables replicated by ClickPipes or PeerDB,
+  which keep deleted rows under `FINAL`.
+
+### Fixed
+
+- A `source` with quoted parts (`` `shop`.`orders` ``), as dbt-clickhouse
+  writes it, is read as the table it names; the dataset disappeared (#26).
+- A `source` with a backslash is refused; a column name with a backslash
+  is read as named.
 
 ## [0.2.3] - 2026-10-05
 
 ### Added
 
-- A diagram of how a question becomes SQL in the README, linked to an
-  interactive page (`docs/index.html`, GitHub Pages) that follows one
-  question on the `web_analytics` model of dactopus-data-models.
-  `tests/test_docs.py` checks that the SQL, the lines each step marks and
-  the refusals it quotes are what the planner writes for a ClickHouse user
-  who can or cannot read a column; the README diagram follows GitHub's
-  theme, not the system's.
+- A diagram of how a question becomes SQL, with an interactive page.
 
 ### Fixed
 
-- A compound expression placed under an operator keeps its precedence.
-  SQLGlot prints no parentheses of its own, so a metric named in a filter
-  (`1000 / customer_lifetime_value > 1`), a computed field inside
-  arithmetic (`orders.net * 2`, `net` being `amount - 5`), `CONTAINS`
-  under another operator and a percentile whose fraction is an expression
-  (`PERCENTILE_CONT(0.5 - 0.2) ... DESC` took the 0.3 quantile, not 0.7)
-  were read with the operators regrouped and returned wrong values
-  without an error. Every operator under another operator is now
-  parenthesized, except the left operand of the same operator
-  (`a - b - c`, `a AND b AND c`), also where precedence alone would do:
-  generated SQL prints new parentheses (`(x * 2) > 25`,
-  `(a > 1) AND (b < 2)`), with the same values.
+- A compound expression under an operator keeps its precedence. Answers
+  change: a metric named in a filter, a computed field inside arithmetic
+  and a percentile with an expression as its fraction were read with the
+  operators regrouped.
 
 ## [0.2.2] - 2026-10-04
 
-### Fixed
-
-- A source without a database is introspected where ClickHouse reads it:
-  the URL's database, else the user's `DEFAULT DATABASE`. Introspection
-  used to look in `default`, so such a user with no database in the URL
-  got a refusal, or, with a copy of the table in `default`, the wrong
-  engine: a ReplacingMergeTree read without `FINAL` counted its
-  duplicates.
-
 ### Changed
 
-- A source may be a bare table name, read in the connection's database;
-  documented in `docs/model-authoring.md` and tested. One model then
-  serves any database a deployment chooses.
-- `validate --url` and `serve` (on stderr) name the host and database
-  they read, and so does the refusal when no dataset is readable.
+- A source may be a bare table name, read in the connection's database,
+  so one model serves any database.
+- `validate --url` and `serve` name the host and database they read.
+
+### Fixed
+
+- A source without a database is introspected where ClickHouse reads it,
+  not in `default`, where a copy of the table could be read without
+  `FINAL`.
 
 ## [0.2.1] - 2026-10-04
 
 ### Changed
 
-- The MCP server's instructions include the model's own
-  `ai_context.instructions`. They used to come only from `list_model`, so
-  an agent that started with `search_model` never saw them.
-- The MCP server's instructions tell the agent to state only numbers a
-  query returned. Agents named the value of a metric they had not queried
-  and made up the counts behind a rate.
-- A refused question with several metrics, each of which can be asked on
-  its own, says so. With one dimension it also says how to keep the rows
-  of the first answer: filter the other questions with
-  `sessions.source IN (...)` over the values that answer returned. The
-  refusal for datasets not joined from one root used to give no advice
-  at all.
+- The MCP server's instructions include the model's
+  `ai_context.instructions`, and tell the agent to state only numbers a
+  query returned.
 
 ## [0.2.0] - 2026-10-03
 
 ### Changed
 
-- Requires SQLGlot 30.21 or later, which generates `varPop` for
-  `VAR_POP` itself (tobymao/sqlglot#8469); the translator's own rewrite
-  is gone.
-- A relationship is joined when its `to_columns` cover a primary or unique
-  key of the target, not only when they equal one, as the reference
-  validator reads the spec (apache/ossie#330). A join on
-  `(tenant_id, customer_id)` to customers keyed by `customer_id` used to
-  fail with "not many-to-one". A target with no declared key gets its own
-  error that says so. `validate` now fails on both kinds of relationship,
-  so a model that passed it before may not.
-
-- NULLs sort last in both directions, in window `ORDER BY` inside model
-  expressions and in a query's `order_by`. Ascending orderings used to put
-  NULLs first, a default inherited from SQLGlot rather than chosen; a
-  running total over a key with NULLs, such as sales without a matching
-  date, started from their sum. The spec does not define NULL ordering;
-  this is ClickHouse's and DuckDB's default, so the generated SQL carries
-  no `NULLS` clause.
-- Expressions with `NULLS FIRST | LAST`, or with a window frame the spec
-  does not list, are rejected; `validate` reports them. Accepted frames:
-  `ROWS` frames that hold the current row, and `RANGE BETWEEN UNBOUNDED
-  PRECEDING AND CURRENT ROW`. ClickHouse answered an empty frame with 0
-  instead of NULL, and a `RANGE` offset counted NULL keys as within it.
+- **Breaking:** a relationship is joined when its `to_columns` cover a key
+  of the target, and `validate` fails on one that covers none or whose
+  target declares no key
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/many-to-one.md)).
+- **Breaking:** `NULLS FIRST | LAST`, window frames the spec does not
+  list, and `IGNORE NULLS` on `LAG`, `LEAD` and `NTH_VALUE`, which
+  ClickHouse ignored, are rejected; ClickHouse answered an empty frame
+  with 0
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/window-frames.md)).
+- NULLs sort last in both directions. Answers change for a running total
+  over a key with NULLs, which ascending order put first.
+- `sqlglot>=30.21`.
 
 ### Fixed
 
-- A question no longer returns a wrong number when a metric aggregates
-  another dataset's rows over the root's: each joined row repeats once per
-  root row that references it, and only referenced rows are present. The
-  planner now refuses such a metric with a message that names what made
-  the root. The reference TPC-DS `store_productivity` summed each store's
-  staff once per sale; it is now refused in every question, and
-  `validate` reports it, so a model that passed `validate` before may not.
-  Repeat-safe aggregates (`MIN`, `MAX`, `DISTINCT` and similar) over a
-  joined dataset still pass when the metric also reads the root, and so
-  does any aggregate over a dataset joined on a key of the root. A metric
-  that is only `COUNT(*)` is refused too: it counted stores or sales
-  depending on what else the question asked. Metrics refused in every
-  question are hidden from agents and reported by `validate`.
-- `validate` reports a metric that names an unknown field; it passed and
-  then failed every question.
-- A rewritten function inside another one is translated in queries too,
-  not only by `translate`: `NULLIFZERO(APPROX_PERCENTILE(x, 0.5))` in a
-  metric reached ClickHouse as `APPROX_PERCENTILE`, which it does not
-  have.
-
-- `LAG` and `LEAD` without a default, and `NTH_VALUE` past the end of the
-  frame, return NULL as the spec (ANSI SQL) says, not 0. ClickHouse falls
-  back to the type's default when the argument is not Nullable, so a
-  month-over-month change on a non-Nullable column showed the first
-  month's full value as its change. `FIRST_VALUE` and `LAST_VALUE`
-  respect NULLs; ClickHouse skips them by default. `IGNORE NULLS` on
-  `LAG`, `LEAD` and `NTH_VALUE` is rejected: ClickHouse ignored it.
-- A rewritten function inside another rewritten one is translated too:
-  `DAYOFYEAR(TO_DATE(s))` used to leave `TO_DATE` for ClickHouse, which
-  has no such function.
+- **Breaking:** a metric that aggregates another dataset's rows over the
+  root's, such as the TPC-DS `store_productivity`, which summed each
+  store's staff once per sale, is refused and hidden, and so is a bare
+  `COUNT(*)` in a model of several datasets
+  ([decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/metric-over-other-rows.md)).
+- `LAG` and `LEAD` without a default, and `NTH_VALUE` past the frame, return
+  NULL, not 0; `FIRST_VALUE` and `LAST_VALUE` respect NULLs. Answers change
+  on columns that are not Nullable.
+- A rewritten function inside another one is translated in queries too.
+- `validate` reports a metric that names an unknown field.
 
 ## [0.1.1] - 2026-10-01
 
 ### Fixed
 
-- Functions the translator rewrites are checked against the spec's
-  signature. Longer forms from other engines, such as Snowflake's
-  `REGEXP_COUNT(str, pattern, position, flags)`, used to lose their extra
-  arguments and return a different value; they are now rejected with the
-  expected signature. Too few arguments give the same error instead of an
-  `IndexError`, and `EXTRACT` and `DATE_PART` accept only the spec's date
-  parts.
-- One field or metric whose expression does not translate no longer stops
-  the whole model. It is hidden like an object the user may not read,
-  everything that depends on it goes with it, and `validate` names each
-  one, with or without `--url`.
+- **Breaking:** rewritten functions are checked against the spec's
+  signature, and `EXTRACT` and `DATE_PART` accept only the spec's date
+  parts; longer forms from other engines lost arguments and returned other
+  values.
+- A field or metric that does not translate is hidden and named by
+  `validate`, instead of stopping the whole model.
 
 ## [0.1.0] - 2026-09-30
 
-First release. Ossie schema `0.2.0.dev0`, tested on ClickHouse 26.x with
-the TPC-DS reference model.
+First release: Ossie schema `0.2.0.dev0`, tested on ClickHouse 26.x with the
+TPC-DS reference model.
 
-- Model loading on `apache-ossie` with checks upstream lacks: unique names,
-  relationships that resolve, expressions in a translatable dialect.
-- Expression translation on the SQLGlot AST: the spec's function catalog
-  mapped to ClickHouse, `OSSIE_SQL_2026` preferred, `ANSI_SQL` fallback,
-  every catalog function checked by value against DuckDB or the spec text.
-- Planner: one `SELECT` per question, `LEFT JOIN` along many-to-one
-  relationships from one root dataset, `HAVING` for filters over metrics
-  or aggregates, window metrics passed through, errors that name the
-  nearest known object.
-- Executor: `FINAL` for `Replacing*` engines, `dictGetOrNull` for
-  single-key dictionaries, both learned from system tables; `inf` and
-  `nan` returned as NULL; `{"dedup": "none"}` override in
-  `custom_extensions`.
-- Access control through ClickHouse: the model is trimmed to what the
-  connected user may read; an optional policy file hides more per user or
-  role.
-- MCP server over stdio with `list_model`, `search_model`,
-  `describe_object` and `query`.
-- CLI: `validate`, `sql`, `query`, `serve`.
+- Model loading on `apache-ossie`, with checks for unique names,
+  relationships that resolve and expressions in a dialect it reads.
+- Expressions translated on the SQLGlot AST, the spec's function catalog
+  mapped to ClickHouse and checked by value against DuckDB or the spec.
+- One `SELECT` per question along many-to-one relationships, `HAVING` for
+  filters over metrics, errors that name the nearest known object.
+- `FINAL` for `Replacing*` engines and `dictGetOrNull` for single-key
+  dictionaries, learned from system tables.
+- Access control through ClickHouse, and a policy file that hides more.
+- An MCP server over stdio and a CLI: `validate`, `sql`, `query`, `serve`.
+
+[Unreleased]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.12.1...v0.13.0
+[0.12.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.12.0...v0.12.1
+[0.12.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.9.5...v0.10.0
+[0.9.5]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.9.4...v0.9.5
+[0.9.4]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.9.3...v0.9.4
+[0.9.3]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.9.2...v0.9.3
+[0.9.2]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.9.1...v0.9.2
+[0.9.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.2.5...v0.3.0
+[0.2.5]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.1.0

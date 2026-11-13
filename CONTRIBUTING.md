@@ -136,24 +136,24 @@ test suite against a ClickHouse service, and builds the package. By
 submitting a contribution you agree it is licensed under the Apache
 License 2.0, like the rest of the project.
 
-## Changelog
+## Changelog and upgrading
 
-A pull request that changes what a user of the package sees adds an entry
-under `[Unreleased]` in `CHANGELOG.md`. Its reader is someone moving to
-the new version, so an entry says what changes for them, in one to three
-lines, in the group `Changed`, `Added`, `Removed` or `Fixed`:
+`CHANGELOG.md` follows [Common Changelog](https://common-changelog.org)
+and is written at release ([Releasing](#releasing)); a pull request
+leaves it alone. A pull request after which a user must change something,
+or gets another number, adds an item under `## Unreleased` in
+`UPGRADING.md`, created if absent:
 
-- **Breaking:** opens an entry that needs something from the reader: a
-  model that no longer loads, a question or metric refused that was
-  answered, a renamed or removed command or API. It says what to do, and
-  comes first in its group.
-- "Answers change" with the number before and after, on a model the
-  reader can name, when a question returns another number.
-- Why goes in a file of `docs/decisions/`, linked by its absolute URL:
-  the section becomes the release notes on GitHub, where a relative link
-  breaks.
+- A step, in the imperative, says what to change: a model that no longer
+  loads, a question or metric refused that was answered, a renamed or
+  removed command or API.
+- An item that starts with "Expect" names a question that returns
+  another number, with the number before and after on a model the reader
+  can name.
 
-A change that touches only tests, CI or the documentation has no entry.
+Links in both files are absolute: a release's `CHANGELOG.md` section
+becomes its notes on GitHub, where a relative link breaks.
+`tests/test_changelog.py` checks the form of both.
 
 ## Releasing
 
@@ -166,10 +166,18 @@ release raises the lower bound to the current
 SQLGlot release and drops the rewrites that release made redundant
 ([design note](docs/decisions/sqlglot-bounds.md)).
 
-1. On the branch to release, move the `[Unreleased]` entries in
-   `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, leaving `[Unreleased]`
-   empty. At the end of the file, add the version's compare link and move
-   the `[Unreleased]` link to compare from the new tag.
+1. On the branch to release, write the release's section of
+   `CHANGELOG.md` from the pull requests merged since the last tag:
+   `## [X.Y.Z] - YYYY-MM-DD`, with `[X.Y.Z]: <its GitHub release>` at the
+   end of the file; groups `Changed`, `Added`, `Removed`, `Fixed`, in that
+   order; one line per change, in the imperative, ending with its pull
+   request, then any issue and the decision in `docs/decisions/` that
+   says why; breaking changes first in their group, as `**Breaking:**`;
+   "answers change" in the line of a change that returns another number.
+   Leave out what changes nothing for a user of the package, such as
+   tests, CI and contributor docs. If `UPGRADING.md` has `## Unreleased`,
+   rename it `## X.Y.Z`, and open the section with one sentence in
+   italics that links to it.
 2. Set `version` in `pyproject.toml` and run `uv lock`, so the package and
    the version the MCP server reports match the tag.
 3. Push, wait for the four required CI jobs, merge with "Rebase and
@@ -183,7 +191,9 @@ SQLGlot release and drops the rewrites that release made redundant
    hashes. Publishing the release on GitHub runs the Publish workflow,
    which checks that the tag is the version in `pyproject.toml` and its
    commit is on `main`, then uploads to PyPI. The release notes are the
-   changelog section plus the install line pinned to the version.
+   changelog section without its heading, one line with the Ossie schema
+   version and the ClickHouse and SQLGlot versions CI tested, and the
+   install line pinned to the version.
 
 ```bash
 git switch main && git pull --ff-only

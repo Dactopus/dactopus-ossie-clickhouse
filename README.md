@@ -154,7 +154,7 @@ file per subject area ([docs/model-authoring.md](https://github.com/Dactopus/dac
   stdio MCP clients.
 - [Design decisions](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md): what was measured or
   evaluated, and what it decided.
-- [Changelog](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md) and [contributing](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CONTRIBUTING.md).
+- [Changelog](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md), [upgrading](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/UPGRADING.md) and [contributing](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CONTRIBUTING.md).
 
 ## What it is not
 

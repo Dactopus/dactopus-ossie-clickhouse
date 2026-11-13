@@ -7,6 +7,26 @@ a minor release may change the Python API.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ROUND` rounds a value exactly halfway away from zero, as the spec
+  now requires (apache/ossie#687): `ROUND(2.5)` is 3 and
+  `ROUND(0.125, 2)` is 0.13 on a `Float64`, where ClickHouse's `round`
+  gave 2 and 0.12. Integers and `Decimal` already rounded so; a
+  `Decimal` keeps its type and scale. `ROUND(x, d)` now takes `d` only
+  as a whole number literal; any other `d` is refused and `validate`
+  reports the field or metric.
+- `MOD(a, b)` and `a % b` of a `Decimal`: ClickHouse's modulo ignores
+  the scale, so `MOD(125.50, 7)` on a `Decimal(18, 2)` was 0.06. It is
+  6.5, through `intDiv`.
+
+### Changed
+
+- `NULLS FIRST | LAST` is accepted in `WITHIN GROUP (ORDER BY ...)`, as
+  the spec's reference grammar has it (apache/ossie#657); a percentile
+  skips NULLs, so it changes nothing. `x IN ()` and `SUM(DISTINCT)`
+  without an argument are refused.
+
 ## [0.16.0] - 2026-11-11
 
 ### Changed

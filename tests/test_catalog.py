@@ -212,6 +212,74 @@ def test_division_keeps_digits(expr, clickhouse, duck):
     check(expr, DUCK, clickhouse, duck, *DECIMAL_BASE)
 
 
+# Spec, expression_language.md "Numeric Semantics": a value exactly halfway rounds
+# away from zero. Expected values written from the spec, not DuckDB. ClickHouse's round
+# gives a Float tie to the even neighbour (2, 0.12); `whole` marks the values an integer
+# column can hold.
+ROUNDS = [
+    ("ROUND(x, 0)", "2.5", "3"), ("ROUND(x, 0)", "-2.5", "-3"),
+    ("ROUND(x, 2)", "0.125", "0.13"), ("ROUND(x, 2)", "-0.125", "-0.13"),
+    ("ROUND(x)", "0.5", "1"), ("ROUND(x)", "-1.5", "-2"), ("ROUND(x)", "2.4", "2"),
+    ("ROUND(x)", "-2.6", "-3"), ("ROUND(x, 1)", "0.25", "0.3"), ("ROUND(x, 1)", "-0.04", "0"),
+    ("ROUND(x, -1)", "25", "30"), ("ROUND(x, -1)", "-25", "-30"), ("ROUND(x, -1)", "24.9", "20"),
+    ("ROUND(x, -2)", "150", "200"), ("ROUND(x, -2)", "-149", "-100"), ("ROUND(x, 3)", "7", "7"),
+]  # fmt: skip
+ROUND_TYPES = {
+    "Float64": "toFloat64('{}')",
+    "Decimal(18, 3)": "toDecimal64('{}', 3)",
+    "Decimal(18, 0)": "toDecimal64('{}', 0)",
+    "Int64": "toInt64('{}')",
+}
+
+
+@pytest.mark.parametrize("type_", ROUND_TYPES)
+@pytest.mark.parametrize(("expr", "x", "expected"), ROUNDS, ids=[f"{e} {x}" for e, x, _ in ROUNDS])
+def test_round_ties_away_from_zero(expr, x, expected, type_, clickhouse):
+    if type_ in ("Decimal(18, 0)", "Int64") and "." in x:
+        pytest.skip("not a whole number")
+    sql = to_clickhouse(expr)
+    value, kind = clickhouse.query(
+        f"SELECT {sql}, toTypeName({sql}) FROM (SELECT {ROUND_TYPES[type_].format(x)} AS x)"
+    ).result_rows[0]
+    assert decimal.Decimal(str(value)) == decimal.Decimal(expected)
+    if type_.startswith("Decimal"):
+        assert kind == type_  # exact, at x's scale
+
+
+def test_round_of_null_is_null(clickhouse):
+    sql = to_clickhouse("ROUND(n, 2) IS NULL AND ROUND(n) IS NULL AND ROUND(n, -1) IS NULL")
+    assert clickhouse.query(f"SELECT {sql} FROM {CH_BASE}").result_rows[0][0] == 1
+
+
+# MOD and % of a Decimal: ClickHouse's modulo takes 125.50 % 7 as 12550 % 7 and answers
+# 0.06. The rest keeps the dividend's sign (DuckDB and Postgres too).
+MODS = [
+    ("MOD(x, 7)", "125.50", "6.5"), ("x % 7", "-125.50", "-6.5"), ("x % 10", "125.53", "5.53"),
+    ("MOD(x, y)", "125.50", "5.5"), ("x % y", "-0.25", "-0.25"),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("expr", "x", "expected"), MODS, ids=[f"{e} {x}" for e, x, _ in MODS])
+def test_mod_of_decimal(expr, x, expected, clickhouse, duck):
+    sql = to_clickhouse(expr)
+    base = f"(SELECT toDecimal64('{x}', 2) AS x, toDecimal64('7.5', 1) AS y)"
+    value, kind = clickhouse.query(f"SELECT {sql}, toTypeName({sql}) FROM {base}").result_rows[0]
+    assert decimal.Decimal(str(value)) == decimal.Decimal(expected)
+    assert kind.startswith("Decimal")
+    duck_base = f"(SELECT CAST('{x}' AS DECIMAL(18, 2)) AS x, CAST('7.5' AS DECIMAL(18, 1)) AS y)"
+    assert duck.execute(f"SELECT {expr} FROM {duck_base}").fetchone()[0] == decimal.Decimal(
+        expected
+    )
+
+
+def test_mod_keeps_integers(clickhouse):
+    sql = to_clickhouse("MOD(i, 3) + x % -2")
+    base = "(SELECT toInt32(-7) AS i, toInt64(7) AS x)"
+    value, kind = clickhouse.query(f"SELECT {sql}, toTypeName({sql}) FROM {base}").result_rows[0]
+    assert value == 0  # -1 + 1
+    assert kind.startswith("Int")
+
+
 @pytest.mark.parametrize("dividend", ["toDate('2026-01-01')", "'3'"])
 def test_division_refuses_non_numbers(dividend, clickhouse):
     # Postgres refuses a date or a string dividend; toFloat64 would take a day count

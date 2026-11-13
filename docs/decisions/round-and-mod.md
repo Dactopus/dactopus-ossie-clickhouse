@@ -4,7 +4,8 @@ The spec fixes two results an engine could otherwise decide
 (`expression_language.md`, "Numeric Semantics", apache/ossie#687, merged
 2026-11-12): `ROUND(x, d)` rounds a value exactly halfway away from
 zero, exact for `DECIMAL` and best effort for `FLOAT`, and `/` is true
-division. Division already was (above).
+division. Division already was
+([Division to `Float64`](division-to-float64.md)).
 
 ClickHouse 26.9.27.3, measured on 2026-11-13: `round` rounds integers and
 `Decimal` ties away from zero (`round(25, -1)` is 30, `round(-150.00,

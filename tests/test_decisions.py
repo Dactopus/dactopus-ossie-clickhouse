@@ -1,7 +1,8 @@
 """Decision records cited from code, tests and docs exist, and the index lists each one.
 
 Code and tests cite a decision by its file under docs/decisions/, so a renamed or
-removed file fails here instead of leaving a comment that points nowhere.
+removed file, or a renamed heading a citation names, fails here instead of leaving
+a comment that points nowhere.
 """
 
 import re
@@ -9,8 +10,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DECISIONS = ROOT / "docs" / "decisions"
-CITED = re.compile(r"docs/decisions/([\w-]+\.md)")
-LINK = re.compile(r"\]\(([^)\s#]+\.md)(?:#([\w-]+))?\)")
+CITED = re.compile(r"docs/decisions/([\w-]+\.md)(?:#([\w-]+))?")
+# A relative link to a Markdown file; a URL (https://...) is not resolved here.
+LINK = re.compile(r"\]\((?![a-z]+:)([^)\s#]+\.md)(?:#([\w-]+))?\)")
 
 
 def _sources():
@@ -27,10 +29,10 @@ def _anchors(path):
 
 def test_every_cited_decision_exists():
     missing = {
-        f"{path.relative_to(ROOT)}: {name}"
+        f"{path.relative_to(ROOT)}: {name}#{anchor}"
         for path in _sources()
-        for name in CITED.findall(path.read_text())
-        if not (DECISIONS / name).is_file()
+        for name, anchor in CITED.findall(path.read_text())
+        if not (DECISIONS / name).is_file() or (anchor and anchor not in _anchors(DECISIONS / name))
     }
     assert not missing, sorted(missing)
 

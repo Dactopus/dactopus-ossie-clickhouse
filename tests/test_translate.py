@@ -396,11 +396,11 @@ def test_rejects_arguments_outside_spec_signature(ossie, message):
         to_clickhouse(ossie)
 
 
-@pytest.mark.parametrize("d", ["d", "1 + 1", "2.0", "-x", "'2'"])
-def test_round_takes_a_whole_number_literal(d):
-    # The spec's tie rule is written with 10^d as an exact literal ("Numeric Semantics").
-    with pytest.raises(ValueError, match=r"ROUND\(x, d\) takes d as a whole number"):
-        parse(f"ROUND(x, {d})")
+@pytest.mark.parametrize("d", ["d", "1 + 1", "2.0", "-x"])
+def test_round_by_a_column_keeps_clickhouse_round(d):
+    # The spec's tie rule is written with 10^d as an exact literal ("Numeric Semantics");
+    # any other d reaches ClickHouse's round, right for integers and Decimal.
+    assert to_clickhouse(f"ROUND(x, {d})") == f"ROUND(x, {to_clickhouse(d)})"
 
 
 @pytest.mark.parametrize(

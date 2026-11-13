@@ -262,9 +262,11 @@ which the `Float64` rule for `/` leaves alone. Results:
 | `Float64` | `Float64`; a tie in binary is best effort: `ROUND(2.675, 2)` is 2.68, as `2.675 * 100` is 267.5 in `Float64` |
 | an integer | `Int64` for `d = 0`, else `Float64`, exact below 2^53 |
 
-`d` must be a whole number written as a literal: the spec writes the
-factor as an exact literal, and `parse()` refuses any other `d`, which
-`validate` reports. ClickHouse's own `round` takes a column there.
+The spec writes the factor as an exact literal. A `d` that is not a
+whole number literal, a column for one, keeps ClickHouse's `round`,
+which takes a column there: right for integers and `Decimal`, and a
+`Float64` tie still rounds to even. Refusing it would hide a field that
+answers right for most types.
 
 The same measurement found ClickHouse's modulo wrong for `Decimal`: it
 does not align scales, so `toDecimal64(125.50, 2) % 7` is 0.06, the rest

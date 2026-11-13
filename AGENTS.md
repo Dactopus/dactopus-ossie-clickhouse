@@ -1,19 +1,12 @@
 # AGENTS.md
 
-Guidance for AI coding agents working in this repository. It holds what the
-code does not show. The rest is where it belongs: `README.md` describes
-the product, `docs/design.md` records each decision with its evidence,
+Guidance for AI coding agents working in this repository: an executor of
+the [Apache Ossie](https://github.com/apache/ossie) semantic model
+standard for ClickHouse, with an MCP server. It holds what the code does
+not show. The rest is where it belongs: `README.md` describes the product,
+`docs/design.md` records each decision with its evidence,
 `docs/model-authoring.md` what a model author sees, `CONTRIBUTING.md` the
 setup, the layout and the release steps.
-
-## Project
-
-dactopus-ossie-clickhouse implements the
-[Apache Ossie](https://github.com/apache/ossie) semantic model standard
-for ClickHouse: it reads an Ossie description, translates metric
-definitions into ClickHouse SQL, answers questions posed in business
-terms (metrics, dimensions, filters), and serves the description and the
-queries to AI agents over MCP. Licensed under Apache 2.0.
 
 ## Language
 
@@ -112,26 +105,23 @@ Translation:
   `WITHIN GROUP` included, sorts NULLs last both ways. Keep both when
   parsing switches to an upstream parser.
 
-Planning:
+Planning (`planner.py`; each rule and refusal has a section in
+`docs/design.md`):
 
-- Deterministic: datasets from `source`, joins from `relationships`, one
-  `SELECT` per question. `LEFT JOIN` from one root along the one path to
-  each dataset, only along relationships whose `to_columns` cover a key
-  of the target. Keys and relationship columns name fields, never source
-  columns. A joined subtree is read as a derived table of the distinct
-  values the question asks of it (ClickHouse does not enforce key
-  uniqueness), unless every aggregate is repeat-safe or the subtree is
-  dictionaries (`Planner._dedup`; `docs/design.md`, "A key stored twice on
-  the one side"). A row filter the root does not reach is a semi-join; metrics
-  no one root answers together are stitched. A model's metric whose
-  aggregates each read a different dataset is split into components, one
-  per aggregate, answered over their own dataset's rows and stitched
-  (Layer 3, apache/ossie#653 section 5). A whole metric of a dataset by
-  a field it does not reach is answered over its own rows joined to a
-  spine, the distinct (dimensions, key) pairs of a question rooted at a
-  dataset the question names (`Planner._bridge`); a metric of components
-  keeps #653 section 5.3. The rules and the refusals are in
-  `docs/design.md`; the code is `planner.py`.
+- Deterministic: one `SELECT` per question, datasets from `source`, joins
+  from `relationships`. Keys and relationship columns name fields, never
+  source columns.
+- `LEFT JOIN` from one root along the one path to each dataset, only along
+  relationships whose `to_columns` cover a key of the target.
+- ClickHouse does not enforce key uniqueness, so a joined subtree is read
+  as a derived table of the distinct values the question asks of it,
+  unless every aggregate is repeat-safe or the subtree is dictionaries
+  (`Planner._dedup`).
+- Beyond one root: a row filter the root does not reach is a semi-join,
+  metrics no one root answers together are stitched, a model's metric
+  whose aggregates read different datasets is split into components
+  (apache/ossie#653 section 5), and a dataset's metric by a field it does
+  not reach is joined to a spine (`Planner._bridge`).
 - The planner refuses a question it cannot answer with the right number:
   an aggregate that repeats could change, an aggregate over aggregates,
   two paths to one dataset. Errors name the nearest known object; agents
@@ -159,8 +149,9 @@ Planning:
 - Tests with the `clickhouse` fixture need a server at
   `OSSIE_CLICKHOUSE_URL` (default `http://127.0.0.1:8123`) and skip
   otherwise; access-control tests also need SQL access management on
-  the server. `tests/test_compliance.py`, `tests/test_expression_fixtures.py`
-  and the fixture canary need a checkout of apache/ossie at `OSSIE_REPO`. `CONTRIBUTING.md` has the
+  the server. `tests/test_compliance.py`,
+  `tests/test_expression_fixtures.py` and the fixture canary need a
+  checkout of apache/ossie at `OSSIE_REPO`. `CONTRIBUTING.md` has the
   setup.
 - `tests/fixtures/tpcds.yaml` is an exact copy of Ossie's
   `examples/tpcds_semantic_model.yaml`; a canary checks it.
@@ -185,9 +176,6 @@ uv run dactopus-ossie-clickhouse query tests/fixtures/tpcds.yaml -m total_sales 
 uv run dactopus-ossie-clickhouse serve tests/fixtures/tpcds.yaml   # MCP over stdio
 ```
 
-## Repository status
-
-Released versions are in `CHANGELOG.md` and on PyPI, where a release on
-GitHub publishes them. `README.md` is the PyPI page, so its links are
-absolute. Pull requests are merged with rebase; releases follow
-`CONTRIBUTING.md`.
+`README.md` is the PyPI page, so its links are absolute. Pull requests
+are merged with rebase; releases follow `CONTRIBUTING.md`, and a GitHub
+release publishes to PyPI.

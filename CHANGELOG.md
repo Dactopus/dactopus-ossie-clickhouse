@@ -13,6 +13,8 @@ version is 0, a minor release may change the Python API.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-13
+
 ### Changed
 
 - **Breaking:** `x IN ()`, which ClickHouse answered as false, and
@@ -635,7 +637,8 @@ TPC-DS reference model.
 - Access control through ClickHouse, and a policy file that hides more.
 - An MCP server over stdio and a CLI: `validate`, `sql`, `query`, `serve`.
 
-[Unreleased]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/compare/v0.13.0...v0.14.0

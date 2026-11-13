@@ -28,6 +28,8 @@ HEADING = re.compile(r"## \[(\d+\.\d+\.\d+)\] - (\d{4}-\d{2}-\d{2})")
 NOTICE = re.compile(r"_[^_].*[^_]_")
 REFERENCE = r"\[[^\]]+\]\(https://[^)]+\)"
 CHANGE = re.compile(rf"- (\*\*Breaking:\*\* )?([A-Z][a-z]+)\b.* \({REFERENCE}(, {REFERENCE})*\)")
+LINK_DEFINITION = re.compile(r"\[([^\]]+)\]: (\S+)")
+LINK_TARGET = re.compile(r"\]\(([^)\s]+)\)")
 UPGRADE_LINK = re.compile(rf"\({re.escape(REPO)}/blob/main/UPGRADING\.md#(\d+)\)")
 # Imperatives that end like a third person, a past or a gerund.
 IMPERATIVES = {"Bring", "Embed", "Feed", "Need", "Seed", "Shed", "Speed", "String"}
@@ -53,7 +55,7 @@ def _releases(lines):
     for number, line in enumerate(lines, 1):
         if line.startswith("## "):
             found.append([line, number, []])
-        elif found and not line.startswith("["):
+        elif found and not LINK_DEFINITION.fullmatch(line):
             found[-1][2].append((number, line))
     return found
 
@@ -132,7 +134,7 @@ def _check_changelog():
     lines = (ROOT / "CHANGELOG.md").read_text().splitlines()
     if not lines or lines[0] != "# Changelog":
         problems.append("CHANGELOG.md: the first line is `# Changelog`")
-    references = dict(re.findall(r"^\[(\d+\.\d+\.\d+)\]: (\S+)$", "\n".join(lines), flags=re.M))
+    references = dict(match.groups() for match in map(LINK_DEFINITION.fullmatch, lines) if match)
     versions, notices = [], {}
     for heading, number, body in _releases(lines):
         match = HEADING.fullmatch(heading)
@@ -154,7 +156,7 @@ def _check_changelog():
                 f"`[{version}]: {RELEASES}{version}`"
             )
         notices[version] = _check_release(version, body, problems)
-    extra = sorted(set(references) - set(versions), key=_semver)
+    extra = sorted(set(references) - set(versions))
     if extra:
         problems.append(f"CHANGELOG.md: link references without a release: {', '.join(extra)}")
     return problems, notices
@@ -196,4 +198,18 @@ def test_upgrading_matches_the_notices():
                 f"CHANGELOG.md: {version}'s notice links to #{notice}, not to "
                 f"its own #{_anchor(version)}"
             )
+    assert not problems, "\n".join(problems)
+
+
+def test_links_are_absolute():
+    problems = []
+    for name in ("CHANGELOG.md", "UPGRADING.md"):
+        for number, line in enumerate((ROOT / name).read_text().splitlines(), 1):
+            definition = LINK_DEFINITION.fullmatch(line)
+            targets = [definition.group(2)] if definition else LINK_TARGET.findall(line)
+            problems += [
+                f"{name}:{number}: a link is absolute: {target}"
+                for target in targets
+                if not target.startswith("https://")
+            ]
     assert not problems, "\n".join(problems)

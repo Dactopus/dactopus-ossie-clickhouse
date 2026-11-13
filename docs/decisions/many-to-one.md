@@ -3,10 +3,12 @@
 The spec has no cardinality attribute. A relationship is used only when its
 `to_columns` cover the primary key or a unique key of the target, which is
 what makes a `LEFT JOIN` safe against fan-out. A row filter on the many
-side of a relationship is a semi-join, and metrics of several facts are
-stitched (both below). A metric of the one side grouped by a dimension of
-the many side counts each of its rows once per group, over a spine of
-distinct keys ([A metric of the one side by the many side](one-side-by-many-side.md)).
+side of a relationship is a semi-join
+([Semi-joins for filters on the many side](semi-joins.md)), and metrics
+of several facts are stitched
+([Stitch metrics of several facts](stitching.md)). A metric of the one
+side grouped by a dimension of the many side counts each of its rows
+once per group, over a spine of distinct keys ([A metric of the one side by the many side](one-side-by-many-side.md)).
 
 The spec calls `to_columns` "Primary/unique key columns"; covering, a
 superset of a key, is how the reference validator reads it

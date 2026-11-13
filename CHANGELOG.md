@@ -18,7 +18,8 @@ version is 0, a minor release may change the Python API.
 - **Breaking:** `x IN ()`, which ClickHouse answered as false, and
   `SUM(DISTINCT)` without an argument are refused, as the spec's
   fixtures require; `validate` reports a field or metric that writes
-  them. Write `FALSE` for `x IN ()`. `NULLS FIRST | LAST` is accepted in `WITHIN GROUP (ORDER BY ...)`,
+  them. Write `FALSE` for `x IN ()`.
+- `NULLS FIRST | LAST` is accepted in `WITHIN GROUP (ORDER BY ...)`,
   where it changes nothing.
 
 ### Fixed

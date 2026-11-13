@@ -11,7 +11,7 @@ aggregate call of a model's metric is a component, evaluated over the rows
 of its home dataset, the one dataset its arguments read. Components
 with the same home form a branch with the question's dimensions and row
 filters (sections 5.3 and 5.4); the branches are merged on the dimensions
-(next section), and the metric's expression is evaluated over the
+([Components in the merged query](#components-in-the-merged-query)), and the metric's expression is evaluated over the
 component values. The expression is the translator's output,
 [Division to `Float64`](division-to-float64.md) included: the aggregates in the rewritten tree are
 replaced by the merged values.

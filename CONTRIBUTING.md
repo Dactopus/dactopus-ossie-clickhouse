@@ -168,7 +168,8 @@ SQLGlot release and drops the rewrites that release made redundant
 
 1. On the branch to release, move the `[Unreleased]` entries in
    `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, leaving `[Unreleased]`
-   empty, and add the version's compare link at the end of the file.
+   empty. At the end of the file, add the version's compare link and move
+   the `[Unreleased]` link to compare from the new tag.
 2. Set `version` in `pyproject.toml` and run `uv lock`, so the package and
    the version the MCP server reports match the tag.
 3. Push, wait for the four required CI jobs, merge with "Rebase and

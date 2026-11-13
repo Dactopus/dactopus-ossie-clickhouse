@@ -12,7 +12,7 @@ out (sections 3.2 and 3.4, Appendix A), and the `execute_query` profile
 beyond #653, kept as they are because a refusal would gain a user nothing
 today: each has one meaning, and the SQL returns it. Decision of
 2026-11-06: no behavior changes for #653 where the answer is right, and
-this section keeps the choice from being reopened without new evidence.
+this record keeps the choice from being reopened without new evidence.
 An answer that could be wrong is refused instead, as #653 refuses it (the
 last row).
 

@@ -146,22 +146,17 @@ Planning (`planner.py`; each rule and refusal has a section in
   `.github/workflows/latest.yml` runs the suite weekly on the newest
   SQLGlot and on apache-ossie from `main`, so a red canary means a rule
   to revisit, not a broken answer.
-- Tests with the `clickhouse` fixture need a server at
-  `OSSIE_CLICKHOUSE_URL` (default `http://127.0.0.1:8123`) and skip
-  otherwise; access-control tests also need SQL access management on
-  the server. `tests/test_compliance.py`,
-  `tests/test_expression_fixtures.py` and the fixture canary need a
-  checkout of apache/ossie at `OSSIE_REPO`. `CONTRIBUTING.md` has the
-  setup.
+- Tests that need a ClickHouse server (`OSSIE_CLICKHOUSE_URL`) or a
+  checkout of apache/ossie (`OSSIE_REPO`) skip without one. The setup for
+  both is in `CONTRIBUTING.md`, "Setup".
 - `tests/fixtures/tpcds.yaml` is an exact copy of Ossie's
   `examples/tpcds_semantic_model.yaml`; a canary checks it.
 
 ## Development
 
-Python 3.11+, managed with uv. `research/` holds studies behind decisions
-and is never imported by the library or tests; `scripts/` is maintenance,
-outside the package. Keep modules flat; add a package level only when a
-module outgrows one file.
+Python 3.11+, managed with uv; the layout is in `CONTRIBUTING.md`,
+"Layout". `research/` is never imported by the library or tests. Keep
+modules flat; add a package level only when a module outgrows one file.
 
 ```bash
 uv sync                                        # install with dev tools
@@ -176,6 +171,5 @@ uv run dactopus-ossie-clickhouse query tests/fixtures/tpcds.yaml -m total_sales 
 uv run dactopus-ossie-clickhouse serve tests/fixtures/tpcds.yaml   # MCP over stdio
 ```
 
-`README.md` is the PyPI page, so its links are absolute. Pull requests
-are merged with rebase; releases follow `CONTRIBUTING.md`, and a GitHub
-release publishes to PyPI.
+`README.md` is the PyPI page, so its links are absolute. Releases follow
+`CONTRIBUTING.md`, "Releasing".

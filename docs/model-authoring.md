@@ -95,7 +95,8 @@ does. The planner refuses what that would get wrong:
   change it: `MIN`, `MAX`, `APPROX_COUNT_DISTINCT` or `DISTINCT`, and
   ClickHouse's `uniq` family, `any`, `anyLast`, `argMin`, `argMax`,
   `groupUniqArray`, `groupBitAnd`, `groupBitOr`, `groupBitmap`,
-  `singleValueOrNull`, with the `If`, `OrNull`, `OrDefault` or `Distinct`
+  `singleValueOrNull`, and `any_value`, `min_by` and `max_by` in any case,
+  with the `If`, `OrNull`, `OrDefault` or `Distinct`
   combinators (`uniqExactIf`); any aggregate with `Distinct` (`sumDistinct`).
   `SUM(store.s_number_employees)`
   over sales would count a store's staff once per sale. An argument that

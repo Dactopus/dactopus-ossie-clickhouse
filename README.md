@@ -86,69 +86,44 @@ Click the diagram for the [interactive version](https://dactopus.github.io/dacto
 one question from an agent followed to its SQL, line by line, and two
 questions it refuses.
 
-- Datasets come from `source`, joins from `relationships`. One root
-  dataset, `LEFT JOIN` to the dimensions the question touches, only along
-  relationships whose `to_columns` cover a primary or unique key of the
-  target (many-to-one). ClickHouse does not enforce that a key is unique,
-  so when an aggregate counts rows, each joined dataset is read as a
-  derived table of the distinct values the question asks of it, and a row
-  of the root counts once in each group it matches. `SETTINGS`
-  [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls)
-  so unmatched rows get NULL, not ClickHouse defaults, and
+- One question is one ClickHouse `SELECT`, built from the model alone:
+  datasets from `source`, joins from `relationships`, many-to-one only,
+  as the primary and unique keys show. The same question and model always
+  give the same SQL.
+- No row is counted twice. ClickHouse does not enforce unique keys, so a
+  joined dataset is read as its distinct values where a repeat would
+  change a sum. A filter on rows that reference the counted ones keeps
+  each counted row once (a semi-join), and grouped by a field of such
+  rows, each counts once per group. Metrics of different facts, and
+  each aggregate of a metric over several datasets, are computed over
+  their own rows and merged on the dimensions, as the Layer 3 spec
+  requires. [Model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#keys-decide-which-joins-are-allowed)
+  has the rules with examples.
+- SQL semantics, not ClickHouse defaults: every query sets
+  [`join_use_nulls = 1`](https://clickhouse.com/docs/operations/settings/settings#join_use_nulls),
   [`aggregate_functions_null_for_empty = 1`](https://clickhouse.com/docs/operations/settings/settings#aggregate_functions_null_for_empty)
-  so a sum over no rows is NULL, as in SQL, not 0, and
-  [`transform_null_in = 0`](https://clickhouse.com/docs/operations/settings/settings#transform_null_in)
-  so a NULL matches nothing in `IN`.
-- A filter on rows that reference the root, such as sessions with a
-  purchase of some value, is a semi-join: each session with at least one
-  such purchase counts once. So is a filter on rows that reference what
-  the root references, such as order lines whose product is in a
-  category, and, with the order lines named in a filter, orders with a
-  line in a category
-  ([semi-joins](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#semi-joins-for-filters-on-the-many-side)).
-- Metrics of different facts, such as revenue and returns by region, are
-  each computed from their own root and merged on the dimensions
-  ([stitching](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#stitch-metrics-of-several-facts)): every
-  region of either fact appears, and a fact without rows in a region
-  gives NULL for a sum and 0 for a count.
-- A model's metric over several datasets, such as sales per customer,
-  `SUM(orders.amount) / COUNT(DISTINCT customers.id)`, computes each
-  aggregate over its own dataset's rows, as the Layer 3 spec requires, and
-  divides the results: the customers are all customers, with an order or
-  without ([components](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md#evaluate-each-aggregate-over-its-own-dataset)).
-- A metric declared on a dataset (`datasets[].metrics`) is asked for as
-  `dataset.metric` and computed over that dataset's rows, `COUNT(*)`
-  included ([model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#metrics-on-a-dataset)).
-- Filters over fields go to `WHERE`; filters that name a metric or contain
-  an aggregate (`total_sales > 1000000`) go to `HAVING`, and may only use
-  the question's own dimensions besides aggregates. A window metric
-  (`RANK() OVER ...`) cannot be filtered: select it and filter the rows.
-  A filter is one expression, never a statement, and its functions reach
-  ClickHouse as written: what a caller may run there is decided by
-  ClickHouse grants and quotas, not by this library.
-- Tables with a [`ReplacingMergeTree`](https://clickhouse.com/docs/engines/table-engines/mergetree-family/replacingmergetree)
-  engine, replicated or on ClickHouse Cloud, and `Distributed` tables,
-  materialized views and `Merge` tables over them, are read with [`FINAL`](https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier);
-  single-key [dictionaries](https://clickhouse.com/docs/sql-reference/dictionaries) are read with
-  `dictGetOrNull` instead of a join. Both are learned from `system.tables`
-  and `system.dictionaries`, not configured.
-- Expressions in `sql` (OSSIE_SQL_2026), or in the `OSSIE_SQL_2026` or
-  `ANSI_SQL` dialect, are translated on the
-  [SQLGlot](https://github.com/tobymao/sqlglot) AST; the spec's function
-  catalog is mapped to ClickHouse equivalents and checked by value against
-  [DuckDB](https://duckdb.org) and the spec text. `AGG`, which the spec
-  reserves, is refused. Any other function
-  reaches ClickHouse as written (`toString`, `sumIf`, `DAYOFWEEK`, a
-  user-defined function), and `validate --url` checks the server has it.
-- Rows come sorted by the first metric, descending, unless `order_by` says
-  otherwise, so the top rows come first and nobody has to rank them by hand.
-  Rows without a value (NULL) come last in either direction. Ties are
-  broken by the dimensions, ascending, so a `limit` keeps the same rows on
-  every run.
-- Names resolve case-insensitively; SQL uses the physical names as the
-  model writes them. The same question and model always give the same SQL.
-- Errors name the nearest known metric, field or dataset, so an agent can
-  recover from a typo without help.
+  and [`transform_null_in = 0`](https://clickhouse.com/docs/operations/settings/settings#transform_null_in),
+  so an unmatched row reads NULL, a sum over no rows is NULL and a NULL
+  matches nothing in `IN`.
+- ClickHouse specifics are learned from `system.tables` and
+  `system.dictionaries`, not configured: versioned tables
+  ([`ReplacingMergeTree`](https://clickhouse.com/docs/engines/table-engines/mergetree-family/replacingmergetree)
+  and what reads them) are read with [`FINAL`](https://clickhouse.com/docs/sql-reference/statements/select/from#final-modifier),
+  single-key [dictionaries](https://clickhouse.com/docs/sql-reference/dictionaries)
+  with `dictGetOrNull` instead of a join.
+- Expressions are translated on the [SQLGlot](https://github.com/tobymao/sqlglot)
+  AST. The spec's function catalog is mapped to ClickHouse and checked by
+  value against [DuckDB](https://duckdb.org) and the spec text; any other
+  function reaches ClickHouse as written, and `validate --url` checks the
+  server has it.
+- A question it cannot answer with the right number is refused, and
+  errors name the nearest known metric, field or dataset, so an agent can
+  recover without help.
+
+How filters, sorting and limits work is in
+[MCP setup](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/mcp-setup.md#tools);
+the decisions behind all of this, with their evidence, in
+[design decisions](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md).
 
 ## CLI
 
@@ -175,8 +150,8 @@ file per subject area ([docs/model-authoring.md](https://github.com/Dactopus/dac
   row policies decide; the policy file hides more.
 - [MCP setup](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/mcp-setup.md): Claude Desktop, Claude Code and other
   stdio MCP clients.
-- [Design decisions](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md): what was measured or evaluated, and
-  the remote server design that waits for demand.
+- [Design decisions](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/design.md): what was measured or
+  evaluated, and what it decided.
 - [Changelog](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CHANGELOG.md) and [contributing](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/CONTRIBUTING.md).
 
 ## What it is not
@@ -187,18 +162,13 @@ data must already be in ClickHouse.
 
 ## Limits
 
-- One root dataset per group of metrics, which reaches every dataset it
-  touches through many-to-one relationships, along one path to each. Two
-  paths to the same dataset are refused as ambiguous. Metrics of
-  different facts are stitched, so each dimension and row filter must be
-  reachable from each fact, and from the dataset of each aggregate of a
-  metric over several datasets. A metric of one dataset by a field of a
-  dataset that reaches it counts each of its rows once per group.
-- Metrics are computed over the root's rows. A question whose metric
-  would count a joined dataset's rows repeatedly is answered over that
-  dataset's own rows, each once, or refused with a message; see [model
-  authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#keys-decide-which-joins-are-allowed).
-- Joins are many-to-one only, inferred from primary and unique keys.
+- Joins are many-to-one only, inferred from primary and unique keys, along
+  one path to each dataset: two paths to the same dataset are refused as
+  ambiguous.
+- A metric over several datasets needs every dimension and row filter
+  reachable from the dataset of each of its aggregates, as Layer 3
+  requires; otherwise the question is refused with a message that says
+  what would answer it ([model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md#a-metric-over-two-datasets)).
 - No time grain and no derived-dimension syntax: declare a field per
   grain or band (see [model authoring](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/model-authoring.md)). The
   spec has no such attributes yet, and this project does not invent them.

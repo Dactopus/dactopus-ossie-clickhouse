@@ -1,14 +1,12 @@
 # MCP setup for desktop agents
 
 The server speaks [MCP](https://modelcontextprotocol.io) over stdio: the
-agent launches it as a subprocess.
-ClickHouse credentials come from the environment (`OSSIE_CLICKHOUSE_URL`,
-default `http://127.0.0.1:8123`) or `--url`; `https://` connects with TLS
-on any port. Everything the agent sees and
-runs is limited to that ClickHouse user. The zone of today and of times
-without an offset comes from `OSSIE_CLICKHOUSE_TIME_ZONE` or
-`--time-zone` when the deployment's differs from the model's
-([Time zone](model-authoring.md#time-zone)).
+agent launches it as a subprocess. It connects as the CLI does
+(`OSSIE_CLICKHOUSE_URL` or `--url`, `OSSIE_CLICKHOUSE_TIME_ZONE` or
+`--time-zone`; see
+[Quick start](https://github.com/Dactopus/dactopus-ossie-clickhouse#quick-start)),
+and everything the agent sees and runs is limited to that ClickHouse
+user.
 
 ## Claude Desktop
 
@@ -68,7 +66,7 @@ dactopus-ossie-clickhouse: hidden from 'analyst' by the policy: 1 dataset, 14 fi
 ## Claude Code and other clients
 
 Any MCP client that supports stdio works the same way. For
-[Claude Code](https://docs.claude.com/en/docs/claude-code/mcp):
+[Claude Code](https://code.claude.com/docs/en/mcp):
 
 ```bash
 claude mcp add dactopus-ossie-clickhouse -e OSSIE_CLICKHOUSE_URL=http://USER:PASSWORD@127.0.0.1:8123 -- \
@@ -101,8 +99,11 @@ mean" hint reaches the agent.
 
 `filters` are Ossie expressions: over `dataset.field` they go to `WHERE`
 (`date_dim.d_year = 1998`); over a metric name or an aggregate they go to
-`HAVING` (`total_sales > 1000000`). A window metric cannot be filtered:
-select it and filter the rows. `order_by` names metrics or dimensions,
+`HAVING` (`total_sales > 1000000`) and may read, besides aggregates, only
+the question's own dimensions. A window metric cannot be filtered:
+select it and filter the rows. A filter is one expression, never a
+statement, and its functions reach ClickHouse as written: what a caller
+may run there is decided by ClickHouse grants and quotas. `order_by` names metrics or dimensions,
 `"name desc"` for descending; empty means the first metric descending.
 Ties are broken by the dimensions, ascending. Rows without a value come
 last either way, so `limit` may cut them off. A `Time` or `DateTime` value
@@ -122,8 +123,6 @@ instructions.
 
 ## Access
 
-The process runs as one ClickHouse user. Give each agent its own user with
-the grants and row policies it should have; the model it sees is trimmed
-to match. `--policy policy.yaml` hides further objects per user or role.
-Details in [access-control.md](access-control.md).
-A remote, multi-user server with OAuth is designed but not built; see [design.md](design.md).
+The process runs as one ClickHouse user: give each agent its own user,
+and hide more with `--policy policy.yaml`. Details in
+[access-control.md](access-control.md).

@@ -42,7 +42,7 @@ CREATE ROW POLICY eu ON shop.orders FOR SELECT USING region = 'EU' TO analyst;
 
 Then run `dactopus-ossie-clickhouse serve` (or `query`) with that user's URL. The
 [MCP](https://modelcontextprotocol.io) server is one process per user; a shared multi-user server with OAuth
-is designed but not built (see [design.md](design.md)).
+waits for demand in [#8](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues/8).
 
 Reading [`system.dictionaries`](https://clickhouse.com/docs/operations/system-tables/dictionaries)
 needs an explicit grant. Without it,

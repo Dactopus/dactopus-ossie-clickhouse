@@ -1,28 +1,188 @@
 # Design decisions
 
-Decisions that rest on a measurement or an evaluation, recorded so they are
-not relitigated without new evidence. [AGENTS.md](../AGENTS.md) holds the
-rules an agent needs in every session; the detailed rules of the planner
-and the translator, with their reasoning, are here.
+Decisions that rest on a measurement or an evaluation, each with its
+evidence, recorded so they are not relitigated without new evidence. What
+a model author sees of them, with examples, is in
+[model-authoring.md](model-authoring.md); the release history is in
+[CHANGELOG.md](../CHANGELOG.md).
 
-## `FINAL` instead of `argMax` for `ReplacingMergeTree` tables
+## Contents
 
-Measured on 3.5 million rows with 20% duplicate versions: `FINAL` took
-94 ms against 150 ms for an `argMax` rewrite alone, 90 against 125 with a
-join. `FINAL` is also one keyword to generate where `argMax` is a subquery
-per dataset. `argMax` was not built.
+- **Scope and process**
+  - [Questions are the only query input](#questions-are-the-only-query-input)
+  - [Spec over engine where they disagree](#spec-over-engine-where-they-disagree)
+  - [SQLGlot bounds move only in minor releases](#sqlglot-bounds-move-only-in-minor-releases)
+  - [apache-ossie is vendored until it reaches PyPI](#apache-ossie-is-vendored-until-it-reaches-pypi)
+- **Model**
+  - [Keys and relationships name fields](#keys-and-relationships-name-fields)
+  - [Source columns in a dataset's metric](#source-columns-in-a-datasets-metric)
+- **Translator**
+  - [Parsing with SQLGlot's default dialect](#parsing-with-sqlglots-default-dialect)
+  - [Functions outside the spec pass through as written](#functions-outside-the-spec-pass-through-as-written)
+  - [Catalog calls keep their spec signature](#catalog-calls-keep-their-spec-signature)
+  - [AGG is reserved](#agg-is-reserved)
+  - [Exact percentiles](#exact-percentiles)
+  - [Division to `Float64`](#division-to-float64)
+  - [ROUND ties away from zero, MOD through intDiv](#round-ties-away-from-zero-mod-through-intdiv)
+  - [NULL placement in ORDER BY](#null-placement-in-order-by)
+  - [Window frames limited to the spec's](#window-frames-limited-to-the-specs)
+- **Planner**
+  - [Many-to-one inferred from keys](#many-to-one-inferred-from-keys)
+  - [Paths of several relationships](#paths-of-several-relationships)
+  - [Refuse a metric over another dataset's rows](#refuse-a-metric-over-another-datasets-rows)
+  - [Aggregates over aggregates are refused](#aggregates-over-aggregates-are-refused)
+  - [Evaluate each aggregate over its own dataset](#evaluate-each-aggregate-over-its-own-dataset)
+  - [Stitch metrics of several facts](#stitch-metrics-of-several-facts)
+  - [Semi-joins for filters on the many side](#semi-joins-for-filters-on-the-many-side)
+  - [A metric of the one side by the many side](#a-metric-of-the-one-side-by-the-many-side)
+  - [A metric that reads no dataset](#a-metric-that-reads-no-dataset)
+  - [Answers beyond Layer 3](#answers-beyond-layer-3)
+- **ClickHouse**
+  - [`FINAL` instead of `argMax` for `ReplacingMergeTree` tables](#final-instead-of-argmax-for-replacingmergetree-tables)
+  - [The model's time zone, UTC by default](#the-models-time-zone-utc-by-default)
+- **MCP server**
+  - [Remote MCP server, designed, not built](#remote-mcp-server-designed-not-built)
 
-A `Distributed` table, materialized view or `Merge` table is read with
-`FINAL` when the table it reads keeps versions. Checked on ClickHouse
-26.9: `FINAL` on the first two over a plain `MergeTree` fails with
-`ILLEGAL_FINAL`, so it cannot be added blindly; a `Merge` table applies it
-to the tables that support it and skips the rest. When the table read is
-hidden from the connected user, the dataset is read without `FINAL` and
-`validate` reports it: guessing `FINAL` would break queries over plain
-tables that work today, and `dedup: final` settles it per dataset.
-`engine_full` names a `Distributed` or `Merge` table's tables as quoted
-strings on 26.1 through 26.9; `system.tables` names a view's target only
-from 26.6 on, so the introspection query does not select it.
+## Questions are the only query input
+
+The spec has two query surfaces. The Semantic Query Interface takes a
+question: metrics, dimensions and filters by name, what the CLI and the
+`query` MCP tool accept. The Relational Query Interface (apache/ossie#354)
+takes SQL over the model's datasets as relations, with `AGG(metric)` for
+a measure. Decision of 2026-11-01: this executor compiles questions
+straight into ClickHouse SQL and does not read `AGG()` SQL. One input
+grammar keeps one planner, the one place where every ClickHouse trait
+(`FINAL`, dictionaries, the model's zone, semi-joins) is applied; a
+second grammar would need the same rules a second time or a rewriter of
+layer-2 SQL into questions, which the spec's own reference rewriter
+(apache/ossie#502) is meant to be.
+
+Compliance is shown on results. The spec's query compliance cases
+(`compliance/query` in apache/ossie, since apache/ossie#632) ship the
+SCOTT data, a model with dataset metrics and, per case, an `AGG()` query
+with its expected result as standard SQL over literals.
+`tests/test_compliance.py` loads the data through DuckDB into ClickHouse,
+reads the model as it is, runs each case as the question it asks and
+compares by the suite's README: columns by position, rows as multisets,
+exact numerics equal, approximate ones within 1e-9. The weekly workflow
+runs it on Ossie's `main`, so a case added upstream fails there until it
+is listed here.
+
+On 2026-11-10, at apache/ossie `d700cde`, the suite has 32 cases
+(apache/ossie#628 added 31):
+
+| Cases | Count | Outcome |
+|-------|-------|---------|
+| `a01`-`a04`, `a06`, `a07`, `b01`, `b02`, `b04`, `b18`, `b20` | 11 | asked as a question, the result equals the expected one |
+| the rest | 21 | no question has the query's form |
+
+`b04`, `b18` and `b20` ask for a metric of the one side (`dept_count`)
+grouped or filtered by the many side (`emp.job`); see "A metric of the
+one side by the many side". The 21 other queries use a form a question
+does not have: an
+expression over measures in the `SELECT` list, grouping by an expression
+that is no field, `ROLLUP`, a CTE, a subquery, a dataset read twice, a
+join on a range or on columns that are no key, `RIGHT`, `FULL` and
+`CROSS JOIN`, and a `LEFT JOIN` from the one side, which keeps a
+department without employees where a question keeps `emp` rows. Each is
+named with its form in `NOT_ASKED`.
+
+The suite demands standard SQL semantics, which every generated query
+already sets: `SUM` over no rows is NULL
+(`aggregate_functions_null_for_empty = 1`) and `COUNT` is 0.
+
+## Spec over engine where they disagree
+
+DuckDB supplies expected values in tests as a second opinion close to the
+spec's Postgres-like semantics, not as ground truth. Where DuckDB and the
+spec differ, the test pins the spec's value with a section reference:
+`REGEXP_REPLACE` replaces every match, `DAYOFWEEK` is ISO (Monday is 1),
+`MILLISECOND` is the component, `PERCENTILE_DISC` is the first value whose
+cumulative share reaches `p` (ClickHouse's `quantileExact` picks one too
+high whenever `p * n` is whole).
+
+## SQLGlot bounds move only in minor releases
+
+Some rewrites in `translate.py` cover gaps in SQLGlot's ClickHouse
+generator, and fixes for them go upstream. A rewrite left in place after
+SQLGlot is fixed does no harm: it runs before generation and yields the
+same SQL. Removing it means raising the lower bound on `sqlglot`, and every
+raise makes the package harder to install next to tools that pin SQLGlot
+narrowly. So patch releases never change the bounds. Each minor release
+raises the lower bound to the current SQLGlot release and drops the
+rewrites it made redundant; the value tests stay. The upper bound moves to
+a new SQLGlot major only after the tests pass on it.
+
+## apache-ossie is vendored until it reaches PyPI
+
+PyPI refuses an upload whose dependencies include a direct reference
+(`name @ git+https://...`), and apache-ossie was one: it is not on PyPI
+(checked 2026-11-01), and Ossie's first release has not been voted yet.
+Even then, an ASF release is a source release, and publishing to PyPI is
+optional. Until apache-ossie is on PyPI, this package carries a copy, so
+that it, and the runner that depends on it, can go to PyPI.
+
+- **What is copied.** `python/src/ossie` at one commit (three modules, 593
+  lines at `fab4f63`) with the repository's `LICENSE` and `NOTICE`.
+  `_vendor/vendor.txt` names the commit. Its dependencies, pydantic and
+  PyYAML, are direct dependencies here.
+- **The one change.** `scripts/vendor_ossie.py` makes the package's
+  imports of itself relative, so no code of an `ossie` installed
+  next to it is imported (`tests/test_model.py` checks that). CI runs the script with
+  `--check`, which fails on any other difference from upstream.
+- **What users see.** `load_model` returns
+  `dactopus_ossie_clickhouse._vendor.ossie.OssieDocument`, a class distinct
+  from an installed apache-ossie's. `Executor` refuses a document of that
+  other class with a `TypeError`: `model.py` tells datasets from the model
+  with `isinstance`, so it would drop a dataset's `dedup` override and
+  report a false error.
+- **The weekly run.** `latest.yml` vendors Ossie's `main` before its tests
+  and canaries, where it used to install it.
+
+Not chosen:
+
+- **A package of our own on PyPI with the copy.** One more package to
+  release, and "Ossie" in its name is the ASF's mark.
+- **Our own model classes.** They would drift from the spec's.
+- **Relative imports upstream.** apache/ossie has no relative import
+  anywhere, and the change would serve only those who vendor; here it is
+  two lines of the script.
+
+When apache-ossie is on PyPI, the dependency returns and `_vendor` goes.
+
+## Keys and relationships name fields
+
+apache/ossie#486 (`7205e15`) settled what `primary_key`, `unique_keys`,
+`from_columns` and `to_columns` name: fields of their dataset, never
+columns of its source. They are checked against the declared fields when
+a model loads, and the planner joins on the fields' expressions, so a key
+field may read a column of another name or an expression. A relationship
+goes with its fields when the model is trimmed for a user: a field hidden
+by grants or a policy file must not reach SQL through a join.
+
+## Source columns in a dataset's metric
+
+apache/ossie#633 (`21e849d`; `spec.md`, "Metric Scoping" and "Name
+Resolution") lets a dataset's metric read a column of its dataset's
+`source` as `source.column`: "`source.quantity` and `SOURCE.quantity` name
+the same column. `source.amount` refers to the source column even when the
+dataset declares a field named `amount`." An unqualified name in such a
+metric "MUST be a declared field of the dataset". On the name `source`:
+"`source` is not reserved: a field or dataset may be named `source`. If a
+dataset declares a field named `source`, the name `source` refers to that
+field, so the dataset's metrics cannot refer to source columns." A model's
+metric "cannot reference source columns", and keys and relationship
+columns name fields. For a consumer that generates SQL against the source
+tables the spec says to replace "each `source.column` reference with
+`column`".
+
+`Planner._own_field` follows that: `source.column` becomes the column under
+the dataset's alias, never a field's expression; only the qualifier folds
+case, since ClickHouse's column names are case-sensitive. A source column
+is checked and hidden like a field's column: `validate --url` checks it
+against `system.columns`, a metric over a column the user cannot see is
+hidden from that user, and under a policy file `source.x` counts as
+reading every field whose expression reads `x`.
 
 ## Parsing with SQLGlot's default dialect
 
@@ -55,7 +215,7 @@ and a name sent as written is what the author can look up in
 ClickHouse's documentation.
 
 The cost is SQLGlot's translation of other engines' spellings: `ARG_MAX`,
-`COUNT_IF`, `LEN` no longer become `argMax`, `countIf`, `CHAR_LENGTH`.
+`COUNT_IF`, `LEN` do not become `argMax`, `countIf`, `CHAR_LENGTH`.
 The spec's aliases (`NVL`, `IFNULL`, `CEILING`, `TRUNCATE`, `CHARINDEX`)
 are in the catalog and still translate. `ANY_VALUE`, `BOOL_AND` and
 `BOOL_OR` left the planner's list of aggregates that may read a joined
@@ -91,88 +251,66 @@ from SQLGlot 30.23's list, among them `medianExact`, `group_concat`,
 
 One over a joined dataset alone is refused unless repeats cannot change
 it. `system.functions` does not say which do, so the planner lists them
-(`_CLICKHOUSE_REPEAT_SAFE`), each checked on ClickHouse 26.9 against its
-input with rows repeated: the `uniq` family, `any`, `anyLast`, `argMin`,
-`argMax`, `groupUniqArray`, `groupBitAnd`, `groupBitOr`, `groupBitmap`,
-`singleValueOrNull`, and `min`, `max`, `any_value`, `min_by`, `max_by` in
-any case. A combinator keeps that only if it is `If`, `OrNull`,
-`OrDefault`, or `Distinct`, which makes any aggregate repeat-safe; names
-are split as ClickHouse splits them, longest combinator first. Any other
-is repeat-sensitive, as the spec's are.
+(`_CLICKHOUSE_REPEAT_SAFE`; the list is in model-authoring.md, "Keys
+decide which joins are allowed"), each checked on ClickHouse 26.9 against
+its input with rows repeated. A combinator keeps that only if it is `If`,
+`OrNull`, `OrDefault`, or `Distinct`, which makes any aggregate
+repeat-safe; names are split as ClickHouse splits them, longest
+combinator first. Any other is repeat-sensitive, as the spec's are.
 
-## SQLGlot bounds move only in minor releases
+## Catalog calls keep their spec signature
 
-Some rewrites in `translate.py` cover gaps in SQLGlot's ClickHouse
-generator, and fixes for them go upstream. A rewrite left in place after
-SQLGlot is fixed does no harm: it runs before generation and yields the
-same SQL. Removing it means raising the lower bound on `sqlglot`, and every
-raise makes the package harder to install next to tools that pin SQLGlot
-narrowly. So patch releases never change the bounds. Each minor release
-raises the lower bound to the current SQLGlot release and drops the
-rewrites it made redundant; the value tests stay. The upper bound moves to
-a new SQLGlot major only after the tests pass on it.
+SQLGlot's translation of fourteen catalog functions dropped the arguments
+beyond the spec's signature without an error: `REGEXP_LIKE(s, 'iphone',
+'i')` ran as `match(s, 'iphone')`, case-sensitive; `MOD(x, y, z)` as
+`x % y`; `LOG10()` as `LOG(10)`; `LENGTH`, `LTRIM`, `RTRIM`, `FLOOR`,
+`CEIL`, `CEILING`, `DATE_TRUNC`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`,
+`POSITION` and `CHARINDEX` likewise. So a rewritten function, ours or
+SQLGlot's, carries its spec signature in `_SIGNATURES`, and `parse()`
+refuses other argument counts; `validate` reports a field or metric
+written so. A longer form that reaches ClickHouse whole and means there
+what it means in DuckDB, Snowflake or Postgres stays, with a value test:
+`FLOOR(x, 1)`, `CEIL(x, 1)`, `LTRIM(s, 'ab')`, `RTRIM`,
+`CHARINDEX(substr, str, start)`, `POSITION` likewise and `DATE_TRUNC`
+with a zone. A name in `_SIGNATURES` parses as a plain call, never
+through SQLGlot's special syntax (`CEIL(x TO DAY)`), which skips the
+check; `POSITION(substr IN str)` keeps its own, checked in
+`_parse_position`. `LOG(x)`, outside the spec, is refused: ClickHouse
+reads it as the natural logarithm, Postgres and DuckDB as base 10.
 
-## Spec over engine where they disagree
+## AGG is reserved
 
-DuckDB supplies expected values in tests as a second opinion close to the
-spec's Postgres-like semantics, not as ground truth. Where DuckDB and the
-spec differ, the test pins the spec's value with a section reference:
-`REGEXP_REPLACE` replaces every match, `DAYOFWEEK` is ISO (Monday is 1),
-`MILLISECOND` is the component, `PERCENTILE_DISC` is the first value whose
-cumulative share reaches `p` (ClickHouse's `quantileExact` picks one too
-high whenever `p * n` is whole).
+apache/ossie#662 (`9b8f16c`; `expression_language.md`, "Measure
+Evaluation: `AGG` (RESERVED)"): "In `OSSIE_SQL_2026` expressions, an
+implementation MUST NOT give `AGG` any other meaning. Expressions in other
+dialects are not affected. Because function names should be case
+insensitive, the reservation covers every capitalization". And:
+"`OSSIE_SQL_2026` expressions MUST NOT call `AGG` until a future version
+defines where model declarations may use it." A field, metric or column
+named `agg` stays valid ("Reserving `AGG` as a function name does not
+prevent a field, metric, or column from being named `agg`").
 
-## Questions are the only query input
+Passed through as an unknown function, `AGG(x)` would fail in ClickHouse
+or, if the server has a function of that name, mean something else.
+`parse()` refuses a call of `AGG` in any capitalization, an `OVER` call
+too, so the refusal reaches a field and
+a metric (hidden and reported by `validate`, as any expression that does
+not translate) and an agent's filter, before any SQL is built. Only a
+function call is refused: a column, field or metric named `agg` is a name,
+not a call.
 
-The spec has two query surfaces. The Semantic Query Interface takes a
-question: metrics, dimensions and filters by name, what the CLI and the
-`query` MCP tool accept. The Relational Query Interface (apache/ossie#354)
-takes SQL over the model's datasets as relations, with `AGG(metric)` for
-a measure. Decision of 2026-11-01: this executor compiles questions
-straight into ClickHouse SQL and does not read `AGG()` SQL. One input
-grammar keeps one planner, the one place where every ClickHouse trait
-(`FINAL`, dictionaries, the model's zone, semi-joins) is applied; a
-second grammar would need the same rules a second time or a rewriter of
-layer-2 SQL into questions, which the spec's own reference rewriter
-(apache/ossie#502) is meant to be.
-
-Compliance is shown on results. The spec's query compliance cases
-(`compliance/query` in apache/ossie, since apache/ossie#632) ship the
-SCOTT data, a model with dataset metrics and, per case, an `AGG()` query
-with its expected result as standard SQL over literals.
-`tests/test_compliance.py` loads the data through DuckDB into ClickHouse,
-reads the model as it is, runs each case as the question it asks and
-compares by the suite's README: columns by position, rows as multisets,
-exact numerics equal, approximate ones within 1e-9. The weekly workflow
-runs it on Ossie's `main`, so a case added upstream fails there until it
-is listed here.
-
-On 2026-11-10, at apache/ossie `d700cde`, the suite has 32 cases
-(apache/ossie#628 added 31):
-
-| Cases | Count | Outcome |
-|-------|-------|---------|
-| `a01`-`a04`, `a06`, `a07`, `b01`, `b02` | 8 | asked as a question, the result equals the expected one |
-| `b04`, `b18`, `b20` | 3 | asked, refused |
-| the rest | 21 | no question has the query's form |
-
-The three refused cases ask for a metric of the one side (`dept_count`)
-grouped or filtered by the many side (`emp.job`). The Relational Query
-Interface counts each department once per group (section 9); the planner
-answers over the rows of one root and refuses
-("Refuse a metric over another dataset's rows"). The test checks the
-refusal, so a planner that starts to answer has to answer the expected
-value. The 21 other queries use a form a question does not have: an
-expression over measures in the `SELECT` list, grouping by an expression
-that is no field, `ROLLUP`, a CTE, a subquery, a dataset read twice, a
-join on a range or on columns that are no key, `RIGHT`, `FULL` and
-`CROSS JOIN`, and a `LEFT JOIN` from the one side, which keeps a
-department without employees where a question keeps `emp` rows. Each is
-named with its form in `NOT_ASKED`.
-
-The suite demands standard SQL semantics, which every generated query
-already sets: `SUM` over no rows is NULL
-(`aggregate_functions_null_for_empty = 1`) and `COUNT` is 0.
+Which expressions it covers. The same as in "NULL placement in ORDER BY":
+`sql`, an `OSSIE_SQL_2026` entry and, because this project reads it by the
+same rules, an `ANSI_SQL` entry. The spec's "Expressions in other dialects
+are not affected" says the reservation does not bind them, not that
+refusing is wrong; the SQL standard has no function `AGG`, so no portable
+`ANSI_SQL` expression loses a meaning, and one rule keeps a metric valid
+when its author moves it between `sql` and `ANSI_SQL`. The cost is a
+ClickHouse user-defined function named `agg` called from an `ANSI_SQL`
+entry; the spec's own advice for an older expression is to "write the
+expression in a vendor dialect", which this executor does not read, so such
+a call cannot be written in a model. Nothing else the spec says gives a
+reason to accept it.
 
 ## Exact percentiles
 
@@ -275,7 +413,7 @@ is right (6.5). `intDiv` aligns them and truncates toward zero, so `MOD(a,
 b)` and `a % b` become `a - b * intDiv(a, b)`: the rest keeps the
 dividend's sign, as `%` and DuckDB do; integers stay integers (`Int64`)
 and a `Decimal` a `Decimal`. A
-`Float64` beyond the `Int64` range now fails in `intDiv` instead of
+`Float64` beyond the `Int64` range fails in `intDiv` instead of
 returning a rest.
 
 ## NULL placement in ORDER BY
@@ -350,8 +488,8 @@ only. Anywhere else outside a window it is refused. Tests pin both.
 What changes in an answer: a window metric ordered `DESC` over a key
 with NULLs. On TPC-DS, with `LEFT JOIN`s, the sales without a matching
 date form a group with a NULL `d_year`, and
-`RANK() OVER (ORDER BY date_dim.d_year DESC)` now ranks it 1, where it
-ranked it last. `ASC`, such as the running total in `cumulative_sales`,
+`RANK() OVER (ORDER BY date_dim.d_year DESC)` ranks it 1, where NULLs
+last in both directions rank it last. `ASC`, such as the running total in `cumulative_sales`,
 and an explicit clause give what they gave.
 
 NaN is not NULL and engines disagree on it too: ClickHouse puts NaN after
@@ -387,26 +525,6 @@ compared with DuckDB on keys with NULLs:
 `parse()` rejects other frames and `GROUPS`, so such a field or metric is
 hidden and reported by `validate`. Reopen when the translator can rewrite
 them, or ClickHouse fixes them.
-
-## Catalog calls keep their spec signature
-
-SQLGlot's translation of fourteen catalog functions dropped the arguments
-beyond the spec's signature without an error: `REGEXP_LIKE(s, 'iphone',
-'i')` ran as `match(s, 'iphone')`, case-sensitive; `MOD(x, y, z)` as
-`x % y`; `LOG10()` as `LOG(10)`; `LENGTH`, `LTRIM`, `RTRIM`, `FLOOR`,
-`CEIL`, `CEILING`, `DATE_TRUNC`, `CURRENT_DATE`, `CURRENT_TIMESTAMP`,
-`POSITION` and `CHARINDEX` likewise. So a rewritten function, ours or
-SQLGlot's, carries its spec signature in `_SIGNATURES`, and `parse()`
-refuses other argument counts; `validate` reports a field or metric
-written so. A longer form that reaches ClickHouse whole and means there
-what it means in DuckDB, Snowflake or Postgres stays, with a value test:
-`FLOOR(x, 1)`, `CEIL(x, 1)`, `LTRIM(s, 'ab')`, `RTRIM`,
-`CHARINDEX(substr, str, start)`, `POSITION` likewise and `DATE_TRUNC`
-with a zone. A name in `_SIGNATURES` parses as a plain call, never
-through SQLGlot's special syntax (`CEIL(x TO DAY)`), which skips the
-check; `POSITION(substr IN str)` keeps its own, checked in
-`_parse_position`. `LOG(x)`, outside the spec, is refused: ClickHouse
-reads it as the natural logarithm, Postgres and DuckDB as base 10.
 
 ## Many-to-one inferred from keys
 
@@ -461,108 +579,49 @@ LEFT JOIN (
 ) AS customers ON orders.customer_id = customers.__k0
 ```
 
-- Contents. The derived table holds the key of the first step and, as
-  `__e1`, `__e2` and so on, each largest expression of the question that
-  reads columns of that subtree and nothing else: a dimension, a condition
-  of a filter, an argument. A chain (orders, customers, regions) is one
-  derived table, joined inside it, so that two rows of `customers` with
-  different `region_id` that lead to one region name do not count twice.
-  Two rows that differ only in a column the question never reads collapse.
-- Filters. A condition is carried as a value and applied outside. A root row
-  that matched nothing sees the subtree's columns as NULL, and a filter may
-  pass it (`customers.region IS NULL`), which a filter applied inside could
-  not express. `__m` is 1 in a matched row; the expression of a root row
-  with `__m IS NULL` is the expression over NULL columns, typed by
-  `system.columns` (`CAST(NULL, 'Nullable(String)')`). It is what a plain
-  join leaves there on the same server: the type's default for an array, a map
-  and the geo types (`Ring`, `Polygon`, ...), which cannot be Nullable; NULL for a
-  Variant. A tuple, a `Point` and a `JSON` are NULL on 26.9 and the default on a
-  server that cannot make them Nullable, which the executor asks once with a
-  probe join (`Catalog.nullable_tuple`). A bare column needs none of
-  this: it reads `__eN`, NULL or the default as a plain join gave it.
-- Grouped rows. In HAVING, in the SELECT list outside aggregates and in the
-  clause of a window, only an expression that is a GROUP BY key is read, as
-  the same carried column, so that ClickHouse finds it among the keys
-  (`__m IS NULL` alone would be refused with error 215). The parts of any
-  other expression there are carried one by one: `HAVING UPPER(region) <> 'X'`
-  reads the key `region` inside `UPPER`.
-- Expressions over two datasets. `SUM(orders.amount * customers.weight)` and a
-  `FILTER` on another dataset read the subtree and something else. The parts
-  that read only the subtree are carried (`customers.weight`; the condition of
-  the `FILTER`, a boolean when it reads `customers` alone) and the expression
-  stays outside. Copies that differ in a carried part are different rows, where
-  Layer 2's DISTINCT keeps the root row once for each value of the whole
-  argument. The two agree when each value of the part gives its own result, or a
-  result the aggregate cannot be changed by, which the planner checks on the path
-  from the part to the argument or condition (`_blend`, `_injective`):
-  - A condition (a row filter, a `FILTER`): the part is a conjunct, joined only
-    with `AND`. Only the copies that pass it remain, and a carried condition has
-    one value that passes.
-  - An argument with one part, reached through `+`, `-`, a unary minus, and in
-    `SUM` also `*` and `/`: the other side is then zero for copies with the same
-    result, which adds nothing.
-  - A `CASE` with one `WHEN`, or an `IF`, whose condition is such a conjunct and
-    whose other result is NULL (or 0 in `SUM`): it is a `FILTER`.
-  - Several factors of a product, or terms of a sum, that read only the subtree:
-    they are gathered first into one operand (`_regroup`), so `SUM(lines.qty *
-    products.price * (1 - products.discount))` carries `products.price * (1 -
-    products.discount)` as one value, and copies with the same product collapse
-    as in Layer 2. Products and sums are only reordered; `/` is not.
-- Aggregates that need other values. A carried value keeps apart the copies of a
-  key for every aggregate of its SELECT, so `SUM(orders.amount) FILTER (WHERE
-  customers.region = 'WEST')` next to `SUM(orders.amount)` would count the order
-  of a customer stored in WEST and SOUTH twice in the second. Layer 2 takes the
-  DISTINCT of each aggregate on its own. The aggregates of a question are grouped
-  by the dataset they aggregate and the values they carry (`Planner._carry`), and
-  each group is a SELECT, merged on the dimensions as the groups of several
-  facts are ("Stitch metrics of several facts"). A model's metric with such
-  aggregates (`SUM(x) FILTER (WHERE d.a = 1) / SUM(x)`) is split into one
-  component for each, as one over several datasets is. Dimensions and whole
-  `WHERE` conditions are carried for every aggregate: after the filter they hold
-  one value for a row, and separate nothing. An aggregate that repeated rows do
-  not change (`MAX`, `DISTINCT`) is not hurt by the values of the others, and
-  does not make others apart, and neither does a part that reads only dictionaries.
-  When the metrics of a question differ only in these values (they are answered
-  over one root), an aggregate written in a filter over that root is a unit too:
-  it is computed in the SELECT of the aggregates that need the same values (a
-  SELECT of its own if none does), and the filter is applied to the merged rows.
-  Refused, naming the real reason: a window function over aggregates that need
-  other values (the metric is hidden by `validate`), a window metric in a question
-  with metrics answered apart ("is a window over the merged rows of metrics that
-  need other values of the repeated rows of a dataset they join to"), and, as
-  before, a filter that writes an aggregate over other rows than the metrics'
-  root. One metric whose aggregates read other rows than the root's is refused as
-  before.
-- Refused: any other expression that reads the subtree and the root (or another
-  subtree) on joined rows, in a `SELECT` that reads the subtree as a derived
-  table. `customers.weight > 0 OR orders.amount > 150` passes O2 for both copies
-  of C1 (weights 1 and -1), so carrying the part on `customers` gives EAST 550,
-  where Layer 2 gives 350; `SUM(GREATEST(orders.amount, customers.weight))` gives
-  200 for O2 with either copy, 990 in total where Layer 2 gives 690; `COUNT(x *
-  customers.weight)` counts a zero twice; an argument with two parts that do not
-  gather (`orders.amount / customers.a * customers.b`) can give one result for two
-  pairs. The planner does not read the data, so it refuses these
-  on data that stores each key once too, where the plain join of 0.13.0 answered
-  them. #653 rejects them as well (`E_CROSS_DATASET_FILTER`,
-  `E_AMBIGUOUS_MEASURE_GRAIN`). A metric refused so is refused in every question
-  with it, so `validate` reports it and the server hides it; a row filter is
-  refused in its question, with a message that asks for an `AND`. Answering
-  them would need Layer 2's plan for the aggregate: the DISTINCT of the root's
-  key, the whole argument and the dimensions, over the plain join (decision of
-  2026-11-06: refuse until a user needs one of them, since adding an answer
-  later changes no number given before). An aggregate that repeated rows do not
-  change (`MAX`, `DISTINCT`), and its `FILTER`, are not refused: a copy changes
-  nothing it returns.
+The derived table holds the key of the first step and each largest
+expression of the question that reads only that subtree: a dimension, a
+condition of a filter, an argument. A chain (orders, customers, regions)
+is one derived table, so two `customers` rows that lead to one region do
+not count twice. Conditions are carried as values and applied outside,
+since a root row that matched nothing must still see the subtree's
+columns as a plain join leaves them (NULL, or the type's default where
+ClickHouse cannot make it Nullable; `Catalog.nullable_tuple` probes the
+server once). The code is `Planner._dedup`, `_carry`, `_blend`,
+`_injective` and `_regroup`.
+
+An expression that reads the subtree and the root together keeps Layer
+2's answer only when two copies of a key cannot give it one result: a
+condition joined with `AND`, an argument reached through `+`, `-` and, in
+`SUM`, `*` and `/`, a one-branch `CASE` or `IF` that acts as a `FILTER`,
+and factors of the subtree gathered into one operand
+(`SUM(lines.qty * products.price * (1 - products.discount))`). Aggregates
+that carry different values of the subtree are answered in SELECTs of
+their own and merged on the dimensions, as stitched groups are; a model's
+metric with such aggregates is split into components.
+
+Refused, since the planner does not read the data and two copies could
+give one result: `customers.weight > 0 OR orders.amount > 150` passes O2
+for both copies of C1 (weights 1 and -1) and gives EAST 550 where Layer 2
+gives 350; `SUM(GREATEST(orders.amount, customers.weight))` gives 990
+where Layer 2 gives 690. #653 rejects them as well
+(`E_CROSS_DATASET_FILTER`, `E_AMBIGUOUS_MEASURE_GRAIN`). Answering them
+would need Layer 2's own plan, the DISTINCT of the root's key, the whole
+argument and the dimensions over the plain join. Decision of 2026-11-06:
+refuse until a user needs one, since adding an answer later changes no
+number given before. Also refused: a window function over aggregates
+that carry different values, and a window metric in a question whose
+metrics are answered apart.
 
 Skips, where the plan does not change:
 
-- A `SELECT` with no aggregate, or only aggregates that repeated rows do
-  not change (`MIN`, `MAX`, `DISTINCT`, `uniq`, `any`; see
-  `_REPEAT_SAFE`). `GROUP BY` already collapses repeats, and section 5.6
-  of the spec does the same for a question without metrics.
+- A `SELECT` with no aggregate, or only repeat-safe ones (`MIN`, `MAX`,
+  `DISTINCT` and the list in "Functions outside the spec pass through as
+  written"). `GROUP BY` already collapses repeats, and section 5.6 of the
+  spec does the same for a question without metrics.
 - A subtree whose relationships all join a single-key dictionary on its
   key, or a superset of it. A dictionary has one row for each key, and the
-  column is read with `dictGetOrNull` as before. A dictionary with a dot in
+  column is read with `dictGetOrNull`. A dictionary with a dot in
   its name, which `dictGet*` cannot address, is joined as a table and is
   not known to be unique.
 - Semi-joins (`IN (SELECT ...)`) cannot repeat a root row and are not
@@ -596,108 +655,13 @@ the memory limit.
 
 Decision of 2026-11-06: always on, with no switch. The stores this is built
 for have up to a million orders, where it adds about 0.1 s, and a wrong
-revenue is worse than a slow one. If a deployment needs to turn it off, the
-place is the dataset's `nonportable_extensions` entry under `CLICKHOUSE`, beside
-`dedup`, such as `unique_key: trusted`, where the model author vouches for
-the key. It is added on demand.
+revenue is worse than a slow one. A switch, if a deployment needs one,
+belongs in the dataset's `CLICKHOUSE` entry beside `dedup`.
 
 The tests are in `tests/test_dedup.py`: DuckDB runs the Layer 2 plan (the
 distinct root key, argument and dimensions after the join and the filter,
 then the aggregate) on Appendix B.1 with C1 and C3 stored twice, and an
 order for a customer that does not exist.
-
-## Keys and relationships name fields
-
-apache/ossie#486 (`7205e15`) settled what `primary_key`, `unique_keys`,
-`from_columns` and `to_columns` name: fields of their dataset, never
-columns of its source. Before it this project read them as columns, which
-gave the same SQL only while each key field was named after its column
-and read it unchanged. They are now checked against the declared fields
-when a model loads, and the planner joins on the fields' expressions, so
-a key field may read a column of another name or an expression. A
-relationship goes with its fields when the model is trimmed for a user:
-a field hidden by grants or a policy file must not reach SQL through a
-join.
-
-The pin that brings this also brings dataset-scoped metrics
-(apache/ossie#591, `fae8f41`), which the SDK now reads. Until the planner
-answers them, a model that declares one is refused: loading it and
-answering without its metrics would drop them silently.
-
-## Source columns in a dataset's metric
-
-apache/ossie#633 (`21e849d`; `spec.md`, "Metric Scoping" and "Name
-Resolution") lets a dataset's metric read a column of its dataset's
-`source` as `source.column`: "`source.quantity` and `SOURCE.quantity` name
-the same column. `source.amount` refers to the source column even when the
-dataset declares a field named `amount`." An unqualified name in such a
-metric "MUST be a declared field of the dataset". On the name `source`:
-"`source` is not reserved: a field or dataset may be named `source`. If a
-dataset declares a field named `source`, the name `source` refers to that
-field, so the dataset's metrics cannot refer to source columns." A model's
-metric "cannot reference source columns", and keys and relationship
-columns name fields. For a consumer that generates SQL against the source
-tables the spec says to replace "each `source.column` reference with
-`column`".
-
-How. `Planner._own_field` reads the qualifier case-insensitively. When the
-dataset declares no field named `source`, it rewrites `source.column` on
-the AST to the column under the dataset's alias, `orders.column`, and
-substitutes no field's expression, even for a field of the same name. Only
-the qualifier folds case: the column keeps the spelling the expression
-gives it, as a field's column does, since ClickHouse's column names are
-case-sensitive. When the dataset declares a field named `source`, any
-`source.column` is refused with a message that says the field takes
-precedence. Every other qualified name in a dataset's metric stays an
-error. A `source.column` in a model's metric or in an agent's filter, where
-no dataset named `source` exists, is refused with a message that says
-source columns belong to a dataset's own metrics; a dataset that is itself
-named `source` keeps `source.field` in model metrics and filters. A key or
-relationship column `source.x` is not a field name, so loading refuses it.
-
-Access. `validate --url` checks a metric's source columns against
-`system.columns` like the columns of fields. A metric over a source column
-that the connected user cannot see is hidden from that user (`Executor`
-adds it to the hidden metrics), and `restrict` does not read `source.x` as
-a field named `x` of a dataset named `source`. The column therefore appears
-in no SQL, error or suggestion. Under a policy file, `source.x` counts as
-reading every field of the dataset whose expression reads the column `x`, so
-hiding any of them hides the metric, while the column's data stays protected
-by ClickHouse column grants.
-
-## AGG is reserved
-
-apache/ossie#662 (`9b8f16c`; `expression_language.md`, "Measure
-Evaluation: `AGG` (RESERVED)"): "In `OSSIE_SQL_2026` expressions, an
-implementation MUST NOT give `AGG` any other meaning. Expressions in other
-dialects are not affected. Because function names should be case
-insensitive, the reservation covers every capitalization". And:
-"`OSSIE_SQL_2026` expressions MUST NOT call `AGG` until a future version
-defines where model declarations may use it." A field, metric or column
-named `agg` stays valid ("Reserving `AGG` as a function name does not
-prevent a field, metric, or column from being named `agg`").
-
-Before this a call of `AGG(x)` parsed as an unknown function and went to
-ClickHouse as written, where it fails or, if the server has a function of
-that name, means something else. `parse()` now refuses a call of `AGG` in
-any capitalization, an `OVER` call too, so the refusal reaches a field and
-a metric (hidden and reported by `validate`, as any expression that does
-not translate) and an agent's filter, before any SQL is built. Only a
-function call is refused: a column, field or metric named `agg` is a name,
-not a call.
-
-Which expressions it covers. The same as in "NULL placement in ORDER BY":
-`sql`, an `OSSIE_SQL_2026` entry and, because this project reads it by the
-same rules, an `ANSI_SQL` entry. The spec's "Expressions in other dialects
-are not affected" says the reservation does not bind them, not that
-refusing is wrong; the SQL standard has no function `AGG`, so no portable
-`ANSI_SQL` expression loses a meaning, and one rule keeps a metric valid
-when its author moves it between `sql` and `ANSI_SQL`. The cost is a
-ClickHouse user-defined function named `agg` called from an `ANSI_SQL`
-entry; the spec's own advice for an older expression is to "write the
-expression in a vendor dialect", which this executor does not read, so such
-a call cannot be written in a model. Nothing else the spec says gives a
-reason to accept it.
 
 ## Paths of several relationships
 
@@ -736,24 +700,21 @@ reaches.
 
 A question is one `SELECT` over the root's rows with many-to-one joins,
 so a joined row repeats once per root row that references it, and rows
-no root row references are absent. Two failures follow, and until this
-change both returned a plausible wrong number. The reference TPC-DS model's
+no root row references are absent. Both failures return a plausible
+wrong number. Planned over one join, the reference TPC-DS model's
 `store_productivity`, `SUM(store_sales.ss_ext_sales_price) /
 NULLIF(SUM(store.s_number_employees), 0)`, summed each store's staff once
 per sale and came out about 458,000 times too small. In a GA4 model,
 `sessions` asked next to `revenue` was answered over purchases: 1,800
 sessions from Google instead of 102,920.
 
-The planner refuses both after it picks the root, on the rewritten tree
-(`APPROX_PERCENTILE` is an aggregate only after rewrite). Since 0.14.0 a
-model's metric whose aggregates each read one dataset is not checked this
-way: it is split into components ("Evaluate each aggregate over its own
-dataset", below), and `store_productivity` is answered. A metric of one
-dataset by a dimension its dataset does not reach is now answered over
-its own rows, joined to a spine of the question's rows ("A metric of the
-one side by the many side"), when the checks below refuse it over the
-root. The checks remain for a metric of one dataset asked over another
-root, and for an aggregate whose arguments read several datasets:
+A model's metric whose aggregates each read one dataset is split into
+components ("Evaluate each aggregate over its own dataset"), and a metric
+of one dataset by a dimension it does not reach is joined to a spine ("A
+metric of the one side by the many side"). The planner refuses the rest
+after it picks the root, on the rewritten tree (`APPROX_PERCENTILE` is an
+aggregate only after rewrite): a metric of one dataset asked over another
+root, and an aggregate whose arguments read several datasets:
 
 - An aggregate whose argument reads joined datasets and no root column is
   refused unless repeats cannot change it (`MIN`, `MAX`, `DISTINCT`,
@@ -786,20 +747,11 @@ keys. The check covers selected metrics and aggregate filters, including
 metrics named in a filter. The error names what made the root (a metric,
 a dimension or a filter) so an agent can split the question.
 
-The cost was that a correct question was refused when its intended
-population is the root's references, such as distinct users per
-purchased item through `sessions.user_id`. The planner cannot tell that
-from users next to revenue, where one `SELECT` over purchases would be
-wrong. A metric of sessions by a field of purchases is now answered over
-the sessions themselves, each once per item ("A metric of the one side by
-the many side"); next to revenue by a field of sessions, it counts
-sessions as before. Layer 3 (apache/ossie#653 section 5.2)
-now says which rows a model's metric is computed over: each aggregate
-call, the rows of the one dataset its arguments read. A metric declared
-on a dataset (apache/ossie#591) has that dataset as its home whatever its
-expression.
-A question whose metrics no one root answers together is stitched instead
-(next sections).
+Layer 3 (apache/ossie#653 section 5.2) says which rows a model's metric
+is computed over: for each aggregate call, the rows of the one dataset
+its arguments read. A metric declared on a dataset (apache/ossie#591) has
+that dataset as its home whatever its expression. A question whose
+metrics no one root answers together is stitched instead.
 
 A metric that refuses in every question is hidden from agents like an
 untranslatable one, since every attempt would cost a turn, and is
@@ -822,11 +774,10 @@ and passes.
 
 ## Evaluate each aggregate over its own dataset
 
-A model's metric whose aggregates read different datasets was planned as
-one `SELECT` from one root. The reference model's
+Planned as one `SELECT` from one root, the reference model's
 `customer_lifetime_value`, `SUM(store_sales.ss_ext_sales_price) /
-COUNT(DISTINCT customer.c_customer_sk)`, ran over `store_sales LEFT JOIN
-customer`, so the denominator counted the customers with a sale. The Layer
+COUNT(DISTINCT customer.c_customer_sk)`, runs over `store_sales LEFT JOIN
+customer`, so the denominator counts the customers with a sale. The Layer
 3 spec (apache/ossie#653, `core-spec/wide_table_semantics.md`, merged
 2026-11-04) names that plan as wrong in section 5.2: on its data
 (Appendix B.1) it gives 650 / 3 where the answer is 650 / 4. Each
@@ -835,12 +786,12 @@ of its home dataset, the one dataset its arguments read. Components
 with the same home form a branch with the question's dimensions and row
 filters (sections 5.3 and 5.4); the branches are merged on the dimensions
 (next section), and the metric's expression is evaluated over the
-component values. The expression is the translator's output as before,
+component values. The expression is the translator's output,
 `Division to Float64` included: the aggregates in the rewritten tree are
 replaced by the merged values.
 
 On the TPC-DS data in ClickHouse, `customer_lifetime_value` is 52,624.71
-(5,262,470,646.52 over 100,000 customers) where 0.13.0 gave 57,919.73
+(5,262,470,646.52 over 100,000 customers) where one join gives 57,919.73
 (over the 90,858 customers with a sale). A group of the merge that only the sales
 branch has, such as sales with no matching customer, has no customer
 count: its component takes the empty-input value 0, the division gives
@@ -851,11 +802,11 @@ Cases, against #653:
 | Case | Here | #653 |
 |---|---|---|
 | A model's metric whose aggregates read different single datasets | Components, one branch per home | Section 5.2 |
-| A model's metric whose aggregates read one dataset | One branch, planned as a whole: the SQL of 0.13.0 | Same, one component per aggregate in one branch |
+| A model's metric whose aggregates read one dataset | One branch, planned as a whole | Same, one component per aggregate in one branch |
 | A dataset's metric | One component whatever its expression | Same |
-| An aggregate whose arguments read several datasets, such as `SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another dataset, in a metric whose other aggregates read only datasets it reads | Not split. The metric is planned as a whole, over one join, as in 0.13.0 | Refused, deferred (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| An aggregate whose arguments read several datasets, such as `SUM(lines.qty * products.price)`, or a `FILTER (WHERE ...)` on another dataset, in a metric whose other aggregates read only datasets it reads | Not split. The metric is planned as a whole, over one join | Refused, deferred (`E_AMBIGUOUS_MEASURE_GRAIN`) |
 | The same, next to an aggregate whose arguments read a dataset it does not read: `SUM(lines.qty * products.price) / COUNT(DISTINCT customers.id)`, `SUM(orders.amount) FILTER (WHERE customers.segment = 'retail') / COUNT(DISTINCT customers.id)` | Refused in every question and reported by `validate` | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
-| An aggregate whose arguments read no dataset, `COUNT(*)`, with or without a `FILTER` | Counts the rows of the one dataset that every aggregate of the metric, `FILTER`s included, reads, as before; refused when they read several | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
+| An aggregate whose arguments read no dataset, `COUNT(*)`, with or without a `FILTER` | Counts the rows of the one dataset that every aggregate of the metric, `FILTER`s included, reads; refused when they read several | Refused (`E_AMBIGUOUS_MEASURE_GRAIN`) |
 | A column outside every aggregate, in a metric of components | Refused | Refused (`E_UNAGGREGATED_FINER_GRAIN_REFERENCE`) |
 | A column outside every aggregate, in a model's metric of one dataset | Refused (`validate` reports it), whether or not the question groups by the column | Refused |
 | A window function in a metric of components | Refused | Refused (`E_DEFERRED_WINDOWED_METRIC`) |
@@ -864,28 +815,23 @@ Cases, against #653:
 | Aggregates written into a question's filter that would be split or mixed as in a metric, `SUM(a.x) / COUNT(DISTINCT b.k) > 5`, with or without a `COUNT(*)` beside them, or a written aggregate beside a metric of another dataset, `total_sales > COUNT(DISTINCT b.k)` | Refused; name a metric | No such filter |
 | Metrics of different datasets compared in one filter, `total_sales > store_count` | Each checked against the root as a selected metric, so stitched or refused as one would be | No such filter |
 
-The rows with a departure share a reason: `query` is not a Layer 3
-binding. Its questions carry several filters, aggregate filters, sorting
-and limits, which #653 leaves out (sections 3.2 and 3.4, Appendix A), so
-the executor answers some questions the spec refuses, where the spec
-defers a case or rejects it as unsupported and one join gives the right
-value. Where one join would give a wrong value, the metric is refused.
-The home of a component comes from its arguments only (section 5.2: the
-`FILTER` "does not determine the home dataset"), so a `FILTER` on another
-dataset never makes that dataset a home.
+Why the executor answers where #653 refuses is in "Answers beyond Layer
+3". The home of a component comes from its arguments only (section 5.2:
+the `FILTER` "does not determine the home dataset"), so a `FILTER` on
+another dataset never makes that dataset a home.
 
 A metric with an aggregate over several datasets (or a `FILTER` on another)
 and an aggregate over a dataset the first does not read is refused. Section
-5.2 rejects the first aggregate as deferred, and the plan 0.13.0 used, one
-join of the first's datasets, would count the second's dataset over the
-first's rows, the plan section 5.2 names wrong. For example,
+5.2 rejects the first aggregate as deferred, and one join of the first's
+datasets would count the second's dataset over the first's rows, the plan
+section 5.2 names wrong. For example,
 `SUM(orders.amount) FILTER (WHERE customers.segment = 'retail') /
 COUNT(DISTINCT customers.id)` divided by the customers with an order
 (650 / 3 on the data of Appendix B.1). The message suggests a metric
 declared on the dataset, or two metrics. "Another aggregate reads a dataset
 the first does not" means a dataset outside the datasets the first one's
 arguments read: `SUM(lines.qty * products.price) / SUM(lines.qty)` or
-`/ MAX(products.price)` stay within them and are planned as before.
+`/ MAX(products.price)` stay within them and are planned over one join.
 
 ### Reachability
 
@@ -993,22 +939,18 @@ plausible wrong plan gives another answer: the dimension's values with
 splits it in two, and one `SELECT` from orders loses a region and counts
 returns once per order.
 
-Refusals no longer advise asking for each metric in its own question: the
-advice was given only when each metric planned alone, and such a question
-is now stitched.
-
 ## Semi-joins for filters on the many side
 
 A row filter on a dataset whose rows reference the root's, such as
 `-m sessions -f "purchases.revenue > 0"` (sessions with a purchase of a
 value) or `-m device_count -f "readings.reading_date = '2026-10-19'"`
 (devices with a reading that day), made the referencing dataset the root,
-and the check of the previous sections refused the metric: it would count
-each session once per purchase. Models worked around it with a field on
-the root (`sessions.has_purchase`), which cannot take the filter's
+and the check of "Refuse a metric over another dataset's rows" refused
+the metric: it would count each session once per purchase. Models worked
+around it with a field on the root (`sessions.has_purchase`), which cannot take the filter's
 condition. Two models of dactopus-data-models asked for it (#10).
 
-Such a filter is now a semi-join: `sessions.session_key IN (SELECT
+Such a filter is a semi-join: `sessions.session_key IN (SELECT
 purchases.session_key FROM purchases WHERE purchases.revenue > 0)`. A root
 row stays when at least one row of the filtered dataset references it and
 passes the filter, and counts once, so a root row never repeats. Layer 3
@@ -1022,7 +964,7 @@ keeps a source row once per group however many rows derive from it, which
 is the same count. Whether a later version defines an anti-semi-join, and
 how it treats NULL, is open.
 
-The planner tries it only when the question is refused as before. It then
+The planner tries it only when one root cannot answer the question. It then
 takes the root of the metrics, dimensions and aggregate filters alone; a
 row filter on datasets that root reaches stays a `WHERE` over its joins,
 and a row filter on datasets it does not reach, one of which reaches it
@@ -1042,7 +984,7 @@ and why.
   that links them when there is one (next sections).
 - The subquery is planned as a question over M: its own `LEFT JOIN`s,
   `FINAL` and dictionaries. M reaches the root along one path of
-  relationships (two are ambiguous, section 6.9), with one `IN` per step,
+  relationships (two are ambiguous, #653 section 4), with one `IN` per step,
   and a key of several columns is a tuple.
 - `NOT` stays inside the subquery: `NOT readings.reading_date = '...'`
   keeps devices that have a reading on another day. A filter that holds on
@@ -1055,18 +997,19 @@ and why.
 - A NULL key references nothing: ClickHouse answers `NULL IN (...)` with
   NULL and a tuple with a NULL in it with 0, as SQL does, when
   `transform_null_in` is 0 (checked on 26.9). It is 0 by default, and
-  every generated `SELECT` now sets it, since a user's profile may set 1,
+  every generated `SELECT` sets it, since a user's profile may set 1,
   under which a NULL matches a NULL.
 
 Refused: a filter that mixes the root's datasets and M's in one
 expression (split it into two filters; an `OR` across the sides cannot be
 split), a dataset that both reaches the root and is reached by it
-(ambiguous, as before), and two paths from M to the root. A dimension of
+(ambiguous), and two paths from M to the root. A dimension of
 M makes M one of the question's datasets: the metric is answered over its
 own rows, joined to a spine of M's rows ("A metric of the one side by the
 many side"). A metric that reads M, `FILTER (WHERE ...)` included, makes M
-one of the question's datasets as before, and is answered over M's rows
-(its per-row expression is the author's, as in the previous section).
+one of the question's datasets, and is answered over M's rows
+(its per-row expression is the author's, as in "Refuse a metric over
+another dataset's rows").
 Inside a stitched question each group plans
 its own semi-joins: `-m device_count -m reading_count -f "readings..."`
 filters readings with a `WHERE` and devices with an `IN`.
@@ -1087,12 +1030,11 @@ A WooCommerce product is in several categories, modelled as
 `product_categories (product_id, category) -> products`; order lines
 reach `products` too. "Revenue of the lines in Clothing" has one meaning,
 the lines whose product has a Clothing row, each once, but M (the
-categories) does not reach the root (the lines), and 0.10.1 refused it
-(#69). A model could answer it only through a dataset at the grain of
+categories) does not reach the root (the lines) (#69). A model could answer it only through a dataset at the grain of
 line and category, which repeats each line once per category and
 rewrites past lines whenever the catalog changes.
 
-The filter is now a semi-join through S, the first dataset on M's
+The filter is a semi-join through S, the first dataset on M's
 relationships that the root reaches: M's subquery keeps S rows, and the
 root's path to S adds one `IN` per relationship, as M's path does.
 
@@ -1188,15 +1130,14 @@ orders.order_id IN (SELECT order_lines.order_id FROM order_lines
   (`favorites (customer_id, item_id)` for orders through customers), and
   one with two paths to the root, or one that M meets at two datasets,
   is left out, since naming it would be refused.
-- This planner first refused a question that named no fact even when
-  one fact linked them: a model that relates orders to products only
-  through refund lines would answer "orders with Clothing" as refunded
-  ones without a word. The refusal did not prevent that. With one fact
-  its message names only that fact, and agents add the filter it
-  suggests as written; with lines by brand next to the lines, a weaker
-  agent could name the brands and lose the lines without one. The
-  refusal stays where it asks for a choice, between facts that link
-  them apart.
+- Refusing a question that names no fact, when one fact links them,
+  protects nothing: with one fact the message names only that fact, and
+  agents add the filter it suggests as written, so a model that relates
+  orders to products only through refund lines still answers "orders
+  with Clothing" as refunded ones. With lines by brand next to the
+  lines, a weaker agent could name the brands and lose the lines without
+  one. The refusal stays where it asks for a choice, between facts that
+  link them apart.
 - A filter dataset that meets two named facts (`order_lines` and
   `refund_lines` both filtered) is refused with both named, since an
   order could be kept through either. The rules of the previous section
@@ -1215,8 +1156,8 @@ products, and one subquery per filter each give another answer.
 A metric of a dataset H grouped by a field of a dataset whose rows
 reference H's, such as `orders.order_count` by `order_lines.product_id`
 or `customers.customer_count` by `orders.shipping_country`, was refused
-(#10): one `SELECT` over the many side counts each H row once per row
-that references it. On 2026-11-10, 92 questions nobody shaped to the
+(#10), since one `SELECT` over the many side counts each H row once per
+row that references it. On 2026-11-10, 92 questions nobody shaped to the
 model (42 from the default reports of Shopify and WooCommerce, 50 written
 by an agent in the role of a store owner) were asked of the `commerce`
 model of dactopus-data-models over a Shopify and a WooCommerce store, by
@@ -1276,9 +1217,8 @@ as above: a row of "Answers beyond Layer 3".
 An answer can be literal. `session_conversion_rate` by
 `purchases.currency` counts the sessions with a purchase in each
 currency, so it is 1 in every group: the spec's answer to the question
-asked. On the GA4 sample it is 1.0 over 4,848 sessions in USD. The docs page, which showed that question refused, shows one that
-is still refused: revenue by an event's name, whose path runs from
-purchases to sessions and out to events.
+asked.
+On the GA4 sample it is 1.0 over 4,848 sessions in USD.
 
 `tests/test_bridge.py` compares answers with DuckDB running the section 9
 strategy, on the data of the semi-join tests with one more line: an order
@@ -1286,6 +1226,16 @@ with two lines of one item, a customer under two statuses, one without
 orders, orders with a NULL and a missing customer, an order updated in a
 `ReplacingMergeTree`, and a key of two columns. `b04`, `b18` and `b20`
 moved to the answered cases of `tests/test_compliance.py`.
+
+## A metric that reads no dataset
+
+A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is answered
+without `FROM`: one row, or the same value on every row of a question's
+dataset; in a stitched question it joins a group of the others, where a
+group of its own would add a row for every dimension value. An aggregate
+of it (`MAX(CURRENT_TIMESTAMP)`) is still refused in a model of several
+datasets: it would aggregate the rows of whichever dataset the question
+is answered over.
 
 ## Answers beyond Layer 3
 
@@ -1325,6 +1275,27 @@ examples use the model of Appendix B.1 (`orders` and `returns` relate to
 | An expression that reads two datasets next to a key stored twice: a filter on the root and the one side joined with `AND`, an aggregate over two datasets (`SUM(orders.amount * customers.weight)`) or with a `FILTER` on the one side | Answered as Layer 2 does, in a SELECT of its own when its neighbours need other values. An expression where two copies of a key could give the same result (`customers.weight > 0 OR orders.amount > 150`, `SUM(GREATEST(orders.amount, customers.weight))`) is refused, as #653 refuses it. See "A key stored twice on the one side" | `E_CROSS_DATASET_FILTER` for the filter; `E_AMBIGUOUS_MEASURE_GRAIN` for the aggregate |
 | A metric of a dataset by a field of a dataset whose rows reference it: `customers.customer_count` by a field of `orders` (section 5.3) | Each customer once in each group its orders make, over the distinct pairs of the field's value and customer key; see "A metric of the one side by the many side" | `E_NO_PATH`, or `E_PARTIAL_DIMENSION_REACHABILITY` next to a metric that reaches the field; section 7 sends it to Layer 2 |
 
+## `FINAL` instead of `argMax` for `ReplacingMergeTree` tables
+
+Measured on 3.5 million rows with 20% duplicate versions: `FINAL` took
+94 ms against 150 ms for an `argMax` rewrite alone, 90 against 125 with a
+join. `FINAL` is also one keyword to generate where `argMax` is a subquery
+per dataset. `argMax` was not built.
+
+A `Distributed` table, materialized view or `Merge` table is read with
+`FINAL` when the table it reads keeps versions. Checked on ClickHouse
+26.9: `FINAL` on the first two over a plain `MergeTree` fails with
+`ILLEGAL_FINAL`, so it cannot be added blindly; a `Merge` table applies it
+to the tables that support it and skips the rest. When the table read is
+hidden from the connected user, the dataset is read without `FINAL` and
+`validate` reports it: guessing `FINAL` would break queries over plain
+tables that work today, and `dedup: final` settles it per dataset.
+`engine_full` names a `Distributed` or `Merge` table's tables as quoted
+strings on 26.1 through 26.9; `system.tables` names a view's target only
+from 26.6 on, so the introspection query does not select it.
+
+## The model's time zone, UTC by default
+
 A ClickHouse `DateTime` is an instant; its zone decides how it prints and
 which calendar day or hour it falls on. A column without a zone, `now()`,
 `today()` and `CAST('...' AS DateTime)` use the server's zone, so the same
@@ -1348,42 +1319,31 @@ without a zone argument ClickHouse counts in its arguments' zone, and when
 they have two it miscounts hours and longer. A reading at 20:00 UTC in a
 `DateTime('Asia/Makassar')` column and `03:00+00:00` the next day came out
 20 hours and -1 day apart; with the zone, 7 hours and 0 days in New York.
-`CURRENT_TIMESTAMP` against a column in UTC on a server outside UTC was
-such a pair before this change too. Ossie has no such field;
+Ossie has no such field;
 apache/ossie may get one, and this entry would then read it.
 
 A model shared by deployments cannot name the zone: dactopus-data-models
 has one `commerce` model for every store and builds each store's dates
 in that store's zone (#54). So the deployment may replace it, as it
-names the database in its URL: `--time-zone`, else
-`OSSIE_CLICKHOUSE_TIME_ZONE`, else the model's entry, else UTC. The
-deployment wins over the model because it knows which zone its data was
-built in, and a model can then carry a default. `load_model` writes the
-zone into the loaded model's `CLICKHOUSE` entry, so the planner, the
-model trimmed to a user's grants, `validate --url` and `list_model` read
-it where they read the model's own. A deployment's file holding only
-the entry was not possible: every file holds a dataset, and the entry in
+names the database in its URL (the order is in model-authoring.md, "Time
+zone"). The deployment wins over the model because it knows which zone
+its data was built in, and a model can then carry a default. A
+deployment's file holding only the entry was not possible: every file holds a dataset, and the entry in
 two files is refused, since one would be edited and not the other. One
 zone per deployment is still one zone for every store a deployment
 holds.
 
 Agents still answered "today" for the wrong day (#56). Asked how many
 orders were placed today, with the store in `Pacific/Honolulu` and the
-agent's clock in `Pacific/Kiritimati` (always a day apart), fresh
-`claude -p` sessions on 0.9.3 wrote the date they knew as a literal or
-ClickHouse's `today()`: none of three Haiku 5.5 and three Sonnet 5.5
-sessions wrote `CURRENT_DATE`, and one answered right, by converting
-the date itself. The instructions said only whose today it was, and
-"never write SQL" read as a ban on `CURRENT_DATE` in a filter. They now
-say to write periods counted from now with `CURRENT_DATE` or
-`CURRENT_TIMESTAMP`, never a known date, and that SQL goes in filters;
-the `query` tool's description, which an agent reads as it writes the
-filter, has a `CURRENT_DATE` example. After that all six sessions wrote
-`CURRENT_DATE` and answered 1 order, 137. `list_model` also returns
-`today` and `now` in the zone, so an agent names the day it answered
-for. They come from the server's clock, as `CURRENT_DATE` does, not from
-Python's, which may differ from it, and are read on every call, since a
-session may outlast midnight. `today()`, `yesterday()`, `now()` and
+agent's clock in `Pacific/Kiritimati` (always a day apart), none of six
+fresh `claude -p` sessions (three Haiku 5.5, three Sonnet 5.5, on 0.9.3)
+wrote `CURRENT_DATE`: they wrote the date they knew or ClickHouse's
+`today()`, and "never write SQL" read as a ban on `CURRENT_DATE` in a
+filter. With the server's instructions and the `query` tool's
+description asking for `CURRENT_DATE` or `CURRENT_TIMESTAMP` in filters,
+all six wrote it and answered right. `list_model` returns `today` and
+`now` in the zone, read from the server's clock on every call, so an
+agent names the day it answered for. `today()`, `yesterday()`, `now()` and
 `now64()` without a zone, and the aliases `curdate()` and
 `localtimestamp()`, are rewritten into the zone too: they are
 ClickHouse's own functions, but an answer in the server's zone is the
@@ -1410,7 +1370,7 @@ on August 31 in New York):
 
 A string compared directly with a field or metric whose `datatype` is
 `DateTime` or `DateTimeTz` (`=`, `<>`, `<`, `BETWEEN`, `IN` and the
-like) is now made a `TIMESTAMP` literal before the field is inlined, so
+like) is made a `TIMESTAMP` literal before the field is inlined, so
 `rewrite_tree` reads it as one: in the model's zone, an offset kept, a
 fraction as `DateTime64`. The model's `datatype` says which fields hold
 times, so the SQL is the same without a server, as `sql` shows it. A
@@ -1442,14 +1402,6 @@ Not chosen:
   them (`toStartOfMonth(toDate(x, zone))`), when the standard's field asks
   for it.
 
-A metric that reads no dataset, such as `CURRENT_TIMESTAMP`, is answered
-without `FROM`: one row, or the same value on every row of a question's
-dataset; in a stitched question it joins a group of the others, where a
-group of its own would add a row for every dimension value. An aggregate
-of it (`MAX(CURRENT_TIMESTAMP)`) is still refused in a model of several
-datasets: it would aggregate the rows of whichever dataset the question
-is answered over.
-
 ## Remote MCP server, designed, not built
 
 Streamable HTTP with OAuth 2.1 is built only when a real deployment asks
@@ -1466,40 +1418,3 @@ for it. The design is fixed so the local server does not preclude it:
   enables only the roles mapped from the token's groups. Role switching
   works with any ClickHouse; grants, row policies and model trimming all
   follow the active roles.
-
-## apache-ossie is vendored until it reaches PyPI
-
-PyPI refuses an upload whose dependencies include a direct reference
-(`name @ git+https://...`), and apache-ossie was one: it is not on PyPI
-(checked 2026-11-01), and Ossie's first release has not been voted yet.
-Even then, an ASF release is a source release, and publishing to PyPI is
-optional. Until apache-ossie is on PyPI, this package carries a copy, so
-that it, and the runner that depends on it, can go to PyPI.
-
-- **What is copied.** `python/src/ossie` at one commit (three modules, 593
-  lines at `fab4f63`) with the repository's `LICENSE` and `NOTICE`.
-  `_vendor/vendor.txt` names the commit. Its dependencies, pydantic and
-  PyYAML, are direct dependencies here.
-- **The one change.** `scripts/vendor_ossie.py` makes the package's
-  imports of itself relative, so no code of an `ossie` installed
-  next to it is imported (`tests/test_model.py` checks that). CI runs the script with
-  `--check`, which fails on any other difference from upstream.
-- **What users see.** `load_model` returns
-  `dactopus_ossie_clickhouse._vendor.ossie.OssieDocument`, a class distinct
-  from an installed apache-ossie's. `Executor` refuses a document of that
-  other class with a `TypeError`: `model.py` tells datasets from the model
-  with `isinstance`, so it would drop a dataset's `dedup` override and
-  report a false error.
-- **The weekly run.** `latest.yml` vendors Ossie's `main` before its tests
-  and canaries, where it used to install it.
-
-Not chosen:
-
-- **A package of our own on PyPI with the copy.** One more package to
-  release, and "Ossie" in its name is the ASF's mark.
-- **Our own model classes.** They would drift from the spec's.
-- **Relative imports upstream.** apache/ossie has no relative import
-  anywhere, and the change would serve only those who vendor; here it is
-  two lines of the script.
-
-When apache-ossie is on PyPI, the dependency returns and `_vendor` goes.

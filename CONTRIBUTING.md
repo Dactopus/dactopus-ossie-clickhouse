@@ -136,6 +136,25 @@ test suite against a ClickHouse service, and builds the package. By
 submitting a contribution you agree it is licensed under the Apache
 License 2.0, like the rest of the project.
 
+## Changelog
+
+A pull request that changes what a user of the package sees adds an entry
+under `[Unreleased]` in `CHANGELOG.md`. Its reader is someone moving to
+the new version, so an entry says what changes for them, in one to three
+lines, in the group `Changed`, `Added`, `Removed` or `Fixed`:
+
+- **Breaking:** opens an entry that needs something from the reader: a
+  model that no longer loads, a question or metric refused that was
+  answered, a renamed or removed command or API. It says what to do, and
+  comes first in its group.
+- "Answers change" with the number before and after, on a model the
+  reader can name, when a question returns another number.
+- Why goes in a file of `docs/decisions/`, linked by its absolute URL:
+  the section becomes the release notes on GitHub, where a relative link
+  breaks.
+
+A change that touches only tests, CI or the documentation has no entry.
+
 ## Releasing
 
 For maintainers. The translator is built on
@@ -149,7 +168,7 @@ SQLGlot release and drops the rewrites that release made redundant
 
 1. On the branch to release, move the `[Unreleased]` entries in
    `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, leaving `[Unreleased]`
-   empty.
+   empty, and add the version's compare link at the end of the file.
 2. Set `version` in `pyproject.toml` and run `uv lock`, so the package and
    the version the MCP server reports match the tag.
 3. Push, wait for the four required CI jobs, merge with "Rebase and

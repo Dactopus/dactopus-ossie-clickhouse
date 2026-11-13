@@ -16,7 +16,7 @@ LINK = re.compile(r"\]\(([^)\s#]+\.md)(?:#([\w-]+))?\)")
 def _sources():
     for pattern in ("src/**/*.py", "tests/*.py", "scripts/*.py", "*.md", "docs/**/*.md"):
         for path in ROOT.glob(pattern):
-            if "_vendor" not in path.parts and path.name != "CHANGELOG.md":
+            if "_vendor" not in path.parts:
                 yield path
 
 

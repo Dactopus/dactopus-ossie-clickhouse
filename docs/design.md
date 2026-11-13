@@ -40,8 +40,6 @@ a model author sees of them, with examples, is in
 - **ClickHouse**
   - [`FINAL` instead of `argMax` for `ReplacingMergeTree` tables](#final-instead-of-argmax-for-replacingmergetree-tables)
   - [The model's time zone, UTC by default](#the-models-time-zone-utc-by-default)
-- **MCP server**
-  - [Remote MCP server, designed, not built](#remote-mcp-server-designed-not-built)
 
 ## Questions are the only query input
 
@@ -1401,20 +1399,3 @@ Not chosen:
   and the planner does not know column types. It can be done without
   them (`toStartOfMonth(toDate(x, zone))`), when the standard's field asks
   for it.
-
-## Remote MCP server, designed, not built
-
-Streamable HTTP with OAuth 2.1 is built only when a real deployment asks
-for it. The design is fixed so the local server does not preclude it:
-
-- The server validates bearer tokens from the organization's identity
-  provider through the SDK's token verifier; the SDK serves the RFC 9728
-  metadata. The MCP token is never passed to ClickHouse.
-- Caller identity maps to a ClickHouse identity behind `client_factory`,
-  the one seam that decides which connection a caller gets. Two
-  strategies: token exchange for a ClickHouse-audience JWT (ClickHouse
-  Cloud JWT authentication, or self-hosted builds that verify JWTs), or
-  role switching, where a service user holds every role and each request
-  enables only the roles mapped from the token's groups. Role switching
-  works with any ClickHouse; grants, row policies and model trimming all
-  follow the active roles.

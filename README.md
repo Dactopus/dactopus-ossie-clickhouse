@@ -183,8 +183,7 @@ and the MCP tools are the stable surface. Tested against the TPC-DS
 reference model and the spec's query compliance cases on ClickHouse
 26.x, and weekly on the newest SQLGlot and on Ossie's `main`.
 
-What is designed and waits for a request, such as a remote multi-user
-MCP server, is in the
+Features that wait for a request are in the
 [issue tracker](https://github.com/Dactopus/dactopus-ossie-clickhouse/issues?q=label%3Aneeds-demand)
 under `needs-demand`; ask there.
 

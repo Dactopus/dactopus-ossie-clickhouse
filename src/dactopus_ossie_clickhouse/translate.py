@@ -112,7 +112,7 @@ _DATE_PARTS = {
 # default for what it does not define ("Dialect Extensions"): SQLGlot knows
 # many functions of other engines and would rename them, DAYOFWEEK(d) to
 # DAY_OF_WEEK(d), which ClickHouse lacks, though it has DAYOFWEEK itself
-# (docs/design.md).
+# (docs/decisions/functions-pass-through.md).
 _CATALOG = frozenset({
     # aggregates
     "SUM", "COUNT", "AVG", "MIN", "MAX", "STDDEV", "STDDEV_POP", "STDDEV_SAMP",
@@ -238,8 +238,9 @@ class OssieSQL(Dialect):
     Parser = _OssieParser
     # NULLs sort last both ways where the spec says nothing, as in ClickHouse: a query's
     # ORDER BY, which the planner builds, and WITHIN GROUP. A window's ORDER BY has the
-    # spec's default, NULL as the largest value, set in parse() (docs/design.md); this
-    # setting does not give it, as it would flip every DESC the parser reads.
+    # spec's default, NULL as the largest value, set in parse()
+    # (docs/decisions/null-placement.md); this setting does not give it, as it would
+    # flip every DESC the parser reads.
     NULL_ORDERING = "nulls_are_last"
 
 

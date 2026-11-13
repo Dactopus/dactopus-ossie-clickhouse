@@ -1,5 +1,4 @@
-"""A key repeated on the one side of a relationship (docs/design.md, "Many-to-one
-inferred from keys").
+"""A key repeated on the one side of a relationship (docs/decisions/key-stored-twice.md).
 
 ClickHouse does not enforce the uniqueness of a declared key, so a customer can be
 stored twice. Layer 3 (apache/ossie#653, wide_table_semantics.md section 4) answers

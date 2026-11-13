@@ -51,7 +51,7 @@ def test_reference_model_loads():
 
 def test_reads_the_vendored_ossie_only(tmp_path):
     # No code of an apache-ossie installed next to this package, of any version, is
-    # imported: the package carries its own copy (docs/design.md).
+    # imported: the package carries its own copy (docs/decisions/vendored-ossie.md).
     (tmp_path / "ossie").mkdir()
     (tmp_path / "ossie" / "__init__.py").write_text("raise ImportError('installed ossie')\n")
     code = (

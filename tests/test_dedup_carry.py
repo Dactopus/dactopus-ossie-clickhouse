@@ -1,5 +1,4 @@
-"""Aggregates that need other values from a key stored twice (docs/design.md, "A key
-stored twice on the one side").
+"""Aggregates that need other values from a key stored twice (docs/decisions/key-stored-twice.md).
 
 A value carried in the derived table of the one side for one aggregate (the condition of a
 FILTER on that dataset, its column in an argument) keeps apart the copies of a key, so any

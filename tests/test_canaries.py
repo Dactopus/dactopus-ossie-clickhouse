@@ -134,7 +134,7 @@ def test_sqlglot_places_nulls_as_clickhouse_does(order, generated):
     actual = tree.sql(dialect="clickhouse")
     assert actual == f"SUM(v) OVER (ORDER BY {generated})", (
         f"SQLGlot {sqlglot.__version__} prints ORDER BY {order} as {actual}: check the "
-        "window ORDER BY default in parse() (docs/design.md, NULL placement) and the NULLS "
+        "window ORDER BY default in parse() (docs/decisions/null-placement.md) and the NULLS "
         "tests in tests/test_translate.py"
     )
 
@@ -181,11 +181,11 @@ def test_ossie_reserves_agg_and_reads_source_columns():
         pytest.skip("this checkout of apache/ossie predates the reserved AGG (#662)")
     assert "`OSSIE_SQL_2026` expressions MUST NOT call `AGG`" in language, (
         "apache/ossie's expression_language.md no longer forbids calling AGG: check the AGG "
-        "refusal in _shape_problem (translate.py) and docs/design.md"
+        "refusal in _shape_problem (translate.py) and docs/decisions/agg-reserved.md"
     )
     assert "source.quantity` and `SOURCE.quantity` name the same column" in spec, (
         "apache/ossie's spec.md no longer lets a dataset's metric read source.column: check "
-        "Planner._own_field and docs/design.md"
+        "Planner._own_field and docs/decisions/source-columns.md"
     )
     assert "the name `source` refers to that field" in spec
 

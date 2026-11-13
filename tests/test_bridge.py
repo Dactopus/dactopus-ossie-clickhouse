@@ -1,7 +1,6 @@
 """A metric of the one side by a dimension of the many side, against ClickHouse,
 compared with DuckDB running the reference evaluation strategy of
-relational_semantics.md section 9 (docs/design.md, "A metric of the one side by
-the many side").
+relational_semantics.md section 9 (docs/decisions/one-side-by-many-side.md).
 
 The data is that of tests/test_semi_join.py in a database of its own, with one
 more line: order 10 has two toy lines, so a sum of order totals over the joined
@@ -183,8 +182,8 @@ def test_a_group_without_a_home_row_takes_the_empty_value(ex):
 
 def test_the_fact_between_two_dimensions_is_named(model):
     """Customers by category: neither reaches the other. Lines link them, and a
-    filter on lines names that fact (docs/design.md, "Through a fact that links
-    them")."""
+    filter on lines names that fact
+    (docs/decisions/semi-joins.md#through-a-fact-that-links-them)."""
     planner = Planner(model)
     with pytest.raises(PlanError, match="not joined through many-to-one relationships"):
         planner.plan(Query(("customer_count",), ("items.category",)))

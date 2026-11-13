@@ -8,7 +8,7 @@ as the UNION of the branches' keys, NULL-safe equality, a missing branch row giv
 the component's empty-input value, and the metric's expression over the values.
 Where a component is 0 the expression divides by zero: DuckDB and ClickHouse
 differ on that, so the reference writes the value by hand as NULL, which is what
-the executor shows (docs/design.md, "Division to `Float64`").
+the executor shows (docs/decisions/division-to-float64.md).
 
 ``B1`` is the data of the spec's Appendix B.1. ``EXT`` adds an order and a return
 without a customer (a NULL group in two branches and in none of the third) and
@@ -332,7 +332,7 @@ def test_a_null_dimension_value_of_its_own_dataset_is_not_a_missing_branch_row(m
 def test_a_filter_on_the_many_side_counts_customers_with_a_matching_order(models, duck_for):
     """Orders over 100 sum to 500 and belong to C1 and C3: 500 / 2. #653 refuses the
     filter (E_UNSUPPORTED_FILTER_PATH); here it is a semi-join, as for any metric of
-    customers (docs/design.md)."""
+    customers (docs/decisions/components.md)."""
     ex = models["ext"]
     got = ex.execute(Query(("revenue_per_customer",), (), ("orders.amount > 100",)))
     assert got.rows == [(250.0,)]
@@ -516,7 +516,7 @@ MIXED = {
 }
 # Aggregates over one root that need other values from the one side than their neighbours do:
 # one SELECT each, since a value carried for one keeps apart copies of a key for the others
-# (docs/design.md, "A key stored twice on the one side").
+# (docs/decisions/key-stored-twice.md).
 APART = {
     "joined_per_sale": f"{LISTED} / SUM(store_sales.ss_quantity)",
     "filtered_per_sale": f"{CLV_PARTS} FILTER (WHERE item.i_brand = 'x') / "

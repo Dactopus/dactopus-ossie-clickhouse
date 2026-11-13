@@ -4,7 +4,8 @@ Guidance for AI coding agents working in this repository: an executor of
 the [Apache Ossie](https://github.com/apache/ossie) semantic model
 standard for ClickHouse, with an MCP server. It holds what the code does
 not show. The rest is where it belongs: `README.md` describes the product,
-`docs/design.md` records each decision with its evidence,
+`docs/decisions/` records each decision with its evidence (indexed in
+`docs/design.md`),
 `docs/model-authoring.md` what a model author sees, `CONTRIBUTING.md` the
 setup, the layout and the release steps.
 
@@ -32,9 +33,10 @@ beyond ClickHouse and the Ossie standard where avoidable.
 - Every answer is reproducible: the same question and the same model
   yield the same SQL.
 - Keep the public surface small. Prefer one obvious way to do each thing.
-- A decision that rests on a measurement or an evaluation goes into
-  `docs/design.md` with its evidence, so it is not relitigated without
-  new evidence. Why a rewrite in `translate.py` exists is in a comment at
+- A decision that rests on a measurement or an evaluation gets a file in
+  `docs/decisions/` with its evidence and a line in `docs/design.md`, so
+  it is not relitigated without new evidence. Code and tests cite it by
+  that file's path. Why a rewrite in `translate.py` exists is in a comment at
   the rewrite.
 
 ## Rules the code does not show
@@ -105,8 +107,8 @@ Translation:
   `WITHIN GROUP` included, sorts NULLs last both ways. Keep both when
   parsing switches to an upstream parser.
 
-Planning (`planner.py`; each rule and refusal has a section in
-`docs/design.md`):
+Planning (`planner.py`; each rule and refusal has a file in
+`docs/decisions/`):
 
 - Deterministic: one `SELECT` per question, datasets from `source`, joins
   from `relationships`. Keys and relationship columns name fields, never

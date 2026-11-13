@@ -187,7 +187,7 @@ class Executor:
     def __init__(self, client, model: OssieDocument, policy: Policy | None = None):
         if not isinstance(model, OssieDocument):
             # One built with an installed apache-ossie is another class: the isinstance
-            # checks of model.py would misread it silently (docs/design.md).
+            # checks of model.py would misread it silently (docs/decisions/vendored-ossie.md).
             kind = f"{type(model).__module__}.{type(model).__qualname__}"
             raise TypeError(
                 f"model is a {kind}: pass what load_model returns, or an OssieDocument "

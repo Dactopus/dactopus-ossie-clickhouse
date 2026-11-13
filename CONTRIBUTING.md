@@ -176,8 +176,9 @@ SQLGlot release and drops the rewrites that release made redundant
    "answers change" in the line of a change that returns another number.
    Leave out what changes nothing for a user of the package, such as
    tests, CI and contributor docs. If `UPGRADING.md` has `## Unreleased`,
-   rename it `## X.Y.Z`, and open the section with one sentence in
-   italics that links to it.
+   rename it `## X.Y.Z`, and open the release's section of `CHANGELOG.md`
+   with one sentence in italics that links to
+   `UPGRADING.md#XYZ` by its absolute URL.
 2. Set `version` in `pyproject.toml` and run `uv lock`, so the package and
    the version the MCP server reports match the tag.
 3. Push, wait for the four required CI jobs, merge with "Rebase and

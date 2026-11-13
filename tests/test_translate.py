@@ -322,6 +322,7 @@ def test_format_must_be_literal():
             "POSITION('a', s, 1, 2)",
             r"expected POSITION\(substr IN str\) or POSITION\(substr, .*got 4",
         ),
+        ("ROUND(x, 1, 2)", r"expected ROUND\(x\[, d\]\), got 3"),
         ("FLOOR(x, 1, 2)", r"expected FLOOR\(x\[, d\]\), got 3"),
         ("CEIL(x, 1, 2)", r"expected CEIL\(x\[, d\]\), got 3"),
         ("CEILING(x, 1, 2)", r"expected CEILING\(x\[, d\]\), got 3"),
@@ -376,12 +377,13 @@ def test_format_must_be_literal():
         ("SUM(v) OVER (ORDER BY k RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)", r"frame"),
         ("SUM(v) OVER (ORDER BY k RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)", r"frame"),
         ("SUM(v) OVER (ORDER BY k GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW)", r"frame"),
-        # NULLS FIRST | LAST belongs to a window's ORDER BY only
-        ("PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY x NULLS LAST)", r"NULLS LAST is allowed"),
-        (
-            "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x NULLS FIRST) OVER (ORDER BY k)",
-            r"NULLS FIRST is allowed only in a window's ORDER BY",
-        ),
+        # NULLS FIRST | LAST belongs to a window's ORDER BY and WITHIN GROUP only
+        ("ARRAY_AGG(x ORDER BY y NULLS FIRST)", r"NULLS FIRST is allowed only in a window's"),
+        # compliance/expressions/invalid.txt
+        ("x IN ()", r"IN needs at least one value"),
+        ("x NOT IN ()", r"IN needs at least one value"),
+        ("SUM(DISTINCT)", r"DISTINCT needs an argument"),
+        ("COUNT(DISTINCT)", r"DISTINCT needs an argument"),
         # SQLGlot reads a ClickHouse parametric call as an alias: SQL that fails
         ("quantile(0.9)(x)", r"parametric call name\(params\)\(args\) is not supported"),
         ("SUM(x) AS total", r"an alias \(AS\) is not allowed"),
@@ -392,3 +394,34 @@ def test_format_must_be_literal():
 def test_rejects_arguments_outside_spec_signature(ossie, message):
     with pytest.raises(ValueError, match=message):
         to_clickhouse(ossie)
+
+
+@pytest.mark.parametrize("d", ["d", "1 + 1", "2.0", "-x", "'2'"])
+def test_round_takes_a_whole_number_literal(d):
+    # The spec's tie rule is written with 10^d as an exact literal ("Numeric Semantics").
+    with pytest.raises(ValueError, match=r"ROUND\(x, d\) takes d as a whole number"):
+        parse(f"ROUND(x, {d})")
+
+
+@pytest.mark.parametrize(
+    "ossie", ["ROUND(SUM(x) / 3, 2)", "ROUND(x)", "ROUND(x, -2)", "MOD(SUM(x), 7)", "x % 7 / 2"]
+)
+def test_round_and_mod_rewrite_once(ossie):
+    # rewritten twice, as a metric inlined into a filter is: the same SQL
+    once = rewrite_tree(parse(ossie))
+    assert rewrite_tree(once).sql("clickhouse") == once.sql("clickhouse")
+    assert "ROUND" not in once.sql("clickhouse") and "%" not in once.sql("clickhouse")
+
+
+@pytest.mark.parametrize(
+    "ossie",
+    [
+        "PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY x DESC NULLS LAST)",
+        "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x NULLS FIRST) OVER (ORDER BY k)",
+    ],
+)
+def test_nulls_in_within_group_change_nothing(ossie):
+    # The reference grammar and compliance/expressions/valid.txt accept the clause; a
+    # percentile skips NULLs, so the SQL is that of the item without it.
+    without = ossie.replace(" NULLS LAST", "").replace(" NULLS FIRST", "")
+    assert to_clickhouse(ossie) == to_clickhouse(without)

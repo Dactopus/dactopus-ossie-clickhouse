@@ -84,8 +84,8 @@ The vendored Ossie package:
 
 Translation:
 
-- Expressions are parsed with SQLGlot's default dialect until the upstream
-  Ossie dialect lands. `model.expression_text` is the one place that picks
+- Expressions are parsed with SQLGlot's default dialect until an upstream
+  Ossie parser is on PyPI (#4). `model.expression_text` is the one place that picks
   which of an expression's texts is read; a dialect name is any string.
 - `parse()` types only the spec's function catalog (`_CATALOG`). Any other
   function is `exp.Anonymous` and reaches ClickHouse as written, so
@@ -110,7 +110,7 @@ Translation:
   largest value (spec, "Window ORDER BY NULL Placement"): `parse()` makes
   `DESC` say `NULLS FIRST`. Every other `ORDER BY`, the planner's rows and
   `WITHIN GROUP` included, sorts NULLs last both ways. Keep both when
-  parsing switches to the Ossie dialect.
+  parsing switches to an upstream parser.
 
 Planning:
 
@@ -159,8 +159,8 @@ Planning:
 - Tests with the `clickhouse` fixture need a server at
   `OSSIE_CLICKHOUSE_URL` (default `http://127.0.0.1:8123`) and skip
   otherwise; access-control tests also need SQL access management on
-  the server. `tests/test_compliance.py` and the fixture canary need a
-  checkout of apache/ossie at `OSSIE_REPO`. `CONTRIBUTING.md` has the
+  the server. `tests/test_compliance.py`, `tests/test_expression_fixtures.py`
+  and the fixture canary need a checkout of apache/ossie at `OSSIE_REPO`. `CONTRIBUTING.md` has the
   setup.
 - `tests/fixtures/tpcds.yaml` is an exact copy of Ossie's
   `examples/tpcds_semantic_model.yaml`; a canary checks it.

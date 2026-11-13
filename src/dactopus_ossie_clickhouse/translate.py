@@ -71,6 +71,7 @@ _SIGNATURES = {
     "CHARINDEX": ("CHARINDEX(substr, str[, start])", 2, 3),
     "REGEXP_LIKE": ("REGEXP_LIKE(str, pattern)", 2, 2),
     "REGEXP_EXTRACT": ("REGEXP_EXTRACT(str, pattern[, group])", 2, 3),
+    "ROUND": ("ROUND(x[, d])", 1, 2),
     "FLOOR": ("FLOOR(x[, d])", 1, 2),
     "CEIL": ("CEIL(x[, d])", 1, 2),
     "CEILING": ("CEILING(x[, d])", 1, 2),
@@ -231,7 +232,8 @@ class _OssieParser(Parser):
 class OssieSQL(Dialect):
     """SQLGlot's default dialect plus the spec shapes it parses differently.
 
-    Mirrors apache/ossie PR #222; switch to ``read="ossie"`` once it merges."""
+    Until an upstream parser is on PyPI (#4); tests/test_expression_fixtures.py
+    checks parse() against the spec's fixtures."""
 
     Parser = _OssieParser
     # NULLs sort last both ways where the spec says nothing, as in ClickHouse: a query's
@@ -283,6 +285,23 @@ def _in_window_order(node: exp.Ordered) -> bool:
     return isinstance(node.parent, exp.Order) and isinstance(node.parent.parent, exp.Window)
 
 
+def _in_within_group(node: exp.Ordered) -> bool:
+    return isinstance(node.parent, exp.Order) and isinstance(node.parent.parent, exp.WithinGroup)
+
+
+def _round_digits(node: exp.Round) -> int | None:
+    """The d of ROUND(x, d), 0 without one; None unless a whole number literal."""
+    d = node.args.get("decimals")
+    if d is None:
+        return 0
+    sign = 1
+    if isinstance(d, exp.Neg):
+        d, sign = d.this, -1
+    if isinstance(d, exp.Literal) and d.is_int:
+        return sign * int(d.this)
+    return None
+
+
 def _shape_problem(node: exp.Expression) -> str | None:
     """Spec shapes an argument count cannot express."""
     # SQLGlot reads ClickHouse's quantile(0.5)(x) as quantile(0.5) AS (x): SQL that
@@ -324,10 +343,25 @@ def _shape_problem(node: exp.Expression) -> str | None:
             return f"expected MEDIAN(expr), got {n} argument(s)"
     if isinstance(node, exp.Extract) and node.name.upper() not in _DATE_PARTS:
         return f"{node.name} is not a date part; expected one of " + ", ".join(sorted(_DATE_PARTS))
+    if isinstance(node, exp.Round) and _round_digits(node) is None:
+        return "ROUND(x, d) takes d as a whole number written as a literal"
     if isinstance(node, exp.WindowSpec):
         return _frame_problem(node)
-    if isinstance(node, exp.Ordered) and "nulls" in node.meta and not _in_window_order(node):
-        return f"NULLS {node.meta['nulls']} is allowed only in a window's ORDER BY"
+    # NULLS FIRST | LAST is the spec's in a window's ORDER BY. The reference grammar
+    # (core-spec/grammar, apache/ossie#657) and compliance/expressions/valid.txt also
+    # accept it in WITHIN GROUP, where it changes nothing: a percentile skips NULLs.
+    if (
+        isinstance(node, exp.Ordered)
+        and "nulls" in node.meta
+        and not _in_window_order(node)
+        and not _in_within_group(node)
+    ):
+        return f"NULLS {node.meta['nulls']} is allowed only in a window's ORDER BY or WITHIN GROUP"
+    # Rejected by compliance/expressions/invalid.txt; SQLGlot reads both.
+    if isinstance(node, exp.In) and not node.expressions and not node.args.get("query"):
+        return "IN needs at least one value"
+    if isinstance(node, exp.Distinct) and not node.expressions and not node.args.get("on"):
+        return "DISTINCT needs an argument"
     # ClickHouse accepts IGNORE NULLS here and silently ignores it.
     if isinstance(node, exp.IgnoreNulls) and isinstance(
         node.this, exp.Lag | exp.Lead | exp.NthValue
@@ -503,6 +537,48 @@ def _percentile_cont(p: exp.Expression, arg: exp.Expression) -> exp.Expression:
     return _param_agg("quantileExactInclusiveOrNull", p, arg)
 
 
+def _round(node: exp.Round) -> exp.Expression:
+    """Spec ROUND (expression_language.md, "Numeric Semantics"): a value exactly halfway
+    rounds away from zero, ROUND(2.5, 0) = 3 and ROUND(0.125, 2) = 0.13.
+
+    ClickHouse's round does that for integers and Decimal but rounds a Float tie to
+    even (round(2.5) = 2, round(0.125, 2) = 0.12), and the translator does not know an
+    argument's type. So every ROUND is the spec's equivalent expression: with
+    y = abs(x) * 10^d, sign(x) * (floor(y) + if(2 * (y - floor(y)) >= 1, 1, 0)) / 10^d.
+    Integer factors and literals keep Decimal arithmetic in Decimal, exact and at x's
+    scale; a Float tie is best effort, as the spec says (2.675 is 2.68: 2.675 * 100 is
+    267.5 in Float64). Integers come back as Int64 for d = 0 and as Float64 otherwise,
+    exact below 2^53.
+
+    A negative d rounds to a multiple of g = 10^-d through the rest r of abs(x) after
+    the multiples of g, so no factor is a fraction: sign(x) * (q + if(2 * r >= g, 1,
+    0)) * g with q = floor(abs(x) / g). Decimal division keeps x's scale and drops
+    digits, which floor drops anyway; r is not x % g, which is wrong for a Decimal
+    (the MOD rule below).
+
+    The quotient is divide(), not exp.Div, which the rewrite would make Float64 when it
+    runs again over an inlined metric."""
+    x, digits = node.this, _round_digits(node)
+    one, two = exp.Literal.number(1), exp.Literal.number(2)
+    zero = exp.Literal.number(0)
+    size = _f("abs", x.copy())
+    if digits >= 0:
+        factor = exp.Literal.number(10**digits)
+        y = exp.Mul(this=size, expression=factor.copy()) if digits else size
+        whole = _f("floor", y.copy())
+        half = exp.Mul(this=two, expression=exp.Sub(this=y, expression=whole.copy()))
+        up = _f("if", exp.GTE(this=half, expression=one), one.copy(), zero)
+        rounded = exp.Mul(this=_f("sign", x.copy()), expression=exp.Add(this=whole, expression=up))
+        return _f("divide", rounded, factor) if digits else rounded
+    step = exp.Literal.number(10**-digits)
+    whole = _f("floor", _f("divide", size, step.copy()))
+    rest = exp.Sub(this=size.copy(), expression=exp.Mul(this=whole.copy(), expression=step.copy()))
+    half = exp.Mul(this=two, expression=rest)
+    up = _f("if", exp.GTE(this=half, expression=step.copy()), one, zero)
+    count = exp.Add(this=whole, expression=up)
+    return exp.Mul(this=_f("sign", x.copy()), expression=exp.Mul(this=count, expression=step))
+
+
 def _timestamp_literal(node: exp.Cast, zone: exp.Literal) -> exp.Expression:
     """A wall-clock timestamp written as a string, read in the model's zone.
 
@@ -551,6 +627,17 @@ def rewrite(node: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expressi
         and node.to.this in _TIMESTAMPS
     ):
         return _timestamp_literal(node, exp.Literal.string(zone))
+    if isinstance(node, exp.Round):
+        return _round(node)
+    # ClickHouse's modulo does not align Decimal scales: toDecimal64(125.50, 2) % 7 is
+    # 0.06, the rest of 12550 % 7, and % toDecimal64(7, 0) is too; the spec's MOD is
+    # 6.5. intDiv aligns them and truncates toward zero, so a - b * intDiv(a, b) keeps
+    # the dividend's sign, as % does; integers stay integers and Decimal stays Decimal,
+    # exact. Rewritten twice (an inlined metric), the minus and intDiv stay.
+    if isinstance(node, exp.Mod):
+        a, b = node.this, node.expression
+        quotient = _f("intDiv", a.copy(), b.copy())
+        return exp.Sub(this=a, expression=exp.Mul(this=b, expression=quotient))
     if isinstance(node, exp.Median):
         return _percentile_cont(exp.Literal.number(0.5), node.this)
     if isinstance(node, exp.WithinGroup) and isinstance(

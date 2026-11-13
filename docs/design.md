@@ -24,12 +24,20 @@ tables that work today, and `dedup: final` settles it per dataset.
 strings on 26.1 through 26.9; `system.tables` names a view's target only
 from 26.6 on, so the introspection query does not select it.
 
-## Parsing with SQLGlot's default dialect, not the upstream Ossie dialect
+## Parsing with SQLGlot's default dialect
 
-apache/ossie PR #222 adds an Ossie dialect to SQLGlot. Evaluated and not
-depended on: it parses and validates the spec's SQL, but the mapping to
-ClickHouse stays this project's work either way. Switch parsing to it once
-it merges; the rewrite layer is unchanged.
+apache/ossie PR #222 added an Ossie dialect to SQLGlot. Evaluated and not
+depended on: it parsed and validated the spec's SQL, but the mapping to
+ClickHouse stays this project's work either way. The PR was closed
+unmerged on 2026-11-10, with the ANTLR grammar of apache/ossie#657 as the
+route to parsers. That grammar, `core-spec/grammar/OssieExpression.g4`
+(merged 2026-11-12), is a reference artifact and ships no parser; its
+conformance fixtures, `compliance/expressions/valid.txt` and
+`invalid.txt`, run against `parse()` in
+`tests/test_expression_fixtures.py`, each line accepted or refused as
+the fixture says or listed there with why. Switching to an upstream
+parser once one is on PyPI is #4; the rewrite layer is unchanged either
+way.
 
 ## Functions outside the spec pass through as written
 
@@ -225,6 +233,49 @@ Known mismatch: the spec's own example of a ratio, `avg_orders`
 on apache/ossie `main`), declares `datatype: Decimal`, and the answer is
 a float. `datatype` is not checked against results.
 
+## ROUND ties away from zero, MOD through intDiv
+
+The spec fixes two results an engine could otherwise decide
+(`expression_language.md`, "Numeric Semantics", apache/ossie#687, merged
+2026-11-12): `ROUND(x, d)` rounds a value exactly halfway away from
+zero, exact for `DECIMAL` and best effort for `FLOAT`, and `/` is true
+division. Division already was (above).
+
+ClickHouse 26.9.27.3, measured on 2026-11-13: `round` rounds integers and
+`Decimal` ties away from zero (`round(25, -1)` is 30, `round(-150.00,
+-2)` is -200) but a `Float64` tie to even: `round(2.5)` is 2,
+`round(-2.5)` is -2, `round(0.125, 2)` is 0.12. The translator does not
+know an argument's type, and an `if` on `toTypeName` needs both branches
+to type-check for every type, so every `ROUND` becomes the equivalent
+expression the spec gives, with `y = abs(x) * 10^d`:
+`sign(x) * (floor(y) + if(2 * (y - floor(y)) >= 1, 1, 0)) / 10^d`. The
+factors and the literals are integers, so a `Decimal` stays a `Decimal`
+at its scale, exact; the comparison is `2 * (y - floor(y)) >= 1` so no
+`Decimal` meets a `Float64` literal. A negative `d` rounds to a multiple
+of `g = 10^-d` from the rest of `abs(x)` after `floor(abs(x) / g)`
+multiples of it, so no factor is a fraction. The quotient is `divide()`,
+which the `Float64` rule for `/` leaves alone. Results:
+
+| Type of `x` | Type of `ROUND(x, d)` |
+| --- | --- |
+| `Decimal(P, S)` | `Decimal(P, S)`, exact |
+| `Float64` | `Float64`; a tie in binary is best effort: `ROUND(2.675, 2)` is 2.68, as `2.675 * 100` is 267.5 in `Float64` |
+| an integer | `Int64` for `d = 0`, else `Float64`, exact below 2^53 |
+
+`d` must be a whole number written as a literal: the spec writes the
+factor as an exact literal, and `parse()` refuses any other `d`, which
+`validate` reports. ClickHouse's own `round` takes a column there.
+
+The same measurement found ClickHouse's modulo wrong for `Decimal`: it
+does not align scales, so `toDecimal64(125.50, 2) % 7` is 0.06, the rest
+of 12550 % 7, and `% toDecimal64(7, 0)` is 0.06 too; with equal scales it
+is right (6.5). `intDiv` aligns them and truncates toward zero, so `MOD(a,
+b)` and `a % b` become `a - b * intDiv(a, b)`: the rest keeps the
+dividend's sign, as `%` and DuckDB do; integers stay integers (`Int64`)
+and a `Decimal` a `Decimal`. A
+`Float64` beyond the `Int64` range now fails in `intDiv` instead of
+returning a rest.
+
 ## NULL placement in ORDER BY
 
 A window's `ORDER BY` without `NULLS FIRST | LAST` sorts NULL as the
@@ -279,16 +330,20 @@ canary pins that, and the spec sentence.
 The setting is not `NULL_ORDERING` of the parser dialect, which stays
 `nulls_are_last`: `nulls_are_large` would also turn every `DESC` the
 parser reads into `NULLS FIRST`, where the spec gives no rule. Switching
-to the upstream Ossie dialect must keep that: the window rule stays in
-`parse()`, and anything else the dialect parses keeps NULLs last.
+to an upstream parser (#4) must keep that: the window rule stays in
+`parse()`, and anything else the parser reads keeps NULLs last.
 
 Out of scope, kept as it was. The rows of a query: the planner builds
 the `ORDER BY`, NULLs last in both directions with no clause, which
 keeps rows without a value at the end of a top-N list. The merged Layer 3
 spec (apache/ossie#653) has no query `ORDER BY` to follow. And
-`WITHIN GROUP (ORDER BY ...)`, where the spec's syntax has no clause: it
-stays rejected there, and the rewrite of the percentile functions
-reads the direction only. Tests pin both.
+`WITHIN GROUP (ORDER BY ...)`: the spec's syntax shows no clause there,
+but the reference grammar (apache/ossie#657) shares its sort item with
+windows, and `compliance/expressions/valid.txt` has
+`PERCENTILE_DISC(0.5) WITHIN GROUP (ORDER BY x DESC NULLS LAST)`. A
+percentile skips NULLs, so the clause changes nothing: `parse()` accepts
+it there and the rewrite of the percentile functions reads the direction
+only. Anywhere else outside a window it is refused. Tests pin both.
 
 What changes in an answer: a window metric ordered `DESC` over a key
 with NULLs. On TPC-DS, with `LEFT JOIN`s, the sales without a matching

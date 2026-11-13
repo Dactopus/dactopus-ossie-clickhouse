@@ -6,7 +6,8 @@ name: Latest upstream
 # whether it breaks us, canaries (tests/test_canaries.py) whether a rule
 # here has lost its reason. The Ossie variant also runs the query compliance cases of
 # Ossie's main on ClickHouse (tests/test_compliance.py), so a case added upstream fails
-# here until that file lists it. The SQLGlot variant ignores the upper bound, so a red
+# here until that file lists it, and parses its expression fixtures
+# (tests/test_expression_fixtures.py). The SQLGlot variant ignores the upper bound, so a red
 # run may also mean a new major version.
 
 on:
@@ -54,7 +55,7 @@ jobs:
           uv run --no-sync python scripts/vendor_ossie.py main
           cat src/dactopus_ossie_clickhouse/_vendor/vendor.txt  # with the Ossie commit
           git clone -q --depth 1 --filter=blob:none --sparse https://github.com/apache/ossie.git "$RUNNER_TEMP/ossie"
-          git -C "$RUNNER_TEMP/ossie" sparse-checkout set compliance/query
+          git -C "$RUNNER_TEMP/ossie" sparse-checkout set compliance/query compliance/expressions
           echo "OSSIE_REPO=$RUNNER_TEMP/ossie" >> "$GITHUB_ENV"
       - run: uv pip freeze | grep -E "^sqlglot=="
       - name: Load the TPC-DS reference data (see CONTRIBUTING.md)

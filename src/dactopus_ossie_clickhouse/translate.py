@@ -343,8 +343,6 @@ def _shape_problem(node: exp.Expression) -> str | None:
             return f"expected MEDIAN(expr), got {n} argument(s)"
     if isinstance(node, exp.Extract) and node.name.upper() not in _DATE_PARTS:
         return f"{node.name} is not a date part; expected one of " + ", ".join(sorted(_DATE_PARTS))
-    if isinstance(node, exp.Round) and _round_digits(node) is None:
-        return "ROUND(x, d) takes d as a whole number written as a literal"
     if isinstance(node, exp.WindowSpec):
         return _frame_problem(node)
     # NULLS FIRST | LAST is the spec's in a window's ORDER BY. The reference grammar
@@ -557,8 +555,14 @@ def _round(node: exp.Round) -> exp.Expression:
     (the MOD rule below).
 
     The quotient is divide(), not exp.Div, which the rewrite would make Float64 when it
-    runs again over an inlined metric."""
+    runs again over an inlined metric.
+
+    A d that is not a whole number literal, a column say, keeps ClickHouse's round:
+    the spec writes 10^d as an exact literal, and round is right there for integers
+    and Decimal; a Float tie rounds to even, as it did."""
     x, digits = node.this, _round_digits(node)
+    if digits is None:
+        return node
     one, two = exp.Literal.number(1), exp.Literal.number(2)
     zero = exp.Literal.number(0)
     size = _f("abs", x.copy())

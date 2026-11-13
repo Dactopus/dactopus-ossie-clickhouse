@@ -246,6 +246,16 @@ def test_round_ties_away_from_zero(expr, x, expected, type_, clickhouse):
         assert kind == type_  # exact, at x's scale
 
 
+def test_round_by_a_column(clickhouse):
+    # ClickHouse's round, as before: ties away from zero for Decimal
+    sql = to_clickhouse("ROUND(x, d)")
+    rows = clickhouse.query(
+        f"SELECT {sql} FROM (SELECT toDecimal64('0.125', 3) AS x, 2 - number * 3 AS d "
+        "FROM numbers(2)) ORDER BY d DESC"
+    ).result_rows
+    assert [decimal.Decimal(str(v)) for (v,) in rows] == [decimal.Decimal("0.13"), 0]
+
+
 def test_round_of_null_is_null(clickhouse):
     sql = to_clickhouse("ROUND(n, 2) IS NULL AND ROUND(n) IS NULL AND ROUND(n, -1) IS NULL")
     assert clickhouse.query(f"SELECT {sql} FROM {CH_BASE}").result_rows[0][0] == 1

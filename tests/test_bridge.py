@@ -183,8 +183,8 @@ def test_a_group_without_a_home_row_takes_the_empty_value(ex):
 
 def test_the_fact_between_two_dimensions_is_named(model):
     """Customers by category: neither reaches the other. Lines link them, and a
-    filter on lines names that fact (docs/design.md, "Through a fact the question
-    names")."""
+    filter on lines names that fact (docs/design.md, "Through a fact that links
+    them")."""
     planner = Planner(model)
     with pytest.raises(PlanError, match="not joined through many-to-one relationships"):
         planner.plan(Query(("customer_count",), ("items.category",)))

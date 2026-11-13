@@ -140,7 +140,7 @@ def test_dimension_filter_join_snapshot():
         )
     )
     # Each joined dataset is read once for each distinct value the question reads from
-    # it (docs/design.md, "Many-to-one inferred from keys"): a repeated key counts once.
+    # it (docs/decisions/key-stored-twice.md): a repeated key counts once.
     assert sql == (
         "SELECT item.__e1 AS i_brand, "
         "SUM(store_sales.ss_ext_sales_price) AS total_sales, "
@@ -233,7 +233,8 @@ def test_order_by():
         dimensions=("item.i_brand",),
         order_by=("item.i_brand", "TOTAL_SALES"),
     )
-    # NULLs last both ways: ClickHouse's default, so no NULLS clause (docs/design.md).
+    # NULLs last both ways: ClickHouse's default, so no NULLS clause
+    # (docs/decisions/null-placement.md).
     assert "ORDER BY i_brand ASC, total_sales ASC SETTINGS" in P.sql(q)
     # The caller's spelling of dataset.field never leaks into ORDER BY: aliases are the model's.
     q = Query(dimensions=("date_dim.D_YEAR",), order_by=("DATE_DIM.D_YEAR",))
@@ -949,8 +950,7 @@ def test_path_of_two_relationships():
     """store_area is reached through store, which the query does not name
     (apache/ossie#653 section 4); values are compared in test_paths.py."""
     sql = _variant(_area).sql(Query(metrics=("total_sales",), dimensions=("store_area.s_state",)))
-    # The whole path is read inside one derived table (docs/design.md, "Many-to-one
-    # inferred from keys").
+    # The whole path is read inside one derived table (docs/decisions/key-stored-twice.md).
     assert (
         "FROM tpcds.store_sales AS store_sales LEFT JOIN (SELECT DISTINCT "
         "store.s_store_sk AS __k0, store_area.s_state AS __e1 FROM tpcds.store AS store "

@@ -166,7 +166,8 @@ def test_translate_uses_picked_dialect():
         ("CAST(c AS TIMESTAMP)", "CAST(c AS Nullable(DateTime))"),
         ("DATE '2024-01-15'", "CAST('2024-01-15' AS Nullable(DATE))"),
         ("DAYOFYEAR(d)", "toDayOfYear(d)"),
-        # outside the spec: as written, for ClickHouse to resolve (docs/design.md)
+        # outside the spec: as written, for ClickHouse to resolve
+        # (docs/decisions/functions-pass-through.md)
         ("DAYOFMONTH(d)", "DAYOFMONTH(d)"),
         ("DayOfWeek(d)", "DayOfWeek(d)"),
         ("COUNT_IF(x > 1)", "COUNT_IF(x > 1)"),

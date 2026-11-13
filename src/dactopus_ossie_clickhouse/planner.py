@@ -327,7 +327,7 @@ def _blend(
     passes. An aggregate's argument is safe when it holds one part and gives each value
     of the part its own result, or results that cannot change the aggregate (_injective).
     Anything else counts a root row once for each copy where Layer 2 counts it once
-    (docs/design.md, "A key stored twice on the one side"); #653 rejects such expressions
+    (docs/decisions/key-stored-twice.md); #653 rejects such expressions
     anyway (E_CROSS_DATASET_FILTER, E_AMBIGUOUS_MEASURE_GRAIN)."""
     parts: dict[int, int] = {}  # id of an aggregate -> carried parts in its argument
 
@@ -1511,7 +1511,7 @@ class Planner:
             # The question is answered over one root, but its aggregates need other values
             # from the one side (_carry): one SELECT for each set of values.
             # One metric alone that needs several, or an aggregate written in a filter, stays
-            # in one SELECT (docs/design.md, "A key stored twice on the one side").
+            # in one SELECT (docs/decisions/key-stored-twice.md).
             stitched = self._stitch(q, row_filters, aggregate_filters)
             if stitched is not None:
                 return stitched
@@ -1627,8 +1627,7 @@ class Planner:
 
         ClickHouse does not enforce the uniqueness of a key the model declares, so a
         dataset on the one side can hold a key twice, and a plain LEFT JOIN would
-        count the root row once for each (docs/design.md, "Many-to-one inferred from
-        keys")."""
+        count the root row once for each (docs/decisions/key-stored-twice.md)."""
         first_of: dict[str, OssieRelationship] = {}
         groups: dict[str, list[OssieRelationship]] = {}
         for r in joins:
@@ -1810,7 +1809,7 @@ class Planner:
 
         A row of the root stays when at least one row of the filtered dataset M
         references it and passes the filter, so no root row repeats; NOT stays
-        inside (docs/design.md, "Semi-joins for filters on the many side": #653
+        inside (docs/decisions/semi-joins.md: #653
         rejects such a filter, section 5.3, and this planner answers it). Filters on M and on
         datasets M reaches go into one subquery, so one row of M passes all of
         them, as a joined row would. The subquery is a question over M, with its
@@ -2449,8 +2448,8 @@ class Planner:
         key and grouped by its dimensions: an H row joins once per pair, so once per
         group, and a NULL or orphan key joins nothing. Only whole metrics whose
         aggregates read H and nothing from the one side; a metric of components keeps
-        the reachability rule of apache/ossie#653 section 5.3 (docs/design.md, "A
-        metric of the one side by the many side"). Not a window metric: _stitch
+        the reachability rule of apache/ossie#653 section 5.3
+        (docs/decisions/one-side-by-many-side.md). Not a window metric: _stitch
         cannot rank merged rows, and the single-root refusal says why it is asked."""
         if not dimensions or any(
             u.component or u.carry or len(u.key) != 1 or u.tree.find(exp.Window) for u in members

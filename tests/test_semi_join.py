@@ -4,8 +4,8 @@ reach, against ClickHouse, compared with DuckDB.
 Orders, order lines and items are filtered for a count of customers; logins for
 a count of accounts, joined on a key of two columns. Expected rows come from
 DuckDB running EXISTS: a customer counts once when at least one of its orders
-passes every filter on orders, and not at all without one (docs/design.md,
-"Semi-joins for filters on the many side"). orders is a ReplacingMergeTree with an order
+passes every filter on orders, and not at all without one
+(docs/decisions/semi-joins.md). orders is a ReplacingMergeTree with an order
 updated after it was paid, so a subquery read without FINAL counts it.
 
 Order lines are counted by tags of their item, and of their order's customer,

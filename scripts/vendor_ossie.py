@@ -1,11 +1,10 @@
 """Copy the apache-ossie package into src/dactopus_ossie_clickhouse/_vendor/ossie.
 
 apache-ossie is not on PyPI, and PyPI refuses a package that depends on a git
-reference, so this package carries a copy (docs/design.md, "apache-ossie is
-vendored until it reaches PyPI"). The copy is upstream's python/src/ossie at one
-commit, with LICENSE and NOTICE, and one change: the package's imports of itself
-are relative, so no code of an apache-ossie installed next to it is imported.
-vendor.txt names the commit.
+reference, so this package carries a copy (docs/decisions/vendored-ossie.md).
+The copy is upstream's python/src/ossie at one commit, with LICENSE and NOTICE,
+and one change: the package's imports of itself are relative, so no code of an
+apache-ossie installed next to it is imported. vendor.txt names the commit.
 
     python scripts/vendor_ossie.py <commit>  # replace the copy with that commit's
     python scripts/vendor_ossie.py main      # the weekly run, on Ossie's main

@@ -61,8 +61,8 @@ products.price * (1 - products.discount))`, a `FILTER` or a `CASE WHEN` on
 the dataset. Others, such as
 `customers.weight > 0 OR orders.amount > 150` or `SUM(GREATEST(orders.amount,
 customers.weight))`, would count a root row once for each copy, and are
-refused; `validate` reports such a metric (`docs/design.md`, "A key stored
-twice on the one side").
+refused; `validate` reports such a metric ([A key stored twice on the one
+side](decisions/key-stored-twice.md)).
 
 ```yaml
 datasets:

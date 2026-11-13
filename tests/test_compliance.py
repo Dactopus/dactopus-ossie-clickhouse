@@ -5,7 +5,7 @@ Each case is a Relational Query Interface query (``query.ossie.sql``, with
 ``AGG()``) and its expected result as standard SQL over literals
 (``expected.sql``). This executor compiles questions of the Semantic Query
 Interface straight to ClickHouse SQL and does not read ``AGG()`` SQL
-(docs/design.md, "Questions are the only query input"), so each case is written here
+(docs/decisions/questions-only.md), so each case is written here
 as the question it asks. A case whose query has a form no question has is
 listed with that form (``NOT_ASKED``), a question the planner refuses is checked
 to be refused (``REFUSED``), and a case the checkout has and this file does not

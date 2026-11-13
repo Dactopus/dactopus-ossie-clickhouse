@@ -94,8 +94,8 @@ uv run ruff format src tests research scripts
 ## Rules that shape the code
 
 [AGENTS.md](AGENTS.md) holds the rules an agent needs in every session,
-and [docs/design.md](docs/design.md) the decisions with their evidence;
-the ones that matter most for a pull request:
+and [docs/design.md](docs/design.md) indexes the decisions with their
+evidence; the ones that matter most for a pull request:
 
 - The [Ossie](https://github.com/apache/ossie) description is the single source of truth. Semantics that
   belong in the model are never hardcoded.
@@ -145,7 +145,7 @@ never changes the `sqlglot` version range in `pyproject.toml`; while the
 major version is 0, it may carry features as well as fixes. A minor
 release raises the lower bound to the current
 SQLGlot release and drops the rewrites that release made redundant
-([design note](docs/design.md#sqlglot-bounds-move-only-in-minor-releases)).
+([design note](docs/decisions/sqlglot-bounds.md)).
 
 1. On the branch to release, move the `[Unreleased]` entries in
    `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, leaving `[Unreleased]`

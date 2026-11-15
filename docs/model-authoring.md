@@ -172,7 +172,8 @@ A model's metric may evaluate a metric of a dataset as
 `AGG(orders.revenue) / COUNT(DISTINCT customers.id)`. The call gives the
 number the dataset's metric gives when a question names it, over that
 dataset's rows. It takes one metric of a dataset, written with the
-dataset's name, and no `FILTER` or `OVER`; `SUM(AGG(orders.revenue))
+dataset's name, and no `FILTER`, `OVER`, `IGNORE NULLS`, `RESPECT NULLS`
+or `WITHIN GROUP`; `SUM(AGG(orders.revenue))
 OVER ()` puts a window over it. A model's metric that calls `AGG` on a
 field, on another metric of the model or on an expression is reported by
 `validate` and hidden, and so is one whose dataset's metric is hidden from

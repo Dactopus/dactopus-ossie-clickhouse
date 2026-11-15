@@ -312,7 +312,7 @@ def _round_digits(node: exp.Round) -> int | None:
 # (docs/decisions/agg-dataset-metric.md).
 AGG_RULE = (
     "this executor allows AGG only in a model's metric, as AGG(dataset.metric): a single "
-    "reference to a metric of a dataset, without FILTER or OVER"
+    "reference to a metric of a dataset, without FILTER, OVER or another modifier"
 )
 
 
@@ -338,10 +338,13 @@ def _agg_shape_problem(node: exp.Anonymous) -> str | None:
         return f"{node.sql()} is not allowed; {AGG_RULE}"
     # The spec forbids FILTER. OVER would put the window over the dataset metric's
     # input rows, not over its values; SUM(AGG(d.m)) OVER () is a window over them.
-    outer = node.parent
-    while isinstance(outer, exp.RespectNulls | exp.IgnoreNulls):
-        outer = outer.parent
-    if isinstance(outer, exp.Filter | exp.Window):
+    # IGNORE NULLS, RESPECT NULLS and WITHIN GROUP would land on the dataset metric's
+    # whole expression. The outermost modifier names the call in the message.
+    modifiers = exp.Filter | exp.Window | exp.RespectNulls | exp.IgnoreNulls | exp.WithinGroup
+    inner, outer = node, None
+    while isinstance(inner.parent, modifiers) and inner.arg_key == "this":
+        inner = outer = inner.parent
+    if outer is not None:
         return f"{outer.sql()} is not allowed; {AGG_RULE}"
     return None
 
@@ -883,6 +886,6 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
     metrics = {
         n: p
         for n, m, ds in all_metrics(model)
-        if (p := problem(m.expression, ds and "a metric of a dataset"))
+        if (p := problem(m.expression, "a metric of a dataset" if ds else None))
     }
     return fields, metrics

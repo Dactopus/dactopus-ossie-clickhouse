@@ -21,7 +21,9 @@ call allowed, and this executor refused every call.
   column written `dataset.metric`, no `FILTER`. It also refuses `OVER` on
   the call, which the spec does not mention: expanded, the window would run
   over the dataset metric's input rows, not over its values.
-  `SUM(AGG(d.m)) OVER ()` is a window over the values, and works.
+  `SUM(AGG(d.m)) OVER ()` is a window over the values, and works. For the
+  same reason it refuses `IGNORE NULLS`, `RESPECT NULLS` and `WITHIN GROUP`
+  on the call, which would land on the dataset metric's whole expression.
 - `untranslatable()` refuses a call in a field or a dataset's metric, so
   `validate` reports it and the executor hides that field or metric.
 - `Planner._agg` expands `AGG(D.m)` in a model's metric into `D.m` as the

@@ -964,7 +964,9 @@ class Planner:
             )
         name = f"{ds.name}.{arg.name}"
         if name.upper() in self._scopes:
-            return self._metric_tree(self._metrics[name.upper()], used)
+            tree = self._metric_tree(self._metrics[name.upper()], used)
+            tree.meta["expanded"] = True  # rewritten already: _metric_tree reads its "unsure"
+            return tree
         if arg.name.upper() in self._fields[ds.name.upper()]:
             why = (
                 f"names a field of {ds.name!r}, not one of its metrics; {AGG_RULE}. Aggregate "
@@ -1073,9 +1075,16 @@ class Planner:
         if problem := _nested_aggregate(tree):
             raise PlanError(f"metric {m.name!r} {problem}")
         # A call of a function outside the spec may be an aggregate, and only the server
-        # says (_parse); without its word, ClickHouse decides these two checks.
-        unsure = getattr(self.catalog, "aggregate", None) is None and any(
-            outside_spec(f) for f in resolved.find_all(exp.Anonymous)
+        # says (_parse); without its word, ClickHouse decides these two checks. A dataset's
+        # metric expanded from AGG is rewritten for ClickHouse already, so its own "unsure"
+        # stands for it: its dateDiff or toDate is no call the model wrote.
+        expanded = [n for n in resolved.walk() if n.meta.get("expanded")]
+        inside = {id(n) for e in expanded for n in e.walk()}
+        unsure = getattr(self.catalog, "aggregate", None) is None and (
+            any(e.meta.get("unsure") for e in expanded)
+            or any(
+                outside_spec(f) and id(f) not in inside for f in resolved.find_all(exp.Anonymous)
+            )
         )
         tree.meta["unsure"] = unsure
         if scope is not None:

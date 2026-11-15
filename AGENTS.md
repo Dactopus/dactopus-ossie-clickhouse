@@ -86,6 +86,10 @@ Translation:
   function is `exp.Anonymous` and reaches ClickHouse as written, so
   SQLGlot never renames it. A rewritten function carries its spec
   signature in `_SIGNATURES`, so a rewrite never drops an argument.
+- `AGG(dataset.metric)` in a model's metric is expanded by the planner
+  (`Planner._agg`) into that dataset's metric; `AGG` anywhere else is
+  refused. No call of `AGG` ever reaches ClickHouse, and `outside_spec`
+  leaves it out.
 - Rewrites work on the SQLGlot AST, never on SQL text. Emitted SQL uses
   physical names as the model writes them; name resolution is
   case-insensitive.

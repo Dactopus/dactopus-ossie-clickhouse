@@ -44,8 +44,9 @@ release history is in
   which other functions exist and which of them aggregate.
 - [Catalog calls keep their spec signature](decisions/catalog-signatures.md):
   a rewritten function never drops an argument silently.
-- [AGG is reserved](decisions/agg-reserved.md): a call of `AGG` is
-  refused in any capitalization.
+- [AGG of a dataset's metric](decisions/agg-dataset-metric.md): a
+  model's metric expands `AGG(dataset.metric)` into that metric; a call
+  anywhere else, or of anything else, is refused in any capitalization.
 - [Exact percentiles](decisions/exact-percentiles.md): the spec's
   percentiles are exact, so they do not use ClickHouse's sampling
   `quantile`.

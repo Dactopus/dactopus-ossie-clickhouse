@@ -18,7 +18,7 @@ from sqlglot import exp
 from dactopus_ossie_clickhouse._vendor.ossie import OssieDocument
 from dactopus_ossie_clickhouse.model import SOURCE_QUALIFIER, reads_source
 from dactopus_ossie_clickhouse.planner import PlanError
-from dactopus_ossie_clickhouse.translate import parse, pick_expression
+from dactopus_ossie_clickhouse.translate import agg_calls, parse, pick_expression
 
 
 @dataclass(frozen=True)
@@ -105,12 +105,24 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
         tree = parse(pick_expression(expression))
         from_source = bool(scope) and reads_source(declared[scope])
         found: set[str] = set()
+        evaluated = {id(c) for call in agg_calls(tree) for c in call.find_all(exp.Column)}
         for c in tree.find_all(exp.Column):
+            if id(c) in evaluated:
+                continue  # a dataset's metric, which agg_refs() names
             if from_source and c.table.upper() == SOURCE_QUALIFIER:
                 found |= readers[scope].get(c.name, set())
             elif c.table or scope:
                 found.add(f"{c.table or scope}.{c.name}".upper())
         return found
+
+    def agg_refs(expression) -> set[str]:
+        """The dataset metrics a model's metric evaluates as AGG(dataset.metric)."""
+        tree = parse(pick_expression(expression))
+        return {
+            f"{c.table}.{c.name}".upper()
+            for call in agg_calls(tree)
+            for c in call.find_all(exp.Column)
+        }
 
     def kept(name: str, expression, scope: str | None = None) -> bool:
         # By name first: a hidden metric may not parse (untranslatable).
@@ -145,18 +157,21 @@ def restrict(model: OssieDocument, hidden: Hidden, reader: str = "here") -> Ossi
         | {f"{r['to']}.{c}".upper() for c in r["to_columns"]}
         <= kept_fields
     ]
-    data["metrics"] = [
-        m.model_dump(by_alias=True, exclude_none=True)
-        for m in model.metrics or []
-        if kept(m.name, m.expression)
-    ]
+    kept_metrics: set[str] = set()
     for d in data["datasets"]:
         metrics = [
             m.model_dump(by_alias=True, exclude_none=True)
             for m in declared[d["name"]].metrics or []
             if kept(f"{d['name']}.{m.name}", m.expression, d["name"])
         ]
+        kept_metrics |= {f"{d['name']}.{m['name']}".upper() for m in metrics}
         d.pop("metrics", None)
         if metrics:
             d["metrics"] = metrics
+    # A model's metric goes with a dataset's metric it evaluates.
+    data["metrics"] = [
+        m.model_dump(by_alias=True, exclude_none=True)
+        for m in model.metrics or []
+        if kept(m.name, m.expression) and agg_refs(m.expression) <= kept_metrics
+    ]
     return OssieDocument.model_validate(data)

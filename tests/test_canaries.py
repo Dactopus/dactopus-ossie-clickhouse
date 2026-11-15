@@ -158,8 +158,30 @@ def test_sqlglot_parses_agg_as_an_anonymous_function(call):
     tree = sqlglot.parse_one(call, read=OssieSQL)
     node = tree.this if isinstance(tree, exp.Window) else tree
     assert isinstance(node, exp.Anonymous) and node.name.upper() == "AGG", (
-        f"SQLGlot {sqlglot.__version__} parses {call} as {type(node).__name__}: check the AGG "
-        "refusal in _shape_problem in translate.py, which looks for an anonymous function"
+        f"SQLGlot {sqlglot.__version__} parses {call} as {type(node).__name__}: check agg_call "
+        "in translate.py, which looks for an anonymous function"
+    )
+
+
+@pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
+def test_ossie_lets_a_model_metric_evaluate_a_dataset_metric_with_agg():
+    text = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "spec.md").read_text()
+    if "AGG(dataset.metric)" not in text:
+        pytest.skip("this checkout of apache/ossie predates AGG in a model's metric (#703)")
+    rule = (
+        "6. A model-scoped metric MAY evaluate a dataset-scoped metric with "
+        "`AGG(dataset.metric)`: `AGG(orders.total_revenue) / COUNT(DISTINCT "
+        "customers.customer_id)`. The argument MUST be a single reference to a dataset-scoped "
+        "metric, written as `dataset.metric`, and the call MUST NOT have a `FILTER (WHERE ...)` "
+        "clause."
+    )
+    language = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "expression_language.md").read_text()
+    elsewhere = "`OSSIE_SQL_2026` expressions MUST NOT call `AGG` anywhere else"
+    assert rule in text and elsewhere in language, (
+        "apache/ossie no longer says what AGG takes in a model's metric (spec.md, Metric "
+        "Scoping, rule 6) or that no other expression calls it (expression_language.md, "
+        "Measure Evaluation: AGG): check AGG_RULE and _agg_shape_problem in translate.py, "
+        "Planner._agg and docs/decisions/agg-dataset-metric.md"
     )
 
 
@@ -173,16 +195,10 @@ def test_sqlglot_parses_source_column_as_a_qualified_column(name):
 
 
 @pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
-def test_ossie_reserves_agg_and_reads_source_columns():
-    core = Path(os.environ["OSSIE_REPO"]) / "core-spec"
-    language = (core / "expression_language.md").read_text()
-    spec = (core / "spec.md").read_text()
-    if "Measure Evaluation: `AGG` (RESERVED)" not in language:
-        pytest.skip("this checkout of apache/ossie predates the reserved AGG (#662)")
-    assert "`OSSIE_SQL_2026` expressions MUST NOT call `AGG`" in language, (
-        "apache/ossie's expression_language.md no longer forbids calling AGG: check the AGG "
-        "refusal in _shape_problem (translate.py) and docs/decisions/agg-reserved.md"
-    )
+def test_ossie_reads_source_columns():
+    spec = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "spec.md").read_text()
+    if "source.column" not in spec:
+        pytest.skip("this checkout of apache/ossie predates source.column (#633)")
     assert "source.quantity` and `SOURCE.quantity` name the same column" in spec, (
         "apache/ossie's spec.md no longer lets a dataset's metric read source.column: check "
         "Planner._own_field and docs/decisions/source-columns.md"

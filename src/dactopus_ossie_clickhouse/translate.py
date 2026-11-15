@@ -303,6 +303,55 @@ def _round_digits(node: exp.Round) -> int | None:
     return None
 
 
+# Spec, expression_language.md "Measure Evaluation: AGG" and spec.md "Metric Scoping"
+# rule 6 (apache/ossie#703): the name is reserved in every capitalization, and only a
+# model's metric may call it, as AGG(dataset.metric), without FILTER. SQLGlot parses
+# it as an anonymous function, which would reach ClickHouse: parse() checks the shape,
+# the planner expands the call into the dataset's metric and refuses it anywhere else,
+# and untranslatable() refuses it in a field or a dataset's metric
+# (docs/decisions/agg-dataset-metric.md).
+AGG_RULE = (
+    "this executor allows AGG only in a model's metric, as AGG(dataset.metric): a single "
+    "reference to a metric of a dataset, without FILTER or OVER"
+)
+
+
+def agg_call(node: exp.Expression) -> bool:
+    """A call of AGG, in any capitalization, in a tree from parse()."""
+    return isinstance(node, exp.Anonymous) and node.name.upper() == "AGG"
+
+
+def agg_calls(tree: exp.Expression) -> list[exp.Anonymous]:
+    return [node for node in tree.find_all(exp.Anonymous) if agg_call(node)]
+
+
+def _agg_shape_problem(node: exp.Anonymous) -> str | None:
+    """Why a call of AGG is not AGG(dataset.metric) without a modifier, or None."""
+    args = node.expressions
+    arg = args[0] if len(args) == 1 else None
+    if (
+        not isinstance(arg, exp.Column)
+        or isinstance(arg.this, exp.Star)
+        or arg.args.get("db")
+        or not arg.table
+    ):
+        return f"{node.sql()} is not allowed; {AGG_RULE}"
+    # The spec forbids FILTER. OVER would put the window over the dataset metric's
+    # input rows, not over its values; SUM(AGG(d.m)) OVER () is a window over them.
+    outer = node.parent
+    while isinstance(outer, exp.RespectNulls | exp.IgnoreNulls):
+        outer = outer.parent
+    if isinstance(outer, exp.Filter | exp.Window):
+        return f"{outer.sql()} is not allowed; {AGG_RULE}"
+    return None
+
+
+def agg_refusal(tree: exp.Expression, where: str) -> str | None:
+    """Why ``tree``, an expression in ``where``, cannot call AGG; None without a call."""
+    calls = agg_calls(tree)
+    return f"{calls[0].sql()} in {where} is not allowed; {AGG_RULE}" if calls else None
+
+
 def _shape_problem(node: exp.Expression) -> str | None:
     """Spec shapes an argument count cannot express."""
     # SQLGlot reads ClickHouse's quantile(0.5)(x) as quantile(0.5) AS (x): SQL that
@@ -311,14 +360,8 @@ def _shape_problem(node: exp.Expression) -> str | None:
         return "ClickHouse's parametric call name(params)(args) is not supported"
     if isinstance(node, exp.Alias):
         return "an alias (AS) is not allowed in an expression"
-    # Spec, expression_language.md "Measure Evaluation: AGG (RESERVED)": the name is
-    # reserved in every capitalization, and an expression must not call it yet.
-    # SQLGlot parses it as an anonymous function, which would reach ClickHouse.
-    if isinstance(node, exp.Anonymous) and node.name.upper() == "AGG":
-        return (
-            "AGG() is reserved by the Ossie spec for a future version and cannot be called "
-            "in an expression yet"
-        )
+    if agg_call(node):
+        return _agg_shape_problem(node)
     if isinstance(node, exp.PercentileCont | exp.PercentileDisc):
         signature = _SIGNATURES[node.sql_name()][0]
         if not isinstance(node.parent, exp.WithinGroup):
@@ -408,8 +451,9 @@ def source_columns(tree: exp.Expression, ds: OssieDataset) -> list[str]:
 
 
 def outside_spec(node: exp.Expression) -> bool:
-    """A call, in a tree from parse(), of a function that is not the spec's."""
-    return isinstance(node, exp.Anonymous) and node.name.upper() not in _CATALOG
+    """A call, in a tree from parse(), of a function that is not the spec's. AGG is
+    the spec's, and the planner expands it before any SQL is built."""
+    return isinstance(node, exp.Anonymous) and node.name.upper() not in _CATALOG | {"AGG"}
 
 
 def passthrough_functions(tree: exp.Expression) -> set[str]:
@@ -816,11 +860,16 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
     expression does not translate, with why.
 
     The executor hides them: an expression that does not parse cannot be shown
-    to read only columns the user may see."""
+    to read only columns the user may see. A call of AGG is refused outside a model's
+    metric; the planner checks what one names."""
 
-    def problem(expression: OssieExpression) -> str | None:
+    def problem(expression: OssieExpression, where: str | None) -> str | None:
         try:
-            translate(expression)
+            text = pick_expression(expression)
+            tree = parse(text)
+            if where and (refusal := agg_refusal(tree, where)):
+                return f"{refusal}: {text!r}"
+            to_clickhouse(tree)
         except ValueError as e:
             return str(e)
         return None
@@ -829,7 +878,11 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
         f"{d.name}.{f.name}": p
         for d in model.datasets
         for f in d.fields or []
-        if (p := problem(f.expression))
+        if (p := problem(f.expression, "a field"))
     }
-    metrics = {n: p for n, m, _ in all_metrics(model) if (p := problem(m.expression))}
+    metrics = {
+        n: p
+        for n, m, ds in all_metrics(model)
+        if (p := problem(m.expression, ds and "a metric of a dataset"))
+    }
     return fields, metrics

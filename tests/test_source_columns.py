@@ -3,8 +3,7 @@
 Spec, "Metric Scoping" rules 1 to 3 and "Name Resolution" (apache/ossie#633): a dataset's
 metric reads a column of its source as ``source.column``, with the qualifier case
 insensitive, whatever a field of the same name says; a dataset that declares a field
-named ``source`` has no such access. ``expression_language.md``, "Measure Evaluation:
-AGG (RESERVED)" (apache/ossie#662): no expression calls ``AGG`` yet."""
+named ``source`` has no such access."""
 
 import copy
 from pathlib import Path
@@ -15,7 +14,7 @@ import yaml
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
-from dactopus_ossie_clickhouse.translate import parse, untranslatable
+from dactopus_ossie_clickhouse.translate import untranslatable
 from tests.conftest import FakeClickHouse
 
 
@@ -239,89 +238,6 @@ def test_a_dataset_named_source_keeps_its_own_fields_in_a_model_metric(tmp_path)
 
     model = build(tmp_path, mutate)
     assert "SUM(source.v) AS v_total" in sql(model, "v_total")
-
-
-# --- AGG, no server ------------------------------------------------------------
-
-RESERVED = (
-    "AGG() is reserved by the Ossie spec for a future version and cannot be called in an "
-    "expression yet"
-)
-
-
-@pytest.mark.parametrize("call", ["AGG(x)", "agg(x)", "Agg(x)", "aGG(x)", "AGG(x) OVER ()"])
-def test_agg_is_reserved_in_every_capitalization(call):
-    with pytest.raises(ValueError, match="AGG\\(\\) is reserved by the Ossie spec"):
-        parse(f"1 + {call}")
-
-
-@pytest.mark.parametrize(
-    "dialects",
-    [
-        None,  # the top-level sql
-        [{"dialect": "OSSIE_SQL_2026", "expression": "AGG(amount)"}],
-        [{"dialect": "ANSI_SQL", "expression": "AGG(amount)"}],
-    ],
-)
-@pytest.mark.parametrize("where", ["field", "dataset metric", "model metric"])
-def test_agg_is_refused_in_a_field_and_a_metric(tmp_path, where, dialects):
-    def expression(inner: str) -> dict:
-        if dialects is None:
-            return {"sql": f"AGG({inner})"}
-        return {"dialects": dialects}
-
-    def mutate(data):
-        ds = data["datasets"][0]
-        if where == "field":
-            ds["fields"].append({"name": "f", "expression": expression("amount")})
-        elif where == "dataset metric":
-            ds["metrics"].append({"name": "m", "expression": expression("amount")})
-        else:
-            data["metrics"].append({"name": "m", "expression": expression("orders.raw_amount")})
-
-    model = build(tmp_path, mutate)
-    fields, metrics = untranslatable(model)
-    found = {"field": fields, "dataset metric": metrics, "model metric": metrics}[where]
-    assert len(found) == 1
-    assert next(iter(found.values())).startswith(RESERVED)
-
-
-def test_agg_in_a_dataset_metric_over_a_source_column(tmp_path):
-    def mutate(data):
-        data["datasets"][0]["metrics"].append(metric("m", "agg(source.amount)"))
-
-    _, metrics = untranslatable(build(tmp_path, mutate))
-    assert metrics == {"orders.m": RESERVED + ": 'agg(source.amount)'"}
-
-
-@pytest.mark.parametrize("call", ["AGG(orders.raw_amount)", "agg(orders.raw_amount) > 1"])
-def test_agg_in_a_filter_is_refused_before_clickhouse(model, call):
-    msg = refusal(model, "total", filters=(call,))
-    assert msg.startswith(RESERVED)
-
-
-def test_agg_as_a_name_is_valid(tmp_path):
-    def mutate(data):
-        ds = data["datasets"][0]
-        ds["fields"] += [field("agg", "status"), field("Agg_amount", "agg")]
-        ds["metrics"].append(metric("agg_total", "SUM(source.agg)"))
-        data["metrics"].append(metric("agg", "COUNT(orders.agg)"))
-
-    model = build(tmp_path, mutate)
-    assert untranslatable(model) == ({}, {})
-    assert unanswerable_metrics(model) == {}
-    assert "COUNT(orders.status) AS agg" in sql(model, "agg")
-    assert 'SUM(orders.agg) AS "orders.agg_total"' in sql(model, "orders.agg_total")
-    sql(model, "total", filters=("orders.agg = 'completed'",))
-
-
-def test_agg_as_the_name_of_a_dataset_metric_is_valid(tmp_path):
-    def mutate(data):
-        data["datasets"][0]["metrics"].append(metric("agg", "COUNT(status)"))
-
-    model = build(tmp_path, mutate)
-    assert unanswerable_metrics(model) == {}
-    assert 'COUNT(orders.status) AS "orders.agg"' in sql(model, "orders.agg")
 
 
 # --- access: a source column the user cannot read -------------------------------

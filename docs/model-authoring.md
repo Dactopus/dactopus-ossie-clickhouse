@@ -167,10 +167,19 @@ are carried and ignored; an expression with only those is reported by
 columns; a field may not reach into another dataset. A model's metrics
 reference fields as `dataset.field`.
 
-The function name `AGG` is reserved by the spec for a future version, in
-every capitalization: an expression that calls it is refused and reported
-by `validate`, and a filter that calls it is refused, without reaching
-ClickHouse. A field, a metric or a column may be named `agg`.
+A model's metric may evaluate a metric of a dataset as
+`AGG(dataset.metric)`, so a formula is written once:
+`AGG(orders.revenue) / COUNT(DISTINCT customers.id)`. The call gives the
+number the dataset's metric gives when a question names it, over that
+dataset's rows. It takes one metric of a dataset, written with the
+dataset's name, and no `FILTER` or `OVER`; `SUM(AGG(orders.revenue))
+OVER ()` puts a window over it. A model's metric that calls `AGG` on a
+field, on another metric of the model or on an expression is reported by
+`validate` and hidden, and so is one whose dataset's metric is hidden from
+the user. `AGG` in a field or in a dataset's metric is refused the same
+way, in every capitalization; a question's filter names the dataset's
+metric itself (`orders.revenue > 100`). A field, a metric or a column may
+be named `agg`.
 
 The spec's function catalog is translated to ClickHouse. Functions
 ClickHouse lacks (`DATEADD`, `DATEDIFF`, `DATE_PART`, `SPLIT_PART`,

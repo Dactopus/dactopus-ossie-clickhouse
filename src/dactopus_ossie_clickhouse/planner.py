@@ -39,6 +39,9 @@ from dactopus_ossie_clickhouse.model import (
     time_zone,
 )
 from dactopus_ossie_clickhouse.translate import (
+    AGG_RULE,
+    agg_call,
+    agg_refusal,
     outside_spec,
     parse,
     pick_expression,
@@ -267,9 +270,12 @@ def _aggregate_reads(tree: exp.Expression) -> Reads:
     """Each aggregate with the datasets its arguments read and, apart, the datasets
     its FILTER (WHERE ...) reads. The home of a component comes from the arguments
     only (apache/ossie#653, section 5.2: the FILTER "does not determine the home
-    dataset")."""
+    dataset"). An aggregate of a dataset's metric reads that dataset, COUNT(*) too
+    (from meta): a model's metric reaches one through AGG(dataset.metric)."""
     found: dict[int, tuple[exp.AggFunc, set[str], set[str]]] = {
-        id(a): (a, set(), set()) for a in tree.find_all(exp.AggFunc) if not _window_function(a)
+        id(a): (a, {a.meta["dataset"]} if "dataset" in a.meta else set(), set())
+        for a in tree.find_all(exp.AggFunc)
+        if not _window_function(a)
     }
     for col in tree.find_all(exp.Column):
         node, in_filter = col.parent, False
@@ -902,6 +908,8 @@ class Planner:
             self._time_strings(tree, metrics, scope)
 
         def inline(node: exp.Expression) -> exp.Expression:
+            if agg_call(node):
+                return self._agg(node, used, expression, metrics, scope)
             if not isinstance(node, exp.Column):
                 return node
             if scope is not None:
@@ -927,6 +935,45 @@ class Planner:
             return self._field_expr(ds, f)
 
         return tree.transform(inline)
+
+    def _agg(
+        self,
+        node: exp.Anonymous,
+        used: set[str],
+        expression: str,
+        metrics: bool,
+        scope: OssieDataset | None,
+    ) -> exp.Expression:
+        """AGG(dataset.metric) in a model's metric: that dataset's metric, resolved as
+        when a question names it, so it is one component whose home is its dataset
+        (wide_table_semantics.md section 5.2) and keeps its row checks and its value
+        over no rows. parse() has checked the shape of the call. Refused in a dataset's
+        metric and in a filter, which names the metric itself."""
+        if scope is not None or metrics:
+            where = "a metric of a dataset" if scope is not None else "a filter"
+            refusal = agg_refusal(node, where)
+            hint = f"; a filter names a dataset's metric as {node.expressions[0].sql()}"
+            raise PlanError(f"{refusal}{hint if metrics else ''}: {expression!r}")
+        arg = node.expressions[0]
+        written = node.sql()
+        ds = self._datasets.get(arg.table.upper())
+        if ds is None:
+            raise PlanError(
+                f"{written} in {expression!r} names unknown dataset {arg.table!r}"
+                f"{suggest(arg.table, (d.name for d in self.model.datasets))}"
+            )
+        name = f"{ds.name}.{arg.name}"
+        if name.upper() in self._scopes:
+            return self._metric_tree(self._metrics[name.upper()], used)
+        if arg.name.upper() in self._fields[ds.name.upper()]:
+            why = (
+                f"names a field of {ds.name!r}, not one of its metrics; {AGG_RULE}. Aggregate "
+                f"the field itself, such as SUM({arg.sql()})"
+            )
+        else:
+            own = [m for m in self._metrics.values() if self._scopes.get(m.name.upper()) is ds]
+            why = f"names no metric of {ds.name!r}{suggest(name, (m.name for m in own))}"
+        raise PlanError(f"{written} in {expression!r} {why}")
 
     def _own_field(self, ds: OssieDataset, node: exp.Column, expression: str) -> exp.Expression:
         """A column of a metric of ``ds``: one of its fields by bare name, or one of its
@@ -1238,6 +1285,8 @@ class Planner:
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
         tree = self._parse(pick_expression(f.expression))
+        if refusal := agg_refusal(tree, "a field"):
+            raise PlanError(f"field {ds.name}.{f.name}: {refusal}")
 
         def qualify(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Column) and not node.table:

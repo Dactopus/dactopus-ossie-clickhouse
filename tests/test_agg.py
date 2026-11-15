@@ -219,12 +219,28 @@ def test_agg_of_anything_but_a_dataset_metric_is_refused(tmp_path, text, error):
         "AGG(orders.revenue) FILTER (WHERE orders.status = 'completed')",
         "AGG(orders.revenue) OVER ()",
         "AGG(orders.revenue) IGNORE NULLS OVER ()",
+        "AGG(orders.avg_order) IGNORE NULLS",
+        "AGG(orders.revenue) RESPECT NULLS",
+        "AGG(orders.revenue) WITHIN GROUP (ORDER BY orders.amount)",
     ],
 )
 def test_a_misshapen_agg_call_does_not_translate(tmp_path, text):
     model = with_model_metric(tmp_path, text)
     _, metrics = untranslatable(model)
     assert metrics["m"].endswith(f"is not allowed; {AGG_RULE}: {text!r}")
+
+
+def test_a_column_outside_aggregates_is_refused_through_a_rewritten_dataset_metric(tmp_path):
+    # DATEDIFF and CURRENT_DATE become ClickHouse calls when the dataset's metric is
+    # expanded; without a catalog they must not pass for functions the model calls.
+    def mutate(data):
+        ds = data["datasets"][0]
+        ds["fields"].append(field("created", "created"))
+        ds["metrics"].append(metric("days", "MAX(DATEDIFF('day', created, CURRENT_DATE))"))
+        data["metrics"].append(metric("m", "AGG(orders.days) + orders.amount"))
+
+    model = build(tmp_path, mutate)
+    assert "reads orders.amount outside every aggregate" in unanswerable_metrics(model)["m"]
 
 
 def test_a_bare_dataset_metric_reference_is_refused(tmp_path):

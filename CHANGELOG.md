@@ -2,6 +2,17 @@
 
 The format follows [Common Changelog](https://common-changelog.org); versions follow [Semantic Versioning](https://semver.org), and while the major version is 0, a minor release may change the Python API. What to change and which answers move when you upgrade: [UPGRADING.md](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/UPGRADING.md). Why each change was made: [docs/decisions/](https://github.com/Dactopus/dactopus-ossie-clickhouse/tree/main/docs/decisions).
 
+## [0.18.0] - 2026-11-17
+
+### Changed
+
+- Require `sqlglot>=30.32` ([#104](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/104))
+
+### Added
+
+- Read an expression in the `CLICKHOUSE` dialect, as model converters write it, where the SQL sent to ClickHouse is the text as written; `validate` names any other and what to write instead. It was ignored ([#104](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/104), [apache/ossie-converters#202](https://github.com/apache/ossie-converters/pull/202), [decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/clickhouse-dialect.md))
+- Let a model's metric evaluate a dataset's metric as `AGG(dataset.metric)`; it was refused ([#103](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/103), [apache/ossie#703](https://github.com/apache/ossie/pull/703), [decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/agg-dataset-metric.md))
+
 ## [0.17.0] - 2026-11-13
 
 _A field or metric that writes `x IN ()` is hidden, and `ROUND` and `MOD` answers change ([Upgrading](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/UPGRADING.md#0170))._
@@ -418,6 +429,7 @@ _Rewritten functions take only the spec's signature ([Upgrading](https://github.
 
 _First release: Ossie schema `0.2.0.dev0`, tested on ClickHouse 26.x with the TPC-DS reference model._
 
+[0.18.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.18.0
 [0.17.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.17.0
 [0.16.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.16.0
 [0.15.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.15.0

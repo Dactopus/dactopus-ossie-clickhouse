@@ -880,43 +880,52 @@ def translate(expression: OssieExpression) -> str:
 # (docs/decisions/clickhouse-dialect.md).
 
 # Why a construct ClickHouse reads differently is refused, and what to write instead.
-_CLICKHOUSE_READINGS: tuple[tuple[Callable[[exp.Expression], bool], str], ...] = (
+# Each test takes a node of the text read as Ossie SQL and the text as ClickHouse reads
+# it (_canonical), and holds only where that node is read otherwise: a text refused for
+# another reason is not refused in the name of a construct it writes alike.
+_CLICKHOUSE_READINGS: tuple[tuple[Callable[[exp.Expression, exp.Expression], bool], str], ...] = (
     (
-        lambda n: isinstance(n, exp.Length),
+        lambda n, _: isinstance(n, exp.Length),
         "`length` counts characters in Ossie SQL and bytes in ClickHouse; call "
         "`lengthUTF8` for characters, or `OCTET_LENGTH` for bytes or an array's elements",
     ),
     (
-        lambda n: isinstance(n, exp.StrPosition),
+        # position(needle IN haystack) is read alike, position(a, b) is not.
+        lambda n, written: (
+            isinstance(n, exp.StrPosition)
+            and n.sql(dialect="clickhouse")
+            not in {p.sql(dialect="clickhouse") for p in written.find_all(exp.StrPosition)}
+        ),
         "`position(haystack, needle)` takes the string first in ClickHouse and the "
         "substring first in Ossie SQL; write `position(needle IN haystack)`, which "
         "both read alike",
     ),
     (
-        lambda n: isinstance(n, exp.Bracket),
+        lambda n, _: isinstance(n, exp.Bracket),
         "an array index counts from 1 in ClickHouse and from 0 in this executor's "
         "reading of `[i]`; call `arrayElement(array, i)`",
     ),
     (
-        lambda n: isinstance(n, exp.Round),
+        # round(x, d) with a d that is not a whole number literal is sent as written.
+        lambda n, _: isinstance(n, exp.Round) and _round_digits(n) is not None,
         "`round` takes a Float tie to the even neighbour in ClickHouse and away from "
         "zero in Ossie SQL; call `roundBankers` for the even neighbour of a Float, or "
         "write the expression as `sql`, whose ROUND takes every tie away from zero, as "
         "ClickHouse's `round` does for a Decimal",
     ),
     (
-        lambda n: isinstance(n, exp.Mod),
+        lambda n, _: isinstance(n, exp.Mod),
         "`%` keeps Decimal scales apart in ClickHouse and aligns them in Ossie SQL; call "
         "`modulo(a, b)` for ClickHouse's, or write the expression as `sql` for the "
         "spec's MOD",
     ),
     (
-        lambda n: isinstance(n, exp.Median),
+        lambda n, _: isinstance(n, exp.Median),
         "`median` is approximate in ClickHouse and exact in Ossie SQL; write the "
         "expression as `sql`, where MEDIAN is exact",
     ),
     (
-        lambda n: (
+        lambda n, _: (
             isinstance(n, exp.Ordered)
             and bool(n.args.get("desc"))
             and _in_window_order(n)
@@ -926,7 +935,13 @@ _CLICKHOUSE_READINGS: tuple[tuple[Callable[[exp.Expression], bool], str], ...] =
         "SQL; write `NULLS LAST` or `NULLS FIRST`",
     ),
     (
-        lambda n: isinstance(n, exp.Literal) and n.is_string and "\\" in n.this,
+        # '\d' is read alike: ClickHouse keeps a backslash it does not know as an escape.
+        lambda n, _: (
+            isinstance(n, exp.Literal)
+            and n.is_string
+            and "\\" in n.this
+            and _clickhouse_string(n.this) != n.this
+        ),
         "a backslash in a string escapes the next character in ClickHouse and is a "
         "character of its own in Ossie SQL; write the expression as `sql` with each "
         "backslash once ('\\\\d' as '\\d')",
@@ -935,18 +950,28 @@ _CLICKHOUSE_READINGS: tuple[tuple[Callable[[exp.Expression], bool], str], ...] =
         # SQLGlot's default dialect does not know these types and prints their names in
         # upper case inside Nullable: LowCardinality(String) as
         # Nullable(LowCardinality(STRING)), which ClickHouse refuses.
-        lambda n: isinstance(n, exp.Cast) and n.to.this == exp.DType.USERDEFINED,
+        lambda n, _: isinstance(n, exp.Cast) and n.to.this == exp.DType.USERDEFINED,
         "a cast to a type of ClickHouse's own, such as LowCardinality or Tuple, does "
         "not reach ClickHouse as written; call a conversion function, such as "
         "`toLowCardinality(x)`",
     ),
     (
-        lambda n: isinstance(n, exp.Cast) and n.this.is_string and n.to.this in _TIMESTAMPS,
+        lambda n, _: isinstance(n, exp.Cast) and n.this.is_string and n.to.this in _TIMESTAMPS,
         "a string cast to a time is read in the model's time zone in Ossie SQL and in "
         "the server's in ClickHouse; call `toDateTime(string, zone)`, or write the "
         "expression as `sql`",
     ),
 )
+
+
+# A string literal as ClickHouse writes one, with '' or a backslash escaping a quote.
+_STRING = re.compile(r"'(?:[^'\\]|\\.|'')*'")
+
+
+def _clickhouse_string(text: str) -> str:
+    """The string ClickHouse reads from ``text`` written between single quotes."""
+    quoted = "'" + text.replace("'", "''") + "'"
+    return sqlglot.parse_one(quoted, read="clickhouse").this
 
 
 def _same_as_written(node: exp.Expression) -> bool:
@@ -1006,7 +1031,7 @@ def clickhouse_problem(text: str) -> str | None:
         tree = parse(text)
         sent = rewrite_tree(tree, keep=_same_as_written).sql(dialect="clickhouse")
     except ValueError as e:
-        if "`" in text:
+        if "`" in _STRING.sub("", text):
             return (
                 "written for ClickHouse: a name in backticks is not read; quote it in "
                 'double quotes ("order id"), which ClickHouse reads alike'
@@ -1018,11 +1043,12 @@ def clickhouse_problem(text: str) -> str | None:
         ours = sqlglot.parse_one(sent, read="clickhouse")
     except sqlglot.errors.SqlglotError as e:
         return f"written for ClickHouse, but not ClickHouse SQL: {str(e).splitlines()[0]}"
-    if _canonical(written) == _canonical(ours):
+    written = _canonical(written)
+    if written == _canonical(ours):
         return None
     for node in tree.walk():
         for differs, why in _CLICKHOUSE_READINGS:
-            if differs(node):
+            if differs(node, written):
                 return f"written for ClickHouse: {why}"
     return (
         f"written for ClickHouse: this executor would send {sent} instead; write that, "

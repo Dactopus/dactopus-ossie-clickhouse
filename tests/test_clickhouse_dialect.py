@@ -216,6 +216,26 @@ def test_a_refusal_says_what_to_write_instead():
         assert clickhouse_problem(instead) is None, instead
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "position(status IN 'a') > 0",
+        "round(amount, digits) > 0",
+        "match(status, '\\d+')",
+    ],
+)
+def test_a_refusal_names_only_a_construct_read_otherwise(text):
+    # Each is accepted alone; refused for dayofyear, the refusal does not name it.
+    assert clickhouse_problem(text) is None
+    problem = clickhouse_problem(f"{text} AND dayofyear(created_at) = 1")
+    assert "would send" in problem and "toDayOfYear(created_at)" in problem
+
+
+def test_a_backtick_in_a_string_is_not_a_name_in_backticks():
+    problem = clickhouse_problem("status = '`' AND amount // 2 = 1")
+    assert "read as Ossie SQL: cannot parse" in problem
+
+
 ACCEPTED = [
     # Sent as written.
     "countIf(status = 'paid')",

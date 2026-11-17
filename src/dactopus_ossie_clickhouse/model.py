@@ -440,18 +440,12 @@ def expression_choice(expression: OssieExpression) -> tuple[str, str] | None:
     return next(((d, by_dialect[d]) for d in SUPPORTED_DIALECTS if d in by_dialect), None)
 
 
-def expression_text(expression: OssieExpression) -> str | None:
-    """The text of ``expression`` this executor reads (expression_choice), or None."""
-    choice = expression_choice(expression)
-    return choice[1] if choice else None
-
-
 def dialects_of(expression: OssieExpression) -> str:
     return ", ".join(sorted(d.dialect for d in expression.dialects or []))
 
 
 def _dialect_check(what: str, expression: OssieExpression) -> list[str]:
-    if expression_text(expression) is not None:
+    if expression_choice(expression) is not None:
         return []
     return [
         f"{what}: no expression in a supported dialect (has {dialects_of(expression)}; "

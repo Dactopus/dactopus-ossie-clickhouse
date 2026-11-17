@@ -10,8 +10,9 @@ the AST, never on SQL text.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from decimal import Decimal
+from functools import cache
 
 import sqlglot
 import sqlglot.errors
@@ -21,20 +22,26 @@ from sqlglot.parser import Parser
 
 from dactopus_ossie_clickhouse._vendor.ossie import OssieDataset, OssieDocument, OssieExpression
 from dactopus_ossie_clickhouse.model import (
+    CLICKHOUSE_DIALECT,
     DEFAULT_TIME_ZONE,
     SOURCE_QUALIFIER,
     all_metrics,
     dialects_of,
-    expression_text,
+    expression_choice,
     reads_source,
 )
 
 
 def pick_expression(expression: OssieExpression) -> str:
-    """The expression text we translate (model.expression_text)."""
-    text = expression_text(expression)
-    if text is None:
+    """The expression text we translate (model.expression_choice). A text in the
+    CLICKHOUSE dialect is refused unless it reaches ClickHouse as written
+    (clickhouse_problem), so every layer that reads an expression reads it here."""
+    choice = expression_choice(expression)
+    if choice is None:
         raise ValueError(f"no expression in a supported dialect (has {dialects_of(expression)})")
+    dialect, text = choice
+    if dialect == CLICKHOUSE_DIALECT and (problem := clickhouse_problem(text)):
+        raise ValueError(f"{problem}: {text!r}")
     return text
 
 
@@ -812,8 +819,13 @@ def _operator(node: exp.Expression | None) -> bool:
     return isinstance(node, _OPERATOR) and not isinstance(node, exp.Func | exp.Paren)
 
 
-def rewrite_tree(tree: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Expression:
-    """A copy of ``tree`` with every node rewritten for ClickHouse.
+def rewrite_tree(
+    tree: exp.Expression,
+    zone: str = DEFAULT_TIME_ZONE,
+    keep: Callable[[exp.Expression], bool] | None = None,
+) -> exp.Expression:
+    """A copy of ``tree`` with every node rewritten for ClickHouse, except those
+    ``keep`` says to leave as they are (clickhouse_problem).
 
     SQLGlot prints a tree as it stands, without parentheses for precedence, so an
     operator a rewrite builds or an inlined field or metric brings under another
@@ -826,7 +838,7 @@ def rewrite_tree(tree: exp.Expression, zone: str = DEFAULT_TIME_ZONE) -> exp.Exp
     # Expression.transform does not descend into a replaced node.
     for node in reversed(list(tree.dfs())):
         parent, arg_key, index = node.parent, node.arg_key, node.index
-        new = rewrite(node, zone)
+        new = node if keep and keep(node) else rewrite(node, zone)
         if new is node:
             continue
         if parent is None:
@@ -856,6 +868,166 @@ def to_clickhouse(expression: str | exp.Expression, zone: str = DEFAULT_TIME_ZON
 def translate(expression: OssieExpression) -> str:
     """ClickHouse SQL for a model field or metric expression."""
     return to_clickhouse(pick_expression(expression))
+
+
+# --- ClickHouse's own SQL --------------------------------------------------
+#
+# A text in the CLICKHOUSE dialect is ClickHouse SQL. It is read as any other text
+# (parse, rewrite_tree) where the SQL that reaches ClickHouse is what its author wrote,
+# give or take the differences below; elsewhere it is refused with what to write
+# instead. Accepting what is sent as written, rather than refusing a list of known
+# differences, keeps a difference no list names from changing an answer
+# (docs/decisions/clickhouse-dialect.md).
+
+# Why a construct ClickHouse reads differently is refused, and what to write instead.
+_CLICKHOUSE_READINGS: tuple[tuple[Callable[[exp.Expression], bool], str], ...] = (
+    (
+        lambda n: isinstance(n, exp.Length),
+        "`length` counts characters in Ossie SQL and bytes in ClickHouse; call "
+        "`lengthUTF8` for characters, or `OCTET_LENGTH` for bytes or an array's elements",
+    ),
+    (
+        lambda n: isinstance(n, exp.StrPosition),
+        "`position(haystack, needle)` takes the string first in ClickHouse and the "
+        "substring first in Ossie SQL; write `position(needle IN haystack)`, which "
+        "both read alike",
+    ),
+    (
+        lambda n: isinstance(n, exp.Bracket),
+        "an array index counts from 1 in ClickHouse and from 0 in this executor's "
+        "reading of `[i]`; call `arrayElement(array, i)`",
+    ),
+    (
+        lambda n: isinstance(n, exp.Round),
+        "`round` takes a Float tie to the even neighbour in ClickHouse and away from "
+        "zero in Ossie SQL; call `roundBankers` for the even neighbour of a Float, or "
+        "write the expression as `sql`, whose ROUND takes every tie away from zero, as "
+        "ClickHouse's `round` does for a Decimal",
+    ),
+    (
+        lambda n: isinstance(n, exp.Mod),
+        "`%` keeps Decimal scales apart in ClickHouse and aligns them in Ossie SQL; call "
+        "`modulo(a, b)` for ClickHouse's, or write the expression as `sql` for the "
+        "spec's MOD",
+    ),
+    (
+        lambda n: isinstance(n, exp.Median),
+        "`median` is approximate in ClickHouse and exact in Ossie SQL; write the "
+        "expression as `sql`, where MEDIAN is exact",
+    ),
+    (
+        lambda n: (
+            isinstance(n, exp.Ordered)
+            and bool(n.args.get("desc"))
+            and _in_window_order(n)
+            and "nulls" not in n.meta
+        ),
+        "a window's `ORDER BY ... DESC` puts NULL last in ClickHouse and first in Ossie "
+        "SQL; write `NULLS LAST` or `NULLS FIRST`",
+    ),
+    (
+        lambda n: isinstance(n, exp.Literal) and n.is_string and "\\" in n.this,
+        "a backslash in a string escapes the next character in ClickHouse and is a "
+        "character of its own in Ossie SQL; write the expression as `sql` with each "
+        "backslash once ('\\\\d' as '\\d')",
+    ),
+    (
+        # SQLGlot's default dialect does not know these types and prints their names in
+        # upper case inside Nullable: LowCardinality(String) as
+        # Nullable(LowCardinality(STRING)), which ClickHouse refuses.
+        lambda n: isinstance(n, exp.Cast) and n.to.this == exp.DType.USERDEFINED,
+        "a cast to a type of ClickHouse's own, such as LowCardinality or Tuple, does "
+        "not reach ClickHouse as written; call a conversion function, such as "
+        "`toLowCardinality(x)`",
+    ),
+    (
+        lambda n: isinstance(n, exp.Cast) and n.this.is_string and n.to.this in _TIMESTAMPS,
+        "a string cast to a time is read in the model's time zone in Ossie SQL and in "
+        "the server's in ClickHouse; call `toDateTime(string, zone)`, or write the "
+        "expression as `sql`",
+    ),
+)
+
+
+def _same_as_written(node: exp.Expression) -> bool:
+    """A node whose rewrite is a difference a text in CLICKHOUSE accepts: the model's
+    time zone for ClickHouse's clocks and dateDiff, as in `sql`
+    (docs/decisions/time-zone.md), and a division made Float64
+    (docs/decisions/division-to-float64.md), which changes only a Decimal quotient."""
+    if isinstance(node, exp.Anonymous):
+        return node.name.upper() in _CLOCKS
+    return isinstance(node, exp.CurrentDate | exp.CurrentTimestamp | exp.DateDiff | exp.Div)
+
+
+def _canonical(tree: exp.Expression) -> exp.Expression:
+    """``tree``, read in ClickHouse's dialect, without what changes no meaning there:
+    parentheses (the tree holds the grouping), if() for CASE and Nullable around a
+    type that holds no other type.
+    SQLGlot reads CURRENT_TIMESTAMP without parentheses as a column, ClickHouse as its
+    clock (a canary in tests/test_canaries.py)."""
+    tree = tree.copy()
+    for node in reversed(list(tree.dfs())):
+        new = node
+        if isinstance(node, exp.Paren):
+            new = node.this
+        elif isinstance(node, exp.If) and not isinstance(node.parent, exp.Case):
+            new = exp.Case(
+                ifs=[exp.If(this=node.this, true=node.args["true"])],
+                default=node.args.get("false"),
+            )
+        elif isinstance(node, exp.DataType) and not any(
+            isinstance(e, exp.DataType) for e in node.expressions
+        ):
+            node.set("nullable", None)
+        elif (
+            isinstance(node, exp.Column)
+            and not node.table
+            and not node.this.quoted
+            and node.name.upper() == "CURRENT_TIMESTAMP"
+        ):
+            new = exp.CurrentTimestamp()
+        if new is node:
+            continue
+        if node.parent is None:
+            tree = new
+        else:
+            node.replace(new)
+    return tree
+
+
+@cache
+def clickhouse_problem(text: str) -> str | None:
+    """Why ``text``, an expression in the CLICKHOUSE dialect, is refused, or None.
+
+    Accepted when the SQL sent to ClickHouse reads, in ClickHouse's dialect, as the
+    text does, but for _same_as_written's rewrites and _canonical's spellings.
+    A text parse() refuses is refused with parse()'s reason."""
+    try:
+        tree = parse(text)
+        sent = rewrite_tree(tree, keep=_same_as_written).sql(dialect="clickhouse")
+    except ValueError as e:
+        if "`" in text:
+            return (
+                "written for ClickHouse: a name in backticks is not read; quote it in "
+                'double quotes ("order id"), which ClickHouse reads alike'
+            )
+        # parse() reads every text as Ossie SQL and names what it refuses.
+        return f"written for ClickHouse, read as Ossie SQL: {str(e).removesuffix(f': {text!r}')}"
+    try:
+        written = sqlglot.parse_one(text, read="clickhouse")
+        ours = sqlglot.parse_one(sent, read="clickhouse")
+    except sqlglot.errors.SqlglotError as e:
+        return f"written for ClickHouse, but not ClickHouse SQL: {str(e).splitlines()[0]}"
+    if _canonical(written) == _canonical(ours):
+        return None
+    for node in tree.walk():
+        for differs, why in _CLICKHOUSE_READINGS:
+            if differs(node):
+                return f"written for ClickHouse: {why}"
+    return (
+        f"written for ClickHouse: this executor would send {sent} instead; write that, "
+        "or the expression as `sql`"
+    )
 
 
 def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]]:

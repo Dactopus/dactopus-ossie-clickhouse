@@ -161,11 +161,45 @@ Each field and metric carries its expression in `sql`, the spec's
 portable form in OSSIE_SQL_2026, or in `dialects`, or both. `sql` is read
 first and wins over an `OSSIE_SQL_2026` entry, as the spec says; without
 it, an `OSSIE_SQL_2026` entry is read, then `ANSI_SQL`, which the spec
-leaves opaque and this executor reads as OSSIE_SQL_2026. Other dialects
-are carried and ignored; an expression with only those is reported by
-`validate`. Within a field, bare column names are the dataset's own
+leaves opaque and this executor reads as OSSIE_SQL_2026, then
+`CLICKHOUSE`. Other dialects are carried and ignored; an expression with
+only those is reported by `validate`. Within a field, bare column names are the dataset's own
 columns; a field may not reach into another dataset. A model's metrics
 reference fields as `dataset.field`.
+
+A `CLICKHOUSE` text is ClickHouse SQL, as a converter writes it with
+`--sql-dialect CLICKHOUSE`. It is read where the SQL sent to ClickHouse
+is the text as written; `countIf(status = 'paid')`, `uniqExact(user_id)`
+and `toStartOfMonth(created_at)` are. Three differences are allowed: the
+model's time zone for `now()`, `today()`, `yesterday()`, `CURRENT_DATE`,
+`CURRENT_TIMESTAMP` and `dateDiff`; spellings that mean the same, such
+as `if()` sent as `CASE`; and a division in `Float64`, which gives a
+`Decimal` quotient all its digits where ClickHouse alone would keep the
+dividend's scale. Every query also makes an aggregate over no rows NULL,
+as the spec's `SUM` is, so `sumIf` with no matching row is NULL where
+ClickHouse alone gives 0; `countIf` stays 0. A text ClickHouse reads
+otherwise is refused, and `validate` names the construct and what to
+write instead:
+
+| Written for ClickHouse | Write instead |
+|---|---|
+| `length(s)`, bytes | `OCTET_LENGTH(s)`; `lengthUTF8(s)` for characters |
+| `position(s, 'x')` | `position('x' IN s)` |
+| `tags[1]` | `arrayElement(tags, 1)` |
+| `round(x, 2)` | `roundBankers(x, 2)` for a `Float64`; `ROUND` in `sql` for a `Decimal` |
+| `a % b` | `modulo(a, b)`, or `MOD` in `sql` |
+| `median(x)` | `MEDIAN(x)` in `sql`, exact |
+| `... OVER (ORDER BY d DESC)` | `DESC NULLS LAST` or `DESC NULLS FIRST` |
+| a backslash in a string | the expression in `sql`, each backslash once |
+| `CAST('...' AS DateTime)` | `toDateTime('...', 'zone')` |
+| `CAST(s AS LowCardinality(String))` | `toLowCardinality(s)` |
+| `dayofyear(d)`, renamed when sent | `toDayOfYear(d)` |
+| `` `order id` `` | `"order id"` |
+
+A field in one dialect may be read by a metric in another: each text
+keeps its own reading. `toDateTime('...')` and `date_diff` reach
+ClickHouse as written, in the server's zone, as they do from `sql`.
+Why: [decisions/clickhouse-dialect.md](decisions/clickhouse-dialect.md).
 
 A model's metric may evaluate a metric of a dataset as
 `AGG(dataset.metric)`, so a formula is written once:

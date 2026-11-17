@@ -163,6 +163,14 @@ def test_sqlglot_parses_agg_as_an_anonymous_function(call):
     )
 
 
+def test_sqlglot_reads_bare_current_timestamp_in_clickhouse_as_a_column():
+    tree = sqlglot.parse_one("CURRENT_TIMESTAMP", read="clickhouse")
+    assert isinstance(tree, exp.Column), (
+        f"SQLGlot {sqlglot.__version__} reads ClickHouse's CURRENT_TIMESTAMP as "
+        f"{type(tree).__name__}: check the exp.Column branch of _canonical (translate.py)"
+    )
+
+
 @pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
 def test_ossie_lets_a_model_metric_evaluate_a_dataset_metric_with_agg():
     text = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "spec.md").read_text()

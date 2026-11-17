@@ -220,7 +220,7 @@ def test_a_datasets_metric_needs_a_supported_dialect(tmp_path, tpcds):
     _only_dax(sales["metrics"][0])
     assert problems_of(tmp_path, tpcds) == [
         "metric 'store_sales.total_quantity': no expression in a supported dialect "
-        "(has DAX; need sql, or a dialect ANSI_SQL or OSSIE_SQL_2026)"
+        "(has DAX; need sql, or a dialect OSSIE_SQL_2026, ANSI_SQL or CLICKHOUSE)"
     ]
 
 

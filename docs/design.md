@@ -39,6 +39,10 @@ release history is in
 - [Parsing with SQLGlot's default dialect](decisions/parsing.md): until
   an upstream Ossie parser is on PyPI; the spec's grammar fixtures run
   against it.
+- [Expressions in ClickHouse's dialect](decisions/clickhouse-dialect.md):
+  a `CLICKHOUSE` text is read where the SQL sent is the text as written,
+  but for the model's zone, a division in `Float64`, NULL over no rows and
+  spellings; the rest is refused by name.
 - [Functions outside the spec pass through as written](decisions/functions-pass-through.md):
   only the spec's catalog is typed; the server's `system.functions` says
   which other functions exist and which of them aggregate.

@@ -31,8 +31,11 @@ from dactopus_ossie_clickhouse._vendor.ossie import (
 
 SUPPORTED_VERSION = "0.3.0.dev0"
 # Dialects of a `dialects` entry this executor reads, in order of preference. The
-# expression's own `sql` comes before them (expression_text).
-SUPPORTED_DIALECTS = ("OSSIE_SQL_2026", "ANSI_SQL")
+# expression's own `sql` comes before them (expression_choice). CLICKHOUSE is
+# ClickHouse's own SQL, read only where it means what the spec's reading means
+# (translate.clickhouse_problem, docs/decisions/clickhouse-dialect.md).
+CLICKHOUSE_DIALECT = "CLICKHOUSE"
+SUPPORTED_DIALECTS = ("OSSIE_SQL_2026", "ANSI_SQL", CLICKHOUSE_DIALECT)
 # The nonportable_extensions namespace this project owns (docs/model-authoring.md):
 # a data object on a dataset or on the model, with these keys and values.
 VENDOR = "CLICKHOUSE"
@@ -423,17 +426,24 @@ def _json(value) -> str:
     return json.dumps(value, default=lambda v: dict(v) if isinstance(v, Mapping) else str(v))
 
 
-def expression_text(expression: OssieExpression) -> str | None:
-    """The text of ``expression`` this executor reads, or None if it has none.
+def expression_choice(expression: OssieExpression) -> tuple[str, str] | None:
+    """The dialect and the text of ``expression`` this executor reads, or None if it
+    has none; the dialect of the expression's own `sql` is "sql".
 
     The spec's portable `sql` (OSSIE_SQL_2026) wins over an OSSIE_SQL_2026 entry in
     `dialects` ("Expression"). Without it, an entry in SUPPORTED_DIALECTS; any other
     dialect is opaque to Ossie and to this executor.
     """
     if expression.sql is not None:
-        return expression.sql
+        return "sql", expression.sql
     by_dialect = {d.dialect: d.expression for d in expression.dialects or []}
-    return next((by_dialect[d] for d in SUPPORTED_DIALECTS if d in by_dialect), None)
+    return next(((d, by_dialect[d]) for d in SUPPORTED_DIALECTS if d in by_dialect), None)
+
+
+def expression_text(expression: OssieExpression) -> str | None:
+    """The text of ``expression`` this executor reads (expression_choice), or None."""
+    choice = expression_choice(expression)
+    return choice[1] if choice else None
 
 
 def dialects_of(expression: OssieExpression) -> str:
@@ -445,7 +455,7 @@ def _dialect_check(what: str, expression: OssieExpression) -> list[str]:
         return []
     return [
         f"{what}: no expression in a supported dialect (has {dialects_of(expression)}; "
-        "need sql, or a dialect ANSI_SQL or OSSIE_SQL_2026)"
+        "need sql, or a dialect OSSIE_SQL_2026, ANSI_SQL or CLICKHOUSE)"
     ]
 
 

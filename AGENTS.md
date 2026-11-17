@@ -80,8 +80,12 @@ The vendored Ossie package:
 Translation:
 
 - Expressions are parsed with SQLGlot's default dialect until an upstream
-  Ossie parser is on PyPI (#4). `model.expression_text` is the one place that picks
-  which of an expression's texts is read; a dialect name is any string.
+  Ossie parser is on PyPI (#4). `model.expression_choice` is the one place that
+  picks which of an expression's texts is read; a dialect name is any string.
+  A `CLICKHOUSE` text goes through the same parser and is read only where
+  the SQL sent is the text as written (`translate.clickhouse_problem`, run
+  by `pick_expression`); never give ClickHouse's reading to a name the
+  spec defines.
 - `parse()` types only the spec's function catalog (`_CATALOG`). Any other
   function is `exp.Anonymous` and reaches ClickHouse as written, so
   SQLGlot never renames it. A rewritten function carries its spec

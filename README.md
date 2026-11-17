@@ -115,7 +115,9 @@ questions it refuses.
   AST. The spec's function catalog is mapped to ClickHouse and checked by
   value against [DuckDB](https://duckdb.org) and the spec text; any other
   function reaches ClickHouse as written, and `validate --url` checks the
-  server has it.
+  server has it. An expression in the `CLICKHOUSE` dialect, as model
+  converters write it, is read where it reaches ClickHouse as written;
+  `validate` names any other and what to write instead.
 - A question it cannot answer with the right number is refused, and
   errors name the nearest known metric, field or dataset, so an agent can
   recover without help.

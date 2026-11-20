@@ -15,6 +15,8 @@ the argument is made `Float64`, which is also what Postgres computes in.
 Alone it answers an empty set with `nan`; `OrNull` makes that NULL
 while keeping one aggregate, so `FILTER (WHERE ...)` still applies to it.
 Exact percentiles hold every value of the group in memory.
+`APPROX_PERCENTILE` is `quantileTDigest(p)(x * 1.0)`: `quantileTDigest`
+rejects `Decimal` too, so a money column failed the query.
 
 Postgres defines `PERCENTILE_CONT` for numbers only. `quantileExactInclusive`
 takes a `Date` and answers with a day count (20,455.5 for a median date in

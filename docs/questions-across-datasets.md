@@ -219,6 +219,9 @@ merged, a part with no rows in a group taking its value over no rows, a
 dimension or filter that a part's dataset does not reach refused, and a
 row filter applied to every part. A quotient is a `Float64`, and a
 division by zero shows NULL; so does a result with a NULL part, as in SQL.
+Inside the query a division by zero is `inf`, or NaN for 0 / 0, so a
+filter on the name keeps `share > 1` for it and `share IS NULL` finds
+nothing ([division to `Float64`](decisions/division-to-float64.md)).
 For a different value of a missing part, declare the metric in the model
 with `COALESCE`.
 

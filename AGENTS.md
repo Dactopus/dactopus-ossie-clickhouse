@@ -139,6 +139,12 @@ Planning (`planner.py`; each rule and refusal has a file in
 - Metrics come at two levels, the model's and a dataset's, the latter
   named `dataset.metric`. Every layer lists them through
   `model.all_metrics`.
+- An item of `Query.metrics` may be `<expression> AS <name>`, an expression
+  over metric names with `+ - * /`. `Planner.plan` plans it on a copy of
+  the planner that has the name as a metric of the model, so the planner
+  that serves the next question never holds a question's name, and
+  `_metric_tree` inlines each operand as a filter's metric name is. Never
+  give the expression a planning rule of its own.
 
 ## Testing
 

@@ -197,3 +197,40 @@ them. A metric whose aggregates read several datasets, such as sales per
 customer above, is not answered this way.
 
 Decision: [A metric of the one side by the many side](decisions/one-side-by-many-side.md).
+
+## An expression over metrics
+
+A question's metric may be an expression over metric names with the name
+of its column, `<expression> AS <name>`. The query computes a share, a
+ratio or a difference, so nobody divides the rows of an answer:
+
+```text
+-m "100 * returns / sales AS return_pct" -d customers.region
+-m "orders.revenue - returns.refunds AS net" -f "net > 0" -o "net desc"
+```
+
+Operands are metric names, written as a filter writes them (a model's
+metric bare, a dataset's as `dataset.metric`), and numbers. Operators are
+`+`, `-`, `*`, `/`, a minus sign and parentheses. The value is that of a
+model's metric with the same expression, `AGG(dataset.metric)` for each
+dataset's metric and a model's metric replaced by its own expression, so
+everything above applies: each aggregate over its own dataset, the groups
+merged, a part with no rows in a group taking its value over no rows, a
+dimension or filter that a part's dataset does not reach refused, and a
+row filter applied to every part. A quotient is a `Float64`, and a
+division by zero shows NULL; so does a result with a NULL part, as in SQL.
+For a different value of a missing part, declare the metric in the model
+with `COALESCE`.
+
+The name is the result column, as written. It works in `order_by`, in
+filters and as the default order when it is the first metric. It may not
+be a metric of the model, in any case, nor another selected column.
+
+Refused, with a message that names the construct and what to write
+instead: an expression without a name, a name the model does not have, a
+field, a written aggregate such as `SUM(orders.total)` (name a metric), a
+call of `AGG`, any other function, a string, date, boolean or NULL
+literal, a comparison, `CASE`, a subquery, a window, an expression with
+no metric, and a window metric as an operand (select it by its own name).
+
+Decision: [Expressions over metrics in a question](decisions/expressions-over-metrics.md).

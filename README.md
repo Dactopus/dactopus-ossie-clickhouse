@@ -137,7 +137,9 @@ the decisions behind all of this, with their evidence, in
 | `serve <model>...` | MCP server over stdio (needs the `[mcp]` extra). |
 
 Question options for `sql` and `query`: `-m metric` (repeatable;
-`dataset.metric` for one declared on a dataset),
+`dataset.metric` for one declared on a dataset; `-m "100 * returns / sales
+AS return_pct"` for an expression over metric names, computed by the query
+([expressions over metrics](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/questions-across-datasets.md#an-expression-over-metrics))),
 `-d dataset.field` (repeatable), `-f condition` (repeatable; a metric
 name or an aggregate means `HAVING`), `-o "name [desc]"`, `-l limit`.
 `--url` and `--policy` apply to anything that talks to ClickHouse.

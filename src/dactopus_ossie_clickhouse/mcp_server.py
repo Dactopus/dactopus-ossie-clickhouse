@@ -81,7 +81,7 @@ def instructions(model: OssieDocument) -> str:
         "NOT inside it means a row with a non-matching one, so ask for absence through a "
         "field or metric of the model, such as a last activity date. Every number "
         "you state must come from a query result; rounding is fine. For a share, ratio or "
-        'difference, put an expression in metrics: "buyers FILTER (WHERE c.orders > 1)/'
+        'difference, put an expression in metrics: "buyers FILTER (WHERE c.orders > 1) / '
         'buyers AS share". '
         f"Today and the current time are those of {time_zone(model)}, which may not be "
         "your user's: write today, yesterday, this week and any other period counted from "

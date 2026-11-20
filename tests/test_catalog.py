@@ -311,6 +311,12 @@ def test_percentile_cont_is_exact(expr, base, clickhouse, duck):
     check(expr, expected, clickhouse, duck, *PERCENTILE_BASES[base])
 
 
+def test_approx_percentile_takes_a_decimal(clickhouse, duck):
+    # quantileTDigest refuses Decimal. DuckDB lacks APPROX_PERCENTILE; 2.5 is the
+    # t-digest's median of the same values as Float64.
+    check("APPROX_PERCENTILE(x, 0.5)", 2.5, clickhouse, duck, *PERCENTILE_BASES["decimal"])
+
+
 @pytest.mark.parametrize("expr", PERCENTILES)
 def test_percentile_cont_of_nothing_is_null(expr, clickhouse):
     # A non-Nullable argument: quantileExactInclusive alone would answer nan.

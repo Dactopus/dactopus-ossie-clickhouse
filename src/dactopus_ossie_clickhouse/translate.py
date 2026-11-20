@@ -541,7 +541,8 @@ _EXTRACT_PARTS = {
 
 # Functions SQLGlot keeps as exp.Anonymous (no dedicated node): name -> rewrite(args).
 _ANONYMOUS = {
-    "APPROX_PERCENTILE": lambda a: _param_agg("quantileTDigest", a[1], a[0]),
+    # quantileTDigest refuses Decimal, as quantileExactInclusive does (_percentile_cont).
+    "APPROX_PERCENTILE": lambda a: _param_agg("quantileTDigest", a[1], _to_float(a[0])),
     "TO_DATE": lambda a: (
         _f("toDate", a[0])
         if len(a) == 1

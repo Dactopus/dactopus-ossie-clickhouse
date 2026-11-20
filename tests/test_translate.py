@@ -89,7 +89,7 @@ def test_translate_uses_picked_dialect():
             "PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY x) OVER (PARTITION BY y)",
             "quantileExactInclusiveOrNull(0.5)(x * 1.0) OVER (PARTITION BY y)",
         ),
-        ("APPROX_PERCENTILE(x, 0.5)", "quantileTDigest(0.5)(x)"),
+        ("APPROX_PERCENTILE(x, 0.5)", "quantileTDigest(0.5)(x * 1.0)"),
         ("APPROX_COUNT_DISTINCT(x)", "uniq(x)"),
         # windows: NULL for a missing row, NULLs respected (ANSI)
         ("LAG(v, 1) OVER (ORDER BY k)", "lag(toNullable(v), 1) OVER (ORDER BY k)"),

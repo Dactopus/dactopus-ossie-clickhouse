@@ -485,7 +485,7 @@ def test_anonymous_aggregate_filter_goes_to_having():
         )
     )
     assert "WHERE" not in sql
-    assert "HAVING quantileTDigest(0.95)(store_sales.ss_net_profit) > 10" in sql
+    assert "HAVING quantileTDigest(0.95)(store_sales.ss_net_profit * 1.0) > 10" in sql
 
 
 def test_selected_names_must_differ():
@@ -708,7 +708,7 @@ def _with_metrics(**expressions: str) -> Planner:
         # Nested in another rewrite: the check sees the inner one rewritten too.
         (
             Query(metrics=("sales_per_nonzero_median_staff",)),
-            "applies quantileTDigest(0.5)(store.s_number_employees)",
+            "applies quantileTDigest(0.5)(store.s_number_employees * 1.0)",
         ),
         # COUNT(*) alone counts whatever rows the question is about: stores here,
         # sales next to total_sales.
@@ -728,7 +728,7 @@ def _with_metrics(**expressions: str) -> Planner:
         (
             Query(metrics=("sales_per_median_staff",)),
             "metric 'sales_per_median_staff' applies "
-            "quantileTDigest(0.5)(store.s_number_employees)",
+            "quantileTDigest(0.5)(store.s_number_employees * 1.0)",
         ),
     ],
 )
@@ -1147,7 +1147,7 @@ def test_nested_rewrite_in_a_metric():
         median_or_null="NULLIFZERO(APPROX_PERCENTILE(store_sales.ss_quantity, 0.5))"
     )
     sql = planner.sql(Query(metrics=("median_or_null",)))
-    assert "nullIf(quantileTDigest(0.5)(store_sales.ss_quantity), 0) AS median_or_null" in sql
+    assert "nullIf(quantileTDigest(0.5)(store_sales.ss_quantity * 1.0), 0) AS median_or_null" in sql
 
 
 def test_a_metric_that_reads_no_dataset_needs_no_from():

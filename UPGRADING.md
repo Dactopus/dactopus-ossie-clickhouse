@@ -12,6 +12,12 @@ release changed:
 new version hides, with the reason; run it on each model after an
 upgrade.
 
+## Unreleased
+
+- Write a percentile of a date with `PERCENTILE_DISC`: `APPROX_PERCENTILE`
+  over a `Date`, `DateTime` or `String` now fails the query, as the
+  other percentiles do; over a `Decimal` it answers, where it failed.
+
 ## 0.17.0
 
 - Write `FALSE` for `x IN ()`, and give `SUM(DISTINCT ...)` its

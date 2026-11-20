@@ -100,7 +100,12 @@ Meaning:
 - A part with no rows in a group takes its value over no rows: NULL for a
   sum, 0 for a count. A part that is NULL makes the result NULL, as SQL
   arithmetic does.
-- Division by zero shows NULL.
+- Division by zero shows NULL. Inside the query it is `inf`, or NaN for
+  0 / 0, which a filter on the name or `order_by` sees, as for a model's
+  metric ([division to `Float64`](division-to-float64.md)). The spec
+  leaves division by zero to the engine (`core-spec/relational_semantics.md`,
+  section 7.2), and DuckDB answers `inf` too, so the planner adds no rule
+  of its own.
 
 A condition on a part:
 

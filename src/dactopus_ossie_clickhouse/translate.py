@@ -19,6 +19,7 @@ import sqlglot.errors
 from sqlglot import exp
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.parser import Parser
+from sqlglot.tokens import TokenType
 
 from dactopus_ossie_clickhouse._vendor.ossie import OssieDataset, OssieDocument, OssieExpression
 from dactopus_ossie_clickhouse.model import (
@@ -251,6 +252,26 @@ class OssieSQL(Dialect):
     NULL_ORDERING = "nulls_are_last"
 
 
+class _QuestionParser(_OssieParser):
+    """OssieSQL plus ``metric FILTER (WHERE condition)``: a condition on a metric name
+    in an expression over metrics (docs/decisions/expressions-over-metrics.md). SQLGlot
+    takes FILTER only after a function; here it also follows a column, and only a
+    column: ``(m) FILTER (...)`` and ``1 FILTER (...)`` stay errors."""
+
+    def _parse_column(self):
+        column = super()._parse_column()
+        if isinstance(column, exp.Column) and self._match_pair(TokenType.FILTER, TokenType.L_PAREN):
+            self._match(TokenType.WHERE)
+            where = self._parse_where(skip_where_token=True)
+            self._match_r_paren()
+            return self.expression(exp.Filter(this=column, expression=where))
+        return column
+
+
+class QuestionSQL(OssieSQL):
+    Parser = _QuestionParser
+
+
 _DISALLOWED = (
     exp.Select, exp.Subquery, exp.With, exp.Union, exp.Intersect, exp.Except, exp.Join,
     exp.Create, exp.Drop, exp.Alter, exp.Insert, exp.Update, exp.Delete,
@@ -422,10 +443,12 @@ def _shape_problem(node: exp.Expression) -> str | None:
     return None
 
 
-def parse(expression: str) -> exp.Expression:
-    """Parse an Ossie expression, rejecting constructs the spec disallows."""
+def parse(expression: str, question: bool = False) -> exp.Expression:
+    """Parse an Ossie expression, rejecting constructs the spec disallows. With
+    ``question``, a metric name may take a FILTER (QuestionSQL): only an expression over
+    metrics in a question does."""
     try:
-        tree = sqlglot.parse_one(expression, read=OssieSQL)
+        tree = sqlglot.parse_one(expression, read=QuestionSQL if question else OssieSQL)
     except sqlglot.errors.SqlglotError as e:
         raise ValueError(f"cannot parse {expression!r}: {str(e).splitlines()[0]}") from e
     for node in tree.walk():
@@ -433,7 +456,10 @@ def parse(expression: str) -> exp.Expression:
             raise ValueError(
                 f"{type(node).__name__} is not allowed in an Ossie expression: {expression!r}"
             )
-        if problem := _shape_problem(node):
+        filtered_metric = (
+            question and isinstance(node, exp.Filter) and isinstance(node.this, exp.Column)
+        )
+        if not filtered_metric and (problem := _shape_problem(node)):
             raise ValueError(f"{problem}: {expression!r}")
         # Spec, "Window ORDER BY NULL Placement": without NULLS FIRST | LAST, NULL is the
         # largest value, so DESC puts it first. ClickHouse's default is last both ways,

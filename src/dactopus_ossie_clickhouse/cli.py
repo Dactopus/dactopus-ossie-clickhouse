@@ -43,7 +43,10 @@ def _parser() -> argparse.ArgumentParser:
             default=[],
             help="metric name, or an expression over metric names with a name for its column, "
             '"100 * returns / sales AS return_pct" (operands: metric names and numbers; '
-            "operators: + - * / and parentheses; the name works in -o and -f)",
+            "operators: + - * / and parentheses; the name works in -o and -f). A filter of "
+            "the question applies to every part; for a share of a subset, or one metric over "
+            'two periods, put the condition on the part: "customer_count FILTER (WHERE '
+            'customer.c_birth_year > 1980) / customer_count AS share"',
         )
         s.add_argument("-d", "--dimension", action="append", default=[], help="dataset.field")
         s.add_argument(

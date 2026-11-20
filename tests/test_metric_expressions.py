@@ -19,6 +19,7 @@ import json
 
 import pytest
 import yaml
+from sqlglot import exp
 
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.access import Hidden, restrict
@@ -56,7 +57,13 @@ BASE = {
             "name": "orders",
             "source": "ossie_expr.orders",
             "primary_key": ["id"],
-            "fields": [field("id"), field("customer_id"), field("amount"), field("status")],
+            "fields": [
+                field("id"),
+                field("customer_id"),
+                field("amount"),
+                field("status"),
+                {**field("placed_at"), "datatype": "DateTime"},
+            ],
             "metrics": [
                 metric("revenue", "SUM(amount)"),
                 metric("n", "COUNT(*)"),
@@ -96,6 +103,11 @@ BASE = {
         metric("return_rate", "SUM(returns.amount) / SUM(orders.amount)"),
         metric("net_revenue", "SUM(orders.amount) - SUM(returns.amount)"),
         metric("rank_revenue", "RANK() OVER (ORDER BY SUM(orders.amount) DESC)"),
+        metric(
+            "completed_revenue", "SUM(orders.amount) FILTER (WHERE orders.status = 'completed')"
+        ),
+        metric("avg_per_order", "SUM(orders.amount) / COUNT(orders.id)"),
+        metric("clock", "CURRENT_TIMESTAMP"),  # no aggregate
         # Twins: the expressions of the questions below, written as a model's metric.
         metric("twin_ratio", "SUM(returns.amount) / SUM(orders.amount)"),
         metric("twin_pct", "100 * SUM(returns.amount) / SUM(orders.amount)"),
@@ -107,6 +119,31 @@ BASE = {
         metric("twin_inverse_net", "1 / (SUM(orders.amount) - SUM(returns.amount))"),
         metric("twin_net_share", "(SUM(orders.amount) - SUM(returns.amount)) / SUM(orders.amount)"),
         metric("twin_rate_pct", "100 * (SUM(returns.amount) / SUM(orders.amount))"),
+        metric(
+            "twin_completed_share",
+            "SUM(orders.amount) FILTER (WHERE orders.status = 'completed') / SUM(orders.amount)",
+        ),
+        metric(
+            "twin_completed_big",
+            "SUM(orders.amount) FILTER (WHERE orders.status = 'completed' AND orders.amount > 60)"
+            " / SUM(orders.amount)",
+        ),
+        metric(
+            "twin_avg_completed",
+            "(SUM(orders.amount) FILTER (WHERE orders.status = 'completed') / "
+            "COUNT(orders.id) FILTER (WHERE orders.status = 'completed')) / "
+            "(SUM(orders.amount) / COUNT(orders.id))",
+        ),
+        metric(
+            "twin_retail_share",
+            "SUM(orders.amount) FILTER (WHERE customers.segment = 'retail') / SUM(orders.amount)",
+        ),
+        metric(
+            "twin_retail_rate",
+            "(SUM(returns.amount) FILTER (WHERE customers.segment = 'retail') / "
+            "SUM(orders.amount) FILTER (WHERE customers.segment = 'retail')) / "
+            "(SUM(returns.amount) / SUM(orders.amount))",
+        ),
         metric("twin_per_customer", "SUM(orders.amount) / COUNT(DISTINCT customers.id)"),
     ],
 }
@@ -119,11 +156,13 @@ SETUP = [
     "INSERT INTO ossie_expr.customers VALUES (1, 'EAST', 'retail'), (2, 'EAST', 'retail'), "
     "(3, 'WEST', 'wholesale'), (4, 'NORTH', 'retail')",
     "CREATE TABLE ossie_expr.orders (id Int32, customer_id Int32, amount Decimal(10, 2), "
-    "status String) ENGINE = MergeTree ORDER BY id",
+    "status String, placed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY id",
     # Order 105 is an orphan: customer 99 does not exist.
-    "INSERT INTO ossie_expr.orders VALUES (101, 1, 100.00, 'completed'), "
-    "(102, 1, 50.00, 'completed'), (103, 2, 200.00, 'pending'), (104, 3, 75.00, 'completed'), "
-    "(105, 99, 30.00, 'completed')",
+    "INSERT INTO ossie_expr.orders VALUES (101, 1, 100.00, 'completed', '2026-01-10 09:00:00'), "
+    "(102, 1, 50.00, 'completed', '2026-02-15 10:00:00'), "
+    "(103, 2, 200.00, 'pending', '2026-02-20 11:00:00'), "
+    "(104, 3, 75.00, 'completed', '2026-03-05 12:00:00'), "
+    "(105, 99, 30.00, 'completed', '2026-03-10 13:00:00')",
     "CREATE TABLE ossie_expr.returns (id Int32, customer_id Int32, amount Decimal(10, 2)) "
     "ENGINE = MergeTree ORDER BY id",
     # Customer 4 has a return and no orders; return 204 is an orphan.
@@ -368,7 +407,11 @@ REFUSED = [
         ["unknown metric 'total_revnue' (did you mean: total_revenue"],
     ),
     ("amount / 2 AS r", ["unknown metric 'amount'", "it names the fields orders.amount"]),
-    ("r + 1 AS r", ["unknown metric 'r'"]),  # not its own operand
+    # Not its own operand, and not another expression's.
+    (
+        "r + 1 AS r",
+        ["'r' in 'r + 1 AS r' is the name of an expression of this question", "write that"],
+    ),
     ("customers.region_x / 2 AS r", ["unknown metric 'customers.region_x'"]),
     # A field.
     (
@@ -515,6 +558,291 @@ def test_a_hidden_metric_is_an_unknown_name_with_no_trace(model):
         assert not [g for g in gone if g in suggested], item
 
 
+# --- a condition on a part ------------------------------------------------------------------
+
+COMPLETED = "total_revenue FILTER (WHERE orders.status = 'completed') / total_revenue AS s"
+
+
+def test_a_share_of_a_subset_in_one_dataset(ex):
+    # Completed orders: 100 + 50 + 75 + 30 of 455.
+    assert total(ex, COMPLETED) == pytest.approx(255 / 455)
+    assert total(ex, COMPLETED) == pytest.approx(total(ex, "twin_completed_share"))
+    got = region(ex, COMPLETED)
+    assert got == pytest.approx({"EAST": 150 / 350, "WEST": 1.0, None: 1.0})
+    assert got == pytest.approx(region(ex, "twin_completed_share"))
+
+
+def test_a_condition_on_a_part_is_one_filter_of_the_model_metric(planner):
+    sql = planner.sql(Query((COMPLETED,)))
+    assert sql.count("FILTER") == 1 and "FILTER(WHERE FILTER" not in sql
+    twin = planner.sql(Query(("twin_completed_share",)))
+    assert sql.replace(" AS s", " AS twin_completed_share") == twin
+
+
+def test_a_condition_on_the_one_side_beside_the_metric_without_it(ex):
+    # Retail customers 1, 2 and 4 have orders of 100 + 50 + 200. The orphan order and
+    # the wholesale customer's are not theirs; a group without retail orders has NULL.
+    item = "total_revenue FILTER (WHERE customers.segment = 'retail') / total_revenue AS s"
+    assert total(ex, item) == pytest.approx(350 / 455)
+    assert total(ex, item) == pytest.approx(total(ex, "twin_retail_share"))
+    by_region = region(ex, item)
+    assert by_region == pytest.approx({"EAST": 1.0, "WEST": None, None: None})
+    assert by_region == pytest.approx(region(ex, "twin_retail_share"))
+
+
+def test_a_metric_that_has_a_filter_takes_one_filter_with_both_conditions(ex, planner):
+    item = "completed_revenue FILTER (WHERE orders.amount > 60) / total_revenue AS s"
+    assert total(ex, item) == pytest.approx(175 / 455)  # 100 and 75
+    assert total(ex, item) == pytest.approx(total(ex, "twin_completed_big"))
+    assert planner.sql(Query((item,))).count("FILTER") == 1
+
+
+def test_a_metric_with_several_aggregates_takes_the_condition_in_each(ex):
+    # The mean of the completed orders, 255 / 4, over the mean of all, 455 / 5.
+    item = "avg_per_order FILTER (WHERE orders.status = 'completed') / avg_per_order AS s"
+    assert total(ex, item) == pytest.approx(63.75 / 91)
+    assert total(ex, item) == pytest.approx(total(ex, "twin_avg_completed"))
+
+
+def test_a_condition_on_the_parts_own_dataset_beside_a_part_of_another(ex):
+    # Returns over 6: 10 + 15 + 7, over the 455 of all orders. A condition on a dataset the
+    # part's aggregates read is a FILTER of a model's metric that the planner answers.
+    item = "total_returns FILTER (WHERE returns.amount > 6) / total_revenue AS s"
+    assert total(ex, item) == pytest.approx(32 / 455)
+    assert region(ex, item) == pytest.approx(
+        {"EAST": 10 / 350, "WEST": None, "NORTH": None, None: 7 / 30}
+    )
+
+
+def test_a_condition_on_another_dataset_beside_a_part_of_a_different_dataset_is_the_mixed_refusal(
+    planner,
+):
+    # As for a model's metric (docs/decisions/components.md): the part is computed over one
+    # join of its dataset and the one side, and a part of another dataset would count that
+    # dataset's rows as the join repeats them. The conditions below read customers.
+    for item in (
+        "return_rate FILTER (WHERE customers.segment = 'retail') / return_rate AS s",
+        "total_returns FILTER (WHERE customers.segment = 'retail') / total_revenue AS s",
+    ):
+        message = refusal(planner, item)
+        assert message.startswith("metric 's' applies SUM(")
+        assert "which reads several datasets or filters on another" in message
+
+
+def test_a_metric_that_has_a_filter_can_be_filtered_on(ex):
+    # The condition of its FILTER is part of the aggregate, not a column outside it.
+    got = region(ex, "completed_revenue", filters=("completed_revenue > 100",))
+    assert got == pytest.approx({"EAST": 150})
+
+
+def test_a_dataset_metric_with_a_condition(ex):
+    item = "orders.revenue FILTER (WHERE orders.status = 'completed') / orders.revenue AS s"
+    assert total(ex, item) == pytest.approx(255 / 455)
+
+
+def test_one_metric_over_two_periods(ex):
+    march = "orders.placed_at >= '2026-03-01'"
+    february = "orders.placed_at >= '2026-02-01' AND orders.placed_at < '2026-03-01'"
+    item = f"total_revenue FILTER (WHERE {march}) / total_revenue FILTER (WHERE {february}) AS g"
+    assert total(ex, item) == pytest.approx(105 / 250)  # 75 + 30 over 50 + 200
+
+
+def test_a_date_string_against_a_time_field_and_the_current_date(ex):
+    # A string against a DateTime field is a TIMESTAMP, read in the model's zone.
+    since = "total_revenue FILTER (WHERE orders.placed_at >= '2026-02-01 10:00:00') / total_revenue"
+    assert total(ex, f"{since} AS s") == pytest.approx(355 / 455)  # from order 102 on, not 101
+    past = "total_revenue FILTER (WHERE orders.placed_at < CURRENT_DATE) / total_revenue AS s"
+    assert total(ex, past) == pytest.approx(1.0)
+    future = "total_revenue FILTER (WHERE orders.placed_at > CURRENT_DATE) / total_revenue AS s"
+    assert total(ex, future) is None  # a sum over no rows
+
+
+def test_a_row_filter_of_the_question_applies_beside_a_condition_on_a_part(ex):
+    # Retail customers' orders: 100 + 50 + 200, completed 100 + 50.
+    q = ("customers.segment = 'retail'",)
+    assert total(ex, COMPLETED, filters=q) == pytest.approx(150 / 350)
+    assert region(ex, COMPLETED, filters=q) == pytest.approx({"EAST": 150 / 350})
+
+
+def test_the_name_of_a_share_works_in_filters_and_order_by(ex):
+    kept = region(ex, COMPLETED, filters=("s > 0.5",))
+    assert kept == pytest.approx({"WEST": 1.0, None: 1.0})
+    rows_ = ex.execute(Query((COMPLETED,), ("customers.region",), order_by=("s",))).rows
+    assert [r[0] for r in rows_] == ["EAST", "WEST", None]
+    assert ex.execute(Query((COMPLETED,), ("customers.region",), limit=1)).rows[0][1] == 1.0
+
+
+def test_a_division_by_zero_in_a_share_shows_null(ex):
+    item = "total_revenue / (total_revenue FILTER (WHERE orders.id < 0)) AS s"
+    assert total(ex, item) is None
+
+
+CONDITION_REFUSED = [
+    # What a condition may not hold.
+    (
+        "total_revenue FILTER (WHERE total_returns > 1) / total_revenue AS s",
+        [
+            "the condition 'total_returns > 1' on 'total_revenue'",
+            "names the metric 'total_returns'",
+        ],
+    ),
+    (
+        "total_revenue FILTER (WHERE orders.revenue > 1) / total_revenue AS s",
+        ["names the metric 'orders.revenue'", "dataset.field"],
+    ),
+    (
+        "total_revenue FILTER (WHERE SUM(orders.amount) > 1) / total_revenue AS s",
+        ["SUM(orders.amount) in the condition", "no aggregate, window or metric"],
+    ),
+    (
+        "total_revenue FILTER (WHERE AGG(orders.revenue) > 1) / total_revenue AS s",
+        ["AGG(orders.revenue) in the condition", "is not allowed"],
+    ),
+    (
+        "total_revenue FILTER (WHERE RANK() OVER (ORDER BY orders.amount) = 1) / total_revenue "
+        "AS s",
+        ["in the condition", "no aggregate, window or metric"],
+    ),
+    (
+        "total_revenue FILTER (WHERE orders.id IN (SELECT 1)) / total_revenue AS s",
+        ["is not allowed in an Ossie expression"],
+    ),
+    # Fields: the errors of a filter of the question.
+    (
+        "total_revenue FILTER (WHERE orders.nope = 1) / total_revenue AS s",
+        ["unknown field 'orders.nope'"],
+    ),
+    (
+        "total_revenue FILTER (WHERE status = 'x') / total_revenue AS s",
+        ["unqualified column 'status'"],
+    ),
+    # Where FILTER may stand.
+    (
+        "(total_revenue) FILTER (WHERE orders.id > 1) / 2 AS s",
+        ["cannot parse", "FILTER (WHERE condition) goes directly after a metric name"],
+    ),
+    (
+        "1 FILTER (WHERE orders.id > 1) AS s",
+        ["cannot parse", "goes directly after a metric name"],
+    ),
+    (
+        "SUM(orders.amount) FILTER (WHERE orders.id > 1) / total_revenue AS s",
+        ["is an aggregate", "name a metric of the model"],
+    ),
+    (
+        "total_revenue FILTER (WHERE orders.id > 1)",
+        ["needs a name", "total_revenue FILTER (WHERE orders.id > 1) AS <name>"],
+    ),
+    # A metric without an aggregate, a window metric.
+    (
+        "clock FILTER (WHERE orders.id > 1) / 2 AS s",
+        ["'clock' in", "has no aggregate", "put the condition in a filter of the question"],
+    ),
+    (
+        "rank_revenue FILTER (WHERE orders.id > 1) + 1 AS s",
+        ["is a window metric", "select rank_revenue by its own name"],
+    ),
+    # Reach: the condition's dataset must be reached from every dataset the part aggregates.
+    (
+        "total_returns FILTER (WHERE orders.status = 'completed') / total_returns AS s",
+        [
+            "the condition \"orders.status = 'completed'\" on 'total_returns'",
+            "reads orders, which returns, where total_returns aggregates rows, does not reach",
+            "in a filter of the question, which applies to every part",
+            "declare a metric of the model",
+        ],
+    ),
+    (
+        "return_rate FILTER (WHERE orders.status = 'completed') / return_rate AS s",
+        ["on 'return_rate'", "reads orders, which returns", "does not reach"],
+    ),
+    (
+        "customer_count FILTER (WHERE orders.status = 'completed') / customer_count AS s",
+        [
+            "reads orders, which customers",
+            "customers is the one side of ['orders']",
+            "rows that reference what a metric counts is not supported in an expression",
+        ],
+    ),
+    # A division of a tree by itself.
+    (
+        "total_revenue / total_revenue AS s",
+        ["divides total_revenue by itself", "total_revenue FILTER (WHERE <condition>) / "],
+    ),
+    (
+        "(total_revenue + 1) / (total_revenue + 1) AS s",
+        ["by itself, which is always 1"],
+    ),
+    (
+        "total_revenue FILTER (WHERE orders.id > 1) / total_revenue FILTER (WHERE orders.id > 1) "
+        "AS s",
+        ["divides total_revenue by itself"],
+    ),
+    # Another expression of the question is no operand.
+    (
+        "total_revenue / 2 AS a",
+        [],  # a valid first item; the second names it
+    ),
+]
+
+
+@pytest.mark.parametrize(("item", "fragments"), CONDITION_REFUSED[:-1])
+def test_what_a_condition_on_a_part_may_not_be_is_refused(planner, item, fragments):
+    message = refusal(planner, item)
+    for fragment in fragments:
+        assert fragment in message, message
+
+
+def test_an_expression_that_names_another_one_of_the_question_is_refused(planner):
+    message = refusal(planner, "total_revenue / 2 AS a", "a + 1 AS b")
+    assert "'a' in 'a + 1 AS b' is the name of an expression of this question" in message
+    assert "write that expression out where the name stands" in message
+
+
+def test_the_form_is_the_question_only(model, tmp_path):
+    # A model's expression, a question's filter and a field refuse it as they did.
+    from dactopus_ossie_clickhouse.translate import parse, untranslatable
+
+    with pytest.raises(ValueError, match="cannot parse"):
+        parse("total_revenue FILTER (WHERE orders.id > 1)")
+    assert parse("total_revenue FILTER (WHERE orders.id > 1)", question=True).find(exp.Filter)
+    data = copy.deepcopy(BASE)
+    data["metrics"].append(metric("bad", "total_revenue FILTER (WHERE orders.id > 1)"))
+    data["datasets"][0]["fields"].append(
+        {"name": "bad_field", "expression": expr("id FILTER (WHERE id > 1)")}
+    )
+    path = tmp_path / "bad.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    fields, metrics = untranslatable(load_model(path))
+    assert "cannot parse" in metrics["bad"] and "cannot parse" in fields["customers.bad_field"]
+    planner = Planner(model)
+    for f in (
+        "total_revenue FILTER (WHERE orders.id > 1) > 1",
+        "orders.id FILTER (WHERE 1 = 1) > 1",
+    ):
+        assert "cannot parse" in refusal(planner, "order_count", filters=(f,))
+
+
+def test_a_hidden_field_in_a_condition_is_an_unknown_field_with_no_trace(model):
+    planner = Planner(restrict(model, Hidden(fields=frozenset({"customers.segment"}))))
+    item = "total_revenue FILTER (WHERE customers.segment = 'retail') / total_revenue AS s"
+    message = refusal(planner, item)
+    assert message == refusal(planner, "total_revenue", filters=("customers.segment = 'retail'",))
+    assert message.startswith("unknown field 'customers.segment'")
+    assert "wholesale" not in message and "twin_retail" not in message
+
+
+def test_a_question_with_a_condition_gives_stable_sql_and_leaves_the_planner(model):
+    planner = Planner(model)
+    metrics = dict(planner._metrics)
+    item = "total_revenue FILTER (WHERE customers.segment = 'retail') / total_revenue AS s"
+    first = planner.sql(Query((item,), ("customers.region",)))
+    assert planner.sql(Query((item,), ("customers.region",))) == first
+    assert Planner(model).sql(Query((item,), ("customers.region",))) == first
+    assert planner._metrics == metrics and planner._expressions == {}
+    assert planner.sql(Query(("total_revenue",))) == Planner(model).sql(Query(("total_revenue",)))
+
+
 # --- the surfaces ------------------------------------------------------------------------
 
 
@@ -567,16 +895,19 @@ async def test_the_mcp_query_tool_returns_the_column_under_its_name(clickhouse, 
         assert "is an aggregate" in r.structured_content["error"]
         # The tool tells the agent about expressions.
         tools = {t.name: t for t in (await c.list_tools()).tools}
-        assert "100 * returns / sales AS return_pct" in " ".join(tools["query"].description.split())
+        text = " ".join(tools["query"].description.split())
+        assert "total_sales / total_profit AS ratio" in text
+        assert "A filter of the question applies to every part" in text
+        assert "customer_count FILTER (WHERE customer.c_birth_year > 1980)" in text
 
 
 # --- the instructions -------------------------------------------------------------------
 
 
 # The text before the model's own instructions was 1731 characters for the TPC-DS example
-# when expressions came, and may not grow: Claude Code cuts instructions at 4,096 and models
-# use up to 2,300.
-INSTRUCTIONS_BEFORE_THE_MODEL = 1731
+# when expressions came, 1746 with the condition on a part, and may not grow: Claude Code
+# cuts instructions at 4,096 and models use up to 2,300.
+INSTRUCTIONS_BEFORE_THE_MODEL = 1746
 
 
 def test_the_instructions_say_where_a_share_comes_from_and_stay_as_short():
@@ -585,7 +916,7 @@ def test_the_instructions_say_where_a_share_comes_from_and_stay_as_short():
     assert own <= INSTRUCTIONS_BEFORE_THE_MODEL
     assert (
         "Every number you state must come from a query result; rounding is fine. For a share, "
-        'ratio or difference, put an expression in metrics: "100 * returns / sales AS '
-        'return_pct".'
+        'ratio or difference, put an expression in metrics: "buyers FILTER (WHERE c.orders > '
+        '1)/buyers AS share".'
     ) in text
     assert "such as the counts behind a rate" not in text

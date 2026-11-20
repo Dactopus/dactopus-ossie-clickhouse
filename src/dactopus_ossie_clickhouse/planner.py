@@ -884,12 +884,12 @@ class Planner:
             raise PlanError(f"unknown field {ref!r}{suggest(ref, names)}")
         return ds, f
 
-    def _parse(self, expression: str) -> exp.Expression:
+    def _parse(self, expression: str, question: bool = False) -> exp.Expression:
         """parse(), with a call of a function outside the spec that the server
         says is an aggregate (countIf, uniqExactOrNull) typed as one, so every
         check on aggregates covers it. Without the server's word, SQLGlot's list
         of ClickHouse aggregates decides (_known_clickhouse_aggregate)."""
-        tree = parse(expression)
+        tree = parse(expression, question)
         # A plain dict has no aggregate; a catalog has None without system.functions.
         aggregate = getattr(self.catalog, "aggregate", None) or _known_clickhouse_aggregate
 
@@ -1494,14 +1494,21 @@ class Planner:
         of the model, and a metric with a window function."""
         item, text = self._expressions[m.name.upper()]
         try:
-            tree = self._parse(text)
+            tree = self._parse(text, question=True)
         except ValueError as e:
-            raise PlanError(f"{e}; {EXPRESSION_RULE}") from e
-        operands: list[tuple[exp.Column, exp.Expression]] = []
+            hint = (
+                "; FILTER (WHERE condition) goes directly after a metric name"
+                if re.search(r"\bFILTER\s*\(", text, re.IGNORECASE)
+                else ""
+            )
+            raise PlanError(f"{e}{hint}; {EXPRESSION_RULE}") from e
+        operands: list[tuple[exp.Expression, exp.Expression]] = []
 
         def visit(node: exp.Expression) -> None:
             if isinstance(node, exp.Column):
                 operands.append((node, self._operand(node, item, used)))
+            elif isinstance(node, exp.Filter) and isinstance(node.this, exp.Column):
+                operands.append((node, self._filtered_operand(node, item, used)))
             elif agg_call(node):
                 arg = node.expressions[0] if len(node.expressions) == 1 else None
                 named = arg.sql() if isinstance(arg, exp.Column) else "dataset.metric"
@@ -1541,6 +1548,84 @@ class Planner:
                 tree = sub
             else:
                 column.replace(sub)
+        for div in tree.find_all(exp.Div):
+            if div.this.unnest() == div.expression.unnest():
+                name = div.this.unnest().meta.get("operand") or text
+                raise PlanError(
+                    f"{item!r} divides {name} by itself, which is always 1; to ask for a "
+                    f"share of a subset, put the condition on one part: {name} FILTER (WHERE "
+                    f"<condition>) / {name}"
+                )
+        return tree
+
+    def _filtered_operand(self, node: exp.Filter, item: str, used: set[str]) -> exp.Expression:
+        """``metric FILTER (WHERE condition)`` in an expression over metrics: the
+        metric's tree with the condition as the FILTER of each of its aggregates, joined
+        with AND to one it has already (one FILTER, never a FILTER over a FILTER). That is
+        a model's metric whose aggregates have the FILTER, so planning has no new rule.
+        The condition reads fields of datasets that every aggregate's dataset reaches
+        through many-to-one relationships, as a FILTER in a model's metric does."""
+        column = node.this
+        name = ".".join(part.name for part in column.parts)
+        tree = self._operand(column, item, used)
+        aggs = [a for a in tree.find_all(exp.AggFunc) if not _window_function(a)]
+        if not aggs:
+            raise PlanError(
+                f"{name!r} in {item!r} has no aggregate, so a condition has no rows to "
+                "restrict; put the condition in a filter of the question, or use a metric "
+                "that aggregates"
+            )
+        cond = node.expression.this
+        shown = cond.sql()
+        for part in cond.walk():
+            if isinstance(part, exp.Column) and self._named_metric(part) is not None:
+                raise PlanError(
+                    f"the condition {shown!r} on {name!r} in {item!r} names the metric "
+                    f"{part.sql()!r}; a condition reads fields, written dataset.field"
+                )
+            if agg_call(part) or isinstance(part, exp.AggFunc | exp.Window | exp.Filter):
+                raise PlanError(
+                    f"{part.sql()} in the condition {shown!r} on {name!r} in {item!r} is not "
+                    "allowed; a condition reads fields, written dataset.field, and no "
+                    "aggregate, window or metric"
+                )
+        self._time_strings(cond, metrics=False)
+        read: set[str] = set()
+        cond = rewrite_tree(self.resolve(shown, read, parsed=cond), self._zone)
+        homes = {self.dataset(t).name for _, args, _ in _aggregate_reads(tree) for t in args if t}
+        for home in sorted(homes):
+            if missing := read - self._reachable(home):
+                many = (
+                    f"; {home} is the one side of {sorted(missing)}, and a condition on rows "
+                    "that reference what a metric counts is not supported in an expression"
+                    if any(home in self._reachable(d) for d in missing)
+                    else ""
+                )
+                raise PlanError(
+                    f"the condition {shown!r} on {name!r} in {item!r} reads "
+                    f"{', '.join(sorted(missing))}, which {home}, where {name} aggregates rows, "
+                    f"does not reach through many-to-one relationships{many}. Put the condition "
+                    "in a filter of the question, which applies to every part, or declare a "
+                    "metric of the model with it"
+                )
+        used.update(read)
+        condition = exp.Where(this=cond)
+        for agg in aggs:
+            wrapped: exp.Expression = agg
+            while isinstance(wrapped.parent, exp.WithinGroup | exp.IgnoreNulls | exp.RespectNulls):
+                wrapped = wrapped.parent
+            if isinstance(wrapped.parent, exp.Filter) and wrapped.parent.this is wrapped:
+                old = wrapped.parent.expression.this
+                wrapped.parent.set("expression", exp.Where(this=exp.and_(old, cond.copy())))
+                continue
+            new = exp.Filter(this=wrapped.copy(), expression=condition.copy())
+            if wrapped.parent is None:
+                new.meta.update(tree.meta)
+                tree = new
+            else:
+                wrapped.replace(new)
+        tree.meta["operand"] = name
+        tree.meta["expanded"] = True
         return tree
 
     def _operand(self, col: exp.Column, item: str, used: set[str]) -> exp.Expression:
@@ -1550,7 +1635,11 @@ class Planner:
         name = ".".join(part.name for part in col.parts)
         m = self._named_metric(col) if len(col.parts) <= 2 else None
         if m is not None and m.name.upper() in self._expressions:
-            m = None  # a question's name is no operand, not even its own
+            raise PlanError(
+                f"{name!r} in {item!r} is the name of an expression of this question (this "
+                "one's own too), and an expression names only metrics of the model: write "
+                "that expression out where the name stands"
+            )
         if m is None:
             if col.table and self._fields.get(col.table.upper(), {}).get(col.name.upper()):
                 fields = self._fields_named(name)
@@ -1566,6 +1655,7 @@ class Planner:
                 f"cannot hold; select {m.name} by its own name"
             )
         tree.meta["expanded"] = True  # rewritten already: _metric_tree reads its "unsure"
+        tree.meta["operand"] = name
         return tree
 
     def _plan(
@@ -1661,6 +1751,10 @@ class Planner:
             # HAVING may only see aggregates and GROUP BY expressions.
             for col in tree.find_all(exp.Column):
                 if col.find_ancestor(exp.AggFunc):
+                    continue
+                # The condition of an aggregate's FILTER is part of the aggregate: a
+                # metric with one may be filtered on.
+                if (outer := col.find_ancestor(exp.Filter)) and outer.this.find(exp.AggFunc):
                     continue
                 node: exp.Expression | None = col
                 while node is not None and node.sql() not in grouped:

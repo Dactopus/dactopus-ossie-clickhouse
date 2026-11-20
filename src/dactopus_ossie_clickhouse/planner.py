@@ -59,7 +59,9 @@ class PlanError(ValueError):
 # An item of a question's metrics is a metric name, or an expression over metric names
 # with the name of its column (docs/decisions/expressions-over-metrics.md).
 _OPERATORS = re.compile(r"[-+*/()]")
-_ITEM_WITH_NAME = re.compile(r"(.*\S)\s*\bAS\b\s*(.*?)\s*", re.IGNORECASE | re.DOTALL)
+# The name holds no parenthesis: an AS inside one (CAST(x AS INT) in a condition) is
+# no name.
+_ITEM_WITH_NAME = re.compile(r"(.*\S)\s*\bAS\b\s*([^()]*?)\s*", re.IGNORECASE | re.DOTALL)
 _COLUMN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 EXPRESSION_RULE = "an expression over metrics reads metric names, numbers, + - * / and parentheses"
 _EXPRESSION_NODES = (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Neg, exp.Paren)
@@ -1477,6 +1479,13 @@ class Planner:
             raise PlanError(
                 f"the name {name!r} in {item!r} is not an identifier: write {text} AS <name>, "
                 "the name of letters, digits and underscores, not starting with a digit"
+            )
+        if name.startswith("__"):
+            # The planner's own columns (__k0, __m0, __c0...) start so: a stitched
+            # question would read one of them for the name.
+            raise PlanError(
+                f"the name {name!r} in {item!r} starts with two underscores, which the "
+                f"planner's own columns do; choose another name: {text} AS <name>"
             )
         if name.upper() in self._metrics:
             raise PlanError(

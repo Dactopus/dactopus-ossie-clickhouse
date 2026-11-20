@@ -1620,6 +1620,17 @@ class Planner:
         used.update(read)
         condition = exp.Where(this=cond)
         for agg in aggs:
+            if (
+                isinstance(agg, exp.AnonymousAggFunc)
+                and agg.name.endswith("If")
+                and agg.expressions
+            ):
+                # ClickHouse's -If combinator (countIf, sumIf) takes the rows' condition as
+                # its last argument and refuses a FILTER over it ("Nested identical
+                # combinator 'If'"): the condition joins that argument with AND.
+                last = agg.expressions[-1]
+                last.replace(exp.and_(last.copy(), cond.copy()))
+                continue
             wrapped: exp.Expression = agg
             while isinstance(wrapped.parent, exp.WithinGroup | exp.IgnoreNulls | exp.RespectNulls):
                 wrapped = wrapped.parent

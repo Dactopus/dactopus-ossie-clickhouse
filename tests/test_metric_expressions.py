@@ -69,6 +69,7 @@ BASE = {
                 metric("revenue", "SUM(amount)"),
                 metric("n", "COUNT(*)"),
                 metric("avg_order", "SUM(amount) / NULLIF(COUNT(*), 0)"),
+                metric("big", "countIf(amount > 60)"),  # ClickHouse's -If combinator
             ],
         },
         {
@@ -613,6 +614,16 @@ def test_a_metric_that_has_a_filter_takes_one_filter_with_both_conditions(ex, pl
     assert total(ex, item) == pytest.approx(175 / 455)  # 100 and 75
     assert total(ex, item) == pytest.approx(total(ex, "twin_completed_big"))
     assert planner.sql(Query((item,))).count("FILTER") == 1
+
+
+def test_a_metric_of_an_if_combinator_takes_the_condition_in_its_own(ex, planner):
+    # ClickHouse refuses a FILTER over countIf (nested -If): the condition joins its
+    # argument. The completed orders over 60 are those of 100 and 75.
+    item = "orders.big FILTER (WHERE orders.status = 'completed') AS x"
+    assert total(ex, item) == 2
+    twin = "order_count FILTER (WHERE orders.status = 'completed' AND orders.amount > 60) AS y"
+    assert region(ex, item) == region(ex, twin)
+    assert "FILTER" not in planner.sql(Query((item,)))
 
 
 def test_a_metric_with_several_aggregates_takes_the_condition_in_each(ex):

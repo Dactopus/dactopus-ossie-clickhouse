@@ -324,6 +324,14 @@ def _window_function(agg: exp.AggFunc) -> bool:
     return isinstance(parent, exp.Window)
 
 
+def _if_condition(agg: exp.AggFunc) -> exp.Expression | None:
+    """The condition of ClickHouse's -If combinator (countIf(c), sumIf(x, c)): its last
+    argument, which says which rows the aggregate reads, as a FILTER's WHERE does."""
+    if isinstance(agg, exp.AnonymousAggFunc) and agg.name.endswith("If") and agg.expressions:
+        return agg.expressions[-1]
+    return None
+
+
 def _component_node(agg: exp.AggFunc) -> exp.Expression:
     """The aggregate with the wrappers that belong to it: FILTER (WHERE ...),
     RESPECT NULLS, IGNORE NULLS."""
@@ -343,10 +351,11 @@ def _blend(
     can give the same result, so the root row would count once for each: the subtree
     (index into ``owner``'s values), the expression to name and whether it is a condition.
 
-    A condition (a row filter, a FILTER) is safe when the part is one of its conjuncts:
-    only the copies that pass it remain, and a carried condition has one value that
-    passes. An aggregate's argument is safe when it holds one part and gives each value
-    of the part its own result, or results that cannot change the aggregate (_injective).
+    A condition (a row filter, a FILTER, the last argument of countIf) is safe when the
+    part is one of its conjuncts: only the copies that pass it remain, and a carried
+    condition has one value that passes. An aggregate's argument is safe when it holds one
+    part and gives each value of the part its own result, or results that cannot change
+    the aggregate (_injective).
     Anything else counts a root row once for each copy where Layer 2 counts it once
     (docs/decisions/key-stored-twice.md); #653 rejects such expressions
     anyway (E_CROSS_DATASET_FILTER, E_AMBIGUOUS_MEASURE_GRAIN)."""
@@ -369,6 +378,8 @@ def _blend(
                 return None  # MAX(x) FILTER (...): a copy repeats nothing it returns
         if agg is not None and _repeat_safe(agg):
             return None
+        if agg is not None and _if_condition(agg) is p:
+            agg = None  # countIf(c): c is a condition, as a FILTER's WHERE is
         if agg is None:
             conjunct = next((o for o, _ in reversed(steps) if not isinstance(o, exp.And)), None)
             return None if conjunct is None else (i, conjunct, True)
@@ -1620,15 +1631,10 @@ class Planner:
         used.update(read)
         condition = exp.Where(this=cond)
         for agg in aggs:
-            if (
-                isinstance(agg, exp.AnonymousAggFunc)
-                and agg.name.endswith("If")
-                and agg.expressions
-            ):
+            if (last := _if_condition(agg)) is not None:
                 # ClickHouse's -If combinator (countIf, sumIf) takes the rows' condition as
                 # its last argument and refuses a FILTER over it ("Nested identical
                 # combinator 'If'"): the condition joins that argument with AND.
-                last = agg.expressions[-1]
                 last.replace(exp.and_(last.copy(), cond.copy()))
                 continue
             wrapped: exp.Expression = agg

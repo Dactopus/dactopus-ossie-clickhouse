@@ -626,6 +626,15 @@ def test_a_metric_of_an_if_combinator_takes_the_condition_in_its_own(ex, planner
     assert "FILTER" not in planner.sql(Query((item,)))
 
 
+def test_the_condition_of_an_if_combinator_may_read_a_joined_dataset(ex):
+    # The condition joins countIf's own, which reads customers as a FILTER's would: the
+    # orders over 60 of retail customers are those of 100 and 200, both in EAST.
+    item = "orders.big FILTER (WHERE customers.segment = 'retail') AS x"
+    assert total(ex, item) == 2
+    twin = "order_count FILTER (WHERE customers.segment = 'retail' AND orders.amount > 60) AS y"
+    assert region(ex, item) == region(ex, twin) == {"EAST": 2, "WEST": 0, None: 0}
+
+
 def test_a_metric_with_several_aggregates_takes_the_condition_in_each(ex):
     # The mean of the completed orders, 255 / 4, over the mean of all, 455 / 5.
     item = "avg_per_order FILTER (WHERE orders.status = 'completed') / avg_per_order AS s"

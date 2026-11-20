@@ -143,8 +143,11 @@ Planning (`planner.py`; each rule and refusal has a file in
   over metric names with `+ - * /`. `Planner.plan` plans it on a copy of
   the planner that has the name as a metric of the model, so the planner
   that serves the next question never holds a question's name, and
-  `_metric_tree` inlines each operand as a filter's metric name is. Never
-  give the expression a planning rule of its own.
+  `_metric_tree` inlines each operand as a filter's metric name is. A
+  metric name may take `FILTER (WHERE ...)` (`QuestionSQL`, parsed only for
+  an expression of a question): the condition becomes the `FILTER` of each
+  aggregate of the metric, so it is a model's metric with that `FILTER`.
+  Never give the expression a planning rule of its own.
 
 ## Testing
 

@@ -222,6 +222,30 @@ division by zero shows NULL; so does a result with a NULL part, as in SQL.
 For a different value of a missing part, declare the metric in the model
 with `COALESCE`.
 
+### A condition on a part
+
+A question's filter applies to every part, so a share of a subset cannot be
+asked with one: `customers.customer_count / customers.customer_count` under
+`customers.number_of_orders > 1` is 1. The condition goes on the part, with
+`FILTER (WHERE ...)` directly after the metric name:
+
+```text
+-m "customers.customer_count FILTER (WHERE customers.number_of_orders > 1) / customers.customer_count AS repeat_share"
+-m "total_sales FILTER (WHERE date_dim.d_year = 1999) / total_sales FILTER (WHERE date_dim.d_year = 1998) AS growth"
+```
+
+The condition is what a filter of the question may say, over
+`dataset.field` and no metric, aggregate, window or subquery. The part is
+its value over the rows where the condition holds: each aggregate of the
+metric takes the condition as its `FILTER`, joined with `AND` to one it has.
+That is a model's metric with that `FILTER`, so the rules above apply. The
+datasets the condition reads must be reachable through many-to-one
+relationships from the datasets the part aggregates; a condition on rows
+that reference them is refused, and so is one on a dataset a part of another
+dataset does not read (a model's metric with such a `FILTER` is refused
+alike). A division of a tree by itself, `m / m`, is refused: put the
+condition on one part.
+
 The name is the result column, as written. It works in `order_by`, in
 filters and as the default order when it is the first metric. It may not
 be a metric of the model, in any case, nor another selected column.

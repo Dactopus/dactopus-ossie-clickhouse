@@ -29,6 +29,7 @@ from dactopus_ossie_clickhouse.mcp_server import build_server, instructions
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query
 from tests.conftest import server_url
 from tests.test_model import FIXTURE as TPCDS
+from tests.test_stitch import COLUMNS, ROWS
 
 
 def expr(text: str) -> dict:
@@ -148,27 +149,33 @@ BASE = {
     ],
 }
 
-SETUP = [
-    "DROP DATABASE IF EXISTS ossie_expr",
-    "CREATE DATABASE ossie_expr",
-    "CREATE TABLE ossie_expr.customers (id Int32, region String, segment String) "
-    "ENGINE = MergeTree ORDER BY id",
-    "INSERT INTO ossie_expr.customers VALUES (1, 'EAST', 'retail'), (2, 'EAST', 'retail'), "
-    "(3, 'WEST', 'wholesale'), (4, 'NORTH', 'retail')",
-    "CREATE TABLE ossie_expr.orders (id Int32, customer_id Int32, amount Decimal(10, 2), "
-    "status String, placed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY id",
-    # Order 105 is an orphan: customer 99 does not exist.
-    "INSERT INTO ossie_expr.orders VALUES (101, 1, 100.00, 'completed', '2026-01-10 09:00:00'), "
-    "(102, 1, 50.00, 'completed', '2026-02-15 10:00:00'), "
-    "(103, 2, 200.00, 'pending', '2026-02-20 11:00:00'), "
-    "(104, 3, 75.00, 'completed', '2026-03-05 12:00:00'), "
-    "(105, 99, 30.00, 'completed', '2026-03-10 13:00:00')",
-    "CREATE TABLE ossie_expr.returns (id Int32, customer_id Int32, amount Decimal(10, 2)) "
-    "ENGINE = MergeTree ORDER BY id",
-    # Customer 4 has a return and no orders; return 204 is an orphan.
-    "INSERT INTO ossie_expr.returns VALUES (201, 1, 10.00), (202, 3, 5.00), (203, 4, 15.00), "
-    "(204, 98, 7.00)",
-]
+# The rows are those of tests/test_stitch.py. This file adds one column, when each order
+# was placed, for a condition on a time field.
+PLACED_AT = {
+    101: "2026-01-10 09:00:00",
+    102: "2026-02-15 10:00:00",
+    103: "2026-02-20 11:00:00",
+    104: "2026-03-05 12:00:00",
+    105: "2026-03-10 13:00:00",
+}
+
+
+def setup() -> list[str]:
+    statements = ["DROP DATABASE IF EXISTS ossie_expr", "CREATE DATABASE ossie_expr"]
+    for table, (columns, _) in COLUMNS.items():
+        placed = ", placed_at DateTime('UTC')" if table == "orders" else ""
+        statements.append(
+            f"CREATE TABLE ossie_expr.{table} ({columns}{placed}) ENGINE = MergeTree ORDER BY id"
+        )
+        if table != "orders":
+            statements.append(f"INSERT INTO ossie_expr.{table} VALUES {ROWS[table]}")
+    times = ", ".join(f"({order}, '{at}')" for order, at in PLACED_AT.items())
+    statements.append(
+        "INSERT INTO ossie_expr.orders SELECT o.*, toDateTime(p.at, 'UTC') "
+        f"FROM values('{COLUMNS['orders'][0]}', {ROWS['orders']}) AS o "
+        f"JOIN values('id Int32, at String', {times}) AS p ON o.id = p.id"
+    )
+    return statements
 
 
 @pytest.fixture(scope="module")
@@ -190,7 +197,7 @@ def planner(model):
 
 @pytest.fixture(scope="module")
 def ex(clickhouse, model):
-    for stmt in SETUP:
+    for stmt in setup():
         clickhouse.command(stmt)
     yield Executor(clickhouse, model)
     clickhouse.command("DROP DATABASE ossie_expr")

@@ -26,8 +26,8 @@ whose questions ask for a share:
   sum of 42 rows given as 2,847.46 instead of 2,987.12, and a mean given as
   37.35 instead of 37.34.
 
-Acceptance on the stand of the first version, which divided one metric by
-another, showed what the evaluation set mostly asks. Of its share
+A check of the questions of that set on a deployment of its `commerce`
+model showed what they mostly ask. Of its share
 questions that no metric of the model answers, one divides two different
 metrics, four are shares of a subset (repeat customers, 69 of 228;
 products ever sold, 16 of 17; revenue from repeat customers; orders with a
@@ -99,7 +99,7 @@ Meaning:
   arithmetic does.
 - Division by zero shows NULL.
 
-A condition on a part, decision of 2026-11-20 (the second version):
+A condition on a part:
 
 - A metric name may be followed by `FILTER (WHERE <condition>)`, directly
   after the name and nowhere else: `customers.customer_count FILTER (WHERE

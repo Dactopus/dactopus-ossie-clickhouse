@@ -905,9 +905,9 @@ async def test_the_mcp_query_tool_returns_the_column_under_its_name(clickhouse, 
 
 
 # The text before the model's own instructions was 1731 characters for the TPC-DS example
-# when expressions came, 1746 with the condition on a part, and may not grow: Claude Code
+# when expressions came, 1748 with the condition on a part, and may not grow: Claude Code
 # cuts instructions at 4,096 and models use up to 2,300.
-INSTRUCTIONS_BEFORE_THE_MODEL = 1746
+INSTRUCTIONS_BEFORE_THE_MODEL = 1748
 
 
 def test_the_instructions_say_where_a_share_comes_from_and_stay_as_short():
@@ -917,6 +917,6 @@ def test_the_instructions_say_where_a_share_comes_from_and_stay_as_short():
     assert (
         "Every number you state must come from a query result; rounding is fine. For a share, "
         'ratio or difference, put an expression in metrics: "buyers FILTER (WHERE c.orders > '
-        '1)/buyers AS share".'
+        '1) / buyers AS share".'
     ) in text
     assert "such as the counts behind a rate" not in text

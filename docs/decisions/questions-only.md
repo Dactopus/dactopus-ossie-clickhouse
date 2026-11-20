@@ -27,28 +27,29 @@ On 2026-11-20, at apache/ossie `344259a`, the suite has 32 cases:
 
 | Cases | Count | Outcome |
 |-------|-------|---------|
-| `a01`-`a04`, `a06`, `a07`, `b01`, `b02`, `b04`, `b14`, `b15`, `b18`, `b20` | 13 | asked as a question, the result equals the expected one |
-| the rest | 19 | no question has the query's form |
+| `a01`-`a04`, `a06`, `a07`, `b01`, `b02`, `b04`, `b14`, `b15`, `b16`, `b18`, `b20` | 14 | asked as a question, the result equals the expected one |
+| the rest | 18 | no question has the query's form |
 
 `b04`, `b18` and `b20` ask for a metric of the one side (`dept_count`)
 grouped or filtered by the many side; see [A metric of the one side by the many side](one-side-by-many-side.md).
-`b14` and `b15` divide the payroll by `dept_count`, a ratio of measures of
-two datasets, which a question asks as an expression over metrics
-(`emp.sum_sal / dept.dept_count AS sal_per_dept`; see
+`b14`, `b15` and `b16` divide the payroll by `dept_count`, a ratio of
+measures of two datasets, which a question asks as an expression over
+metrics (`emp.sum_sal / dept.dept_count AS sal_per_dept`; see
 [Expressions over metrics in a question](expressions-over-metrics.md)). `b14` joins
 inner, so its departments are those with employees: the question
 filters on the employees, which keeps each department that has one. `b15`
-joins `LEFT` from `dept`, which is the question without a filter.
+joins `LEFT` from `dept`, which is the question without a filter. `b16`
+puts its filter in the `ON` clause, so `dept_count` counts every department
+and the other measures only the clerks: the question puts the condition on
+those parts, `emp.sum_sal FILTER (WHERE emp.job = 'CLERK')`.
 
-The 19 other queries use a form a question does not have: `COALESCE`
+The 18 other queries use a form a question does not have: `COALESCE`
 over a measure value (`a05`; an expression over metrics takes no
 function), grouping by an expression that is no field, `ROLLUP`, a CTE, a
 subquery, a dataset read twice, a join on a range or on columns that are
 no key, `RIGHT`, `FULL` and `CROSS JOIN`, a `LEFT JOIN` from the one side,
 which keeps a department without employees where a question keeps `emp`
-rows, and a filter in the `ON` clause (`b16`), which `dept_count` does not
-see and a question's row filter, applied to every metric, would. Each is
-named with its form in `NOT_ASKED`.
+rows. Each is named with its form in `NOT_ASKED`.
 
 The suite demands standard SQL semantics, which every generated query
 already sets: `SUM` over no rows is NULL

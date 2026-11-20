@@ -80,8 +80,8 @@ def instructions(model: OssieDocument) -> str:
         "one matching row, once; it cannot find rows without a match, and "
         "NOT inside it means a row with a non-matching one, so ask for absence through a "
         "field or metric of the model, such as a last activity date. Every number "
-        "you state must come from a query result: rounding and formatting are fine, but do "
-        "not derive, estimate or recall other numbers, such as the counts behind a rate. "
+        "you state must come from a query result; rounding is fine. For a share, ratio or "
+        'difference, put an expression in metrics: "100 * returns / sales AS return_pct". '
         f"Today and the current time are those of {time_zone(model)}, which may not be "
         "your user's: write today, yesterday, this week and any other period counted from "
         "now with CURRENT_DATE or CURRENT_TIMESTAMP, never with a date you know: d.day = "
@@ -214,7 +214,11 @@ def build_server(
         limit: int = 100,
     ) -> dict[str, Any]:
         """Run a semantic query. metrics and dimensions are names from the model
-        as list_model gives them (dimensions as dataset.field); filters are SQL-like conditions over
+        as list_model gives them (dimensions as dataset.field). A metric may also be an
+        expression over metric names with a name for its column, "100 * returns / sales
+        AS return_pct": operands are metric names and numbers, operators + - * / and
+        parentheses (nothing else), the value comes from the query, and the name works in
+        order_by and in filters, e.g. "return_pct > 10". filters are SQL-like conditions over
         dataset.field, e.g. "date_dim.d_year = 1998" (today and periods counted
         from it with CURRENT_DATE, e.g. "date_dim.d_date = CURRENT_DATE", never a
         date you know), or over a metric name, e.g. "total_sales > 1000000",

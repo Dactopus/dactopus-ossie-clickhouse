@@ -36,7 +36,15 @@ def _parser() -> argparse.ArgumentParser:
                         ("query", "run a semantic query and print the rows")):  # fmt: skip
         s = sub.add_parser(name, help=help_)
         s.add_argument("model", nargs="+", help="YAML or JSON Ossie files, read as one model")
-        s.add_argument("-m", "--metric", action="append", default=[], help="metric name")
+        s.add_argument(
+            "-m",
+            "--metric",
+            action="append",
+            default=[],
+            help="metric name, or an expression over metric names with a name for its column, "
+            '"100 * returns / sales AS return_pct" (operands: metric names and numbers; '
+            "operators: + - * / and parentheses; the name works in -o and -f)",
+        )
         s.add_argument("-d", "--dimension", action="append", default=[], help="dataset.field")
         s.add_argument(
             "-f",

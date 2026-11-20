@@ -12,9 +12,10 @@ names the nearest supported thing.
 
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import cache
 
 from sqlglot import exp
@@ -24,6 +25,7 @@ from dactopus_ossie_clickhouse._vendor.ossie import (
     OssieDataset,
     OssieDataType,
     OssieDocument,
+    OssieExpression,
     OssieField,
     OssieMetric,
     OssieRelationship,
@@ -52,6 +54,15 @@ from dactopus_ossie_clickhouse.translate import (
 
 class PlanError(ValueError):
     pass
+
+
+# An item of a question's metrics is a metric name, or an expression over metric names
+# with the name of its column (docs/decisions/expressions-over-metrics.md).
+_OPERATORS = re.compile(r"[-+*/()]")
+_ITEM_WITH_NAME = re.compile(r"(.*\S)\s*\bAS\b\s*(.*?)\s*", re.IGNORECASE | re.DOTALL)
+_COLUMN_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+EXPRESSION_RULE = "an expression over metrics reads metric names, numbers, + - * / and parentheses"
+_EXPRESSION_NODES = (exp.Add, exp.Sub, exp.Mul, exp.Div, exp.Neg, exp.Paren)
 
 
 class _BlendError(PlanError):
@@ -127,7 +138,9 @@ def _known_clickhouse_aggregate(name: str) -> bool:
 
 @dataclass(frozen=True)
 class Query:
-    metrics: tuple[str, ...] = ()  # a dataset's metric as "dataset.metric"
+    # A metric name (a dataset's as "dataset.metric"), or an expression over metric names
+    # with its column's name: "100 * returns / sales AS return_pct".
+    metrics: tuple[str, ...] = ()
     dimensions: tuple[str, ...] = ()  # "dataset.field"
     # Ossie expressions over dataset.field (WHERE) or over metric names and
     # aggregates (HAVING); window metrics cannot be filtered in one SELECT.
@@ -754,6 +767,9 @@ class Planner:
     _metrics: dict[str, OssieMetric] = field(init=False)  # a dataset's as "dataset.metric"
     _scopes: dict[str, OssieDataset] = field(init=False)  # a dataset's metric -> its dataset
     _zone: str = field(init=False)  # model.time_zone(): CURRENT_DATE and literals
+    # Only on the copy that plans one question: its expressions' names -> (item, text).
+    # The names are in _metrics too, so a filter and order_by name them as a metric.
+    _expressions: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         self._zone = time_zone(self.model)
@@ -788,11 +804,19 @@ class Planner:
         named ``dataset.metric``."""
         m = self._metrics.get(name.upper())
         if m is None:
-            if not (fields := self._fields_named(name)):
-                names = (x.name for x in self._metrics.values())
-                raise PlanError(f"unknown metric {name!r}{suggest(name, names)}")
-            raise PlanError(f"unknown metric {name!r}: {self._field_not_metric(name, fields)}")
+            raise self._unknown_metric(name)
         return m
+
+    def _unknown_metric(self, name: str) -> PlanError:
+        """The error for a name that is no metric of the model. A question's own
+        expressions are not offered: the name is no operand."""
+        if not (fields := self._fields_named(name)):
+            names = (x.name for x in self._model_metrics())
+            return PlanError(f"unknown metric {name!r}{suggest(name, names)}")
+        return PlanError(f"unknown metric {name!r}: {self._field_not_metric(name, fields)}")
+
+    def _model_metrics(self) -> list[OssieMetric]:
+        return [m for key, m in self._metrics.items() if key not in self._expressions]
 
     def _fields_named(self, name: str) -> list[str]:
         """``dataset.field`` of the field ``name`` names: dataset.field, or a bare name
@@ -835,7 +859,7 @@ class Planner:
         else:
             what = f"it names the field{'s' * (len(fields) > 1)} {', '.join(fields)}"
             suffix = f".{name.upper()}"
-            same = [x.name for x in self._metrics.values() if x.name.upper().endswith(suffix)]
+            same = [x.name for x in self._model_metrics() if x.name.upper().endswith(suffix)]
         listed = f"metrics over {it}: {', '.join(over)}" if over else f"no metric reads {it}"
         hint = f"; dataset metrics of that name: {', '.join(same)}" if same else ""
         return f"{what}, not a metric; {listed}{hint}"
@@ -1070,7 +1094,10 @@ class Planner:
         whichever dataset a question is answered over. A metric without aggregates
         that reads no column (the current time) is answered over any rows, or none."""
         scope = self._scopes.get(m.name.upper())
-        resolved = self.resolve(pick_expression(m.expression), used, scope=scope)
+        if m.name.upper() in self._expressions:  # a question's expression over metrics
+            resolved = self._expression_operands(m, used)
+        else:
+            resolved = self.resolve(pick_expression(m.expression), used, scope=scope)
         tree = rewrite_tree(resolved, self._zone)
         if problem := _nested_aggregate(tree):
             raise PlanError(f"metric {m.name!r} {problem}")
@@ -1407,7 +1434,139 @@ class Planner:
     # --- assembly -----------------------------------------------------------
 
     def plan(self, q: Query) -> exp.Select:
-        return self._plan(q)
+        named = [self._expression_item(item) for item in q.metrics]
+        if not any(named):
+            return self._plan(q)
+        # A copy plans the question, so this planner never holds a question's names. Each
+        # expression becomes a metric of the model there: everything downstream
+        # (components, stitching, order_by, filters) reads it as one.
+        planner = copy.copy(self)
+        planner._metrics = dict(self._metrics)
+        planner._expressions = dict(self._expressions)
+        names = []
+        for item, parsed in zip(q.metrics, named, strict=True):
+            if parsed is None:
+                names.append(item)
+                continue
+            name, text = parsed
+            planner._metrics[name.upper()] = OssieMetric(
+                name=name, expression=OssieExpression(sql=text)
+            )
+            planner._expressions[name.upper()] = (item, text)
+            names.append(name)
+        return planner._plan(replace(q, metrics=tuple(names)))
+
+    def _expression_item(self, item: str) -> tuple[str, str] | None:
+        """(name, text) of an item of a question's metrics that is an expression over
+        metrics with its name, ``text AS name``; None for a metric name, which is
+        an item that has no ``AS name`` and no operator or parenthesis. Refused: an
+        expression without a name, and a name that is no identifier or that a metric of
+        the model has."""
+        if item.upper() in self._metrics:
+            return None
+        found = _ITEM_WITH_NAME.fullmatch(item)
+        if found is None:
+            if not _OPERATORS.search(item):
+                return None  # a name no metric has: the error of an unknown metric
+            raise PlanError(
+                f"{item!r} is an expression, and a column computed in a question needs a "
+                f"name: write {item} AS <name>"
+            )
+        text, name = found.groups()
+        if not _COLUMN_NAME.fullmatch(name):
+            raise PlanError(
+                f"the name {name!r} in {item!r} is not an identifier: write {text} AS <name>, "
+                "the name of letters, digits and underscores, not starting with a digit"
+            )
+        if name.upper() in self._metrics:
+            raise PlanError(
+                f"the name {name!r} in {item!r} is a metric of the model; choose another "
+                f"name for the column: {text} AS <name>"
+            )
+        return name, text
+
+    def _expression_operands(self, m: OssieMetric, used: set[str]) -> exp.Expression:
+        """The tree of a question's expression, ``m``, with each metric it names inlined
+        as the planner resolves it when a question names it, so the value is that of a
+        model's metric with the same expression: a dataset's metric written
+        ``AGG(dataset.metric)``, a model's metric replaced by its own expression.
+        Refused: whatever is no operand, operator or number, a name that is no metric
+        of the model, and a metric with a window function."""
+        item, text = self._expressions[m.name.upper()]
+        try:
+            tree = self._parse(text)
+        except ValueError as e:
+            raise PlanError(f"{e}; {EXPRESSION_RULE}") from e
+        operands: list[tuple[exp.Column, exp.Expression]] = []
+
+        def visit(node: exp.Expression) -> None:
+            if isinstance(node, exp.Column):
+                operands.append((node, self._operand(node, item, used)))
+            elif agg_call(node):
+                arg = node.expressions[0] if len(node.expressions) == 1 else None
+                named = arg.sql() if isinstance(arg, exp.Column) else "dataset.metric"
+                raise PlanError(
+                    f"{node.sql()} in {item!r}: a question names a dataset's metric as "
+                    f"{named}, without AGG"
+                )
+            elif isinstance(node, exp.Window):
+                raise PlanError(
+                    f"{node.sql()} in {item!r} is a window, which an expression over metrics "
+                    f"cannot hold; {EXPRESSION_RULE}"
+                )
+            elif isinstance(node, exp.AggFunc | exp.Filter | exp.WithinGroup):
+                raise PlanError(
+                    f"{node.sql()} in {item!r} is an aggregate, and a question does not define "
+                    "one: name a metric of the model that computes it"
+                )
+            elif isinstance(node, _EXPRESSION_NODES) or (
+                isinstance(node, exp.Literal) and not node.is_string
+            ):
+                for child in node.iter_expressions():
+                    visit(child)
+            else:
+                raise PlanError(
+                    f"{node.sql()} in {item!r} is not allowed in an expression over metrics; "
+                    f"{EXPRESSION_RULE}"
+                )
+
+        visit(tree)
+        if not operands:
+            raise PlanError(
+                f"{item!r} names no metric, and a column computed in a question reads at least "
+                f"one; {EXPRESSION_RULE}"
+            )
+        for column, sub in operands:
+            if column is tree:
+                tree = sub
+            else:
+                column.replace(sub)
+        return tree
+
+    def _operand(self, col: exp.Column, item: str, used: set[str]) -> exp.Expression:
+        """The tree of the metric of the model a column of a question's expression names,
+        marked as expanded like a dataset's metric inside AGG: it is rewritten for
+        ClickHouse already."""
+        name = ".".join(part.name for part in col.parts)
+        m = self._named_metric(col) if len(col.parts) <= 2 else None
+        if m is not None and m.name.upper() in self._expressions:
+            m = None  # a question's name is no operand, not even its own
+        if m is None:
+            if col.table and self._fields.get(col.table.upper(), {}).get(col.name.upper()):
+                fields = self._fields_named(name)
+                raise PlanError(
+                    f"{name!r} in {item!r} is a field, and an expression reads metrics only; "
+                    f"{self._field_not_metric(name, fields)}"
+                )
+            raise self._unknown_metric(name)
+        tree = self._metric_tree(m, used)
+        if tree.find(exp.Window):
+            raise PlanError(
+                f"{name!r} in {item!r} is a window metric, which an expression over metrics "
+                f"cannot hold; select {m.name} by its own name"
+            )
+        tree.meta["expanded"] = True  # rewritten already: _metric_tree reads its "unsure"
+        return tree
 
     def _plan(
         self,

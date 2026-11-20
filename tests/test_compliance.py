@@ -93,6 +93,17 @@ CASES = {
         ),
         filters=("emp.deptno IS NOT NULL",),
     ),
+    # B16's filter is in the ON clause: dept_count counts every department, and the other
+    # measures only the clerks. A question's row filter would apply to dept_count too, so
+    # the condition goes on the parts that see it.
+    "b16_on_filter_keeps_left_rows": Query(
+        (
+            "dept.dept_count",
+            "emp.emp_count FILTER (WHERE emp.job = 'CLERK') AS emp_count",
+            "emp.sum_sal FILTER (WHERE emp.job = 'CLERK') AS sum_sal",
+            "emp.sum_sal FILTER (WHERE emp.job = 'CLERK') / dept.dept_count AS sal_per_dept",
+        )
+    ),
     "b15_left_join_changes_ratio": Query(
         (
             "dept.dept_count",
@@ -134,10 +145,6 @@ NOT_ASKED = {
     "b11_right_join_keeps_non_managers": "RIGHT JOIN",
     "b12_full_join_each_row_once": "FULL JOIN",
     "b13_cross_join_no_inflation": "CROSS JOIN",
-    # The filter is in the ON clause: dept_count counts every department, and the other
-    # measures only the clerks. A question's row filter applies to every metric, so it
-    # would count only the departments with a clerk (B14's semi-join).
-    "b16_on_filter_keeps_left_rows": "a filter that only the measures of one dataset see",
     # The question with these names keeps emp rows, so it has no row for a
     # department without employees.
     "b17_left_join_empty_group": "LEFT JOIN from the one side",

@@ -100,7 +100,9 @@ mean" hint reaches the agent.
 A metric in `metrics` may be an expression over metric names with a name
 for its column, `"100 * returns / sales AS return_pct"`: a share, a
 ratio or a difference comes from the query, so the agent never divides.
-The name works in `order_by` and in filters
+The name works in `order_by` and in filters; a filter of the question
+applies to every part, so a share of a subset puts the condition on the
+part, `"buyers FILTER (WHERE customers.orders > 1) / buyers AS share"`
 ([An expression over metrics](questions-across-datasets.md#an-expression-over-metrics)).
 
 `filters` are Ossie expressions: over `dataset.field` they go to `WHERE`

@@ -138,7 +138,9 @@ the decisions behind all of this, with their evidence, in
 
 Question options for `sql` and `query`: `-m metric` (repeatable;
 `dataset.metric` for one declared on a dataset; `-m "100 * returns / sales
-AS return_pct"` for an expression over metric names, computed by the query
+AS return_pct"` for an expression over metric names, computed by the query,
+with a condition on a part for a share of a subset, `-m "buyers FILTER (WHERE
+customers.orders > 1) / buyers AS share"`
 ([expressions over metrics](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/questions-across-datasets.md#an-expression-over-metrics))),
 `-d dataset.field` (repeatable), `-f condition` (repeatable; a metric
 name or an aggregate means `HAVING`), `-o "name [desc]"`, `-l limit`.

@@ -38,7 +38,8 @@ server once). The code is `Planner._dedup`, `_carry`, `_blend`,
 
 An expression that reads the subtree and the root together keeps Layer
 2's answer only when two copies of a key cannot give it one result: a
-condition joined with `AND`, an argument reached through `+`, `-` and, in
+condition joined with `AND` (the condition of ClickHouse's `-If` combinator,
+`countIf(c)`, included), an argument reached through `+`, `-` and, in
 `SUM`, `*` and `/`, a one-branch `CASE` or `IF` that acts as a `FILTER`,
 and factors of the subtree gathered into one operand
 (`SUM(lines.qty * products.price * (1 - products.discount))`). Aggregates

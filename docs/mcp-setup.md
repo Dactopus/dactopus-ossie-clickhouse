@@ -97,6 +97,12 @@ mean" hint reaches the agent.
 | `describe_object` | `name`: dataset, `dataset.field` or metric, case-insensitive | The object with `instructions` and `examples` from `ai_context`. A dataset lists `fields` (with `datatype`, `is_time`), `relationships` and its own `metrics`; a field or metric carries its `expression` and `datatype`. Unknown name: `error` with similar names. |
 | `query` | `metrics`, `dimensions` (`dataset.field`), `filters`, `order_by` (all lists of strings, default empty), `limit` (default 100) | `columns`, `rows`, `row_count`, `truncated` (true when `limit` cut off further rows), `sql` (with the question's `limit`). |
 
+A metric in `metrics` may be an expression over metric names with a name
+for its column, `"100 * returns / sales AS return_pct"`: a share, a
+ratio or a difference comes from the query, so the agent never divides.
+The name works in `order_by` and in filters
+([An expression over metrics](questions-across-datasets.md#an-expression-over-metrics)).
+
 `filters` are Ossie expressions: over `dataset.field` they go to `WHERE`
 (`date_dim.d_year = 1998`); over a metric name or an aggregate they go to
 `HAVING` (`total_sales > 1000000`) and may read, besides aggregates, only

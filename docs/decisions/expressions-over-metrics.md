@@ -68,8 +68,11 @@ one grammar.
 Syntax:
 
 - An item is `<expression> AS <name>`, with `AS` in any case and `<name>`
-  an unquoted identifier, `[A-Za-z_][A-Za-z0-9_]*`. Any other item is a
-  metric name, as before: its SQL and its errors do not change.
+  an unquoted identifier, `[A-Za-z_][A-Za-z0-9_]*`, that does not start
+  with two underscores: the planner's own columns (`__k0`, `__m0`, `__c0`)
+  do, and a stitched question would read one of them for the name. Any
+  other item is a metric name, as before: its SQL and its errors do not
+  change.
 - The item is a string in `Query.metrics`, in the MCP `query` tool and in
   `-m` of the CLI `sql` and `query`. `Query` stays a tuple of strings.
 
@@ -156,7 +159,7 @@ instead:
 
 | Item | Message says |
 |---|---|
-| An expression without `AS name`, or a name that is no identifier | The item with ` AS <name>` appended |
+| An expression without `AS name`, or a name that is no identifier or starts with `__` | The item with ` AS <name>` appended |
 | A name the model does not have | The message and suggestions of an unknown metric, the hint for a field included |
 | A field, `dataset.field` | An expression reads metrics only, and the metrics that read the field |
 | A written aggregate, `SUM(orders.total)` | Name a metric of the model; a question does not define one |

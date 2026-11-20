@@ -405,6 +405,17 @@ REFUSED = [
     ('total_revenue - 1 AS "r q"', ["is not an identifier", "total_revenue - 1 AS <name>"]),
     ("total_revenue - 1 AS r q", ["is not an identifier"]),
     ("total_revenue - 1 AS", ["is not an identifier"]),
+    # An AS inside parentheses is no name.
+    (
+        "total_revenue FILTER (WHERE CAST(orders.amount AS INT) > 1) / total_revenue",
+        ["needs a name", "/ total_revenue AS <name>"],
+    ),
+    # The planner's own columns start with two underscores: a stitched question would
+    # read one of them for the name.
+    (
+        "total_revenue * 2 AS __c0",
+        ["'__c0'", "starts with two underscores", "total_revenue * 2 AS <name>"],
+    ),
     # A name a metric of the model has, whatever the case.
     ("total_returns / 2 AS total_revenue", ["'total_revenue'", "is a metric of the model"]),
     ("total_returns / 2 AS TOTAL_REVENUE", ["'TOTAL_REVENUE'", "is a metric of the model"]),

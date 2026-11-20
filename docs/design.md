@@ -97,6 +97,10 @@ release history is in
   distinct keys.
 - [A metric that reads no dataset](decisions/metric-without-dataset.md):
   answered without `FROM`.
+- [Expressions over metrics in a question](decisions/expressions-over-metrics.md):
+  `100 * returns / sales AS return_pct` is computed by the query, with
+  the value of a model's metric of that expression, so an agent never
+  divides.
 - [Answers beyond Layer 3](decisions/beyond-layer-3.md): the questions
   apache/ossie#653 refuses that the executor answers, each with one
   meaning.

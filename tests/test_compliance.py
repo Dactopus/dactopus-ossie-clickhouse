@@ -80,6 +80,27 @@ CASES = {
     "b20_having_on_one_side_measure": Query(
         ("dept.dept_count",), ("emp.job",), ("dept.dept_count > 1",), ("emp.job",)
     ),
+    # A ratio of measures of two datasets is an expression over metrics in the question
+    # (docs/decisions/expressions-over-metrics.md). B14 joins inner: the departments with
+    # employees, which a filter on the employees asks for as a semi-join of dept_count.
+    # B15 joins LEFT from dept: every department.
+    "b14_ratio_across_relations": Query(
+        (
+            "dept.dept_count",
+            "emp.emp_count",
+            "emp.sum_sal",
+            "emp.sum_sal / dept.dept_count AS sal_per_dept",
+        ),
+        filters=("emp.deptno IS NOT NULL",),
+    ),
+    "b15_left_join_changes_ratio": Query(
+        (
+            "dept.dept_count",
+            "emp.emp_count",
+            "emp.sum_sal",
+            "emp.sum_sal / dept.dept_count AS sal_per_dept",
+        )
+    ),
 }
 
 # Questions this executor refuses, with why in a comment: none today. A refusal
@@ -89,12 +110,15 @@ REFUSED: dict[str, Query] = {}
 # Cases a question cannot ask, each with the form of its query that a question
 # does not have: metrics, dimensions and filters by name, joined along the
 # model's relationships from the metric's dataset.
-_EXPRESSION = "an expression over measures in the SELECT list"
+_COALESCE = (
+    "a function over measure values, COALESCE: an expression over metrics takes "
+    "+ - * / and no function (docs/decisions/expressions-over-metrics.md)"
+)
 _TWICE = "one dataset read twice, as an employee and as a manager"
 _SUBQUERY = "a join to a subquery"
 _RANGE = "a join on a range, with no relationship in the model"
 NOT_ASKED = {
-    "a05_scalar_ops_on_measure_values": _EXPRESSION,
+    "a05_scalar_ops_on_measure_values": _COALESCE,
     "a08_group_by_all_skips_measures": "grouping by an expression that is not a field",
     "a09_rollup_not_average_of_averages": "ROLLUP",
     "a10_cte_passes_measures_through": "a CTE that renames measures",
@@ -110,9 +134,10 @@ NOT_ASKED = {
     "b11_right_join_keeps_non_managers": "RIGHT JOIN",
     "b12_full_join_each_row_once": "FULL JOIN",
     "b13_cross_join_no_inflation": "CROSS JOIN",
-    "b14_ratio_across_relations": _EXPRESSION,
-    "b15_left_join_changes_ratio": _EXPRESSION,
-    "b16_on_filter_keeps_left_rows": _EXPRESSION,
+    # The filter is in the ON clause: dept_count counts every department, and the other
+    # measures only the clerks. A question's row filter applies to every metric, so it
+    # would count only the departments with a clerk (B14's semi-join).
+    "b16_on_filter_keeps_left_rows": "a filter that only the measures of one dataset see",
     # The question with these names keeps emp rows, so it has no row for a
     # department without employees.
     "b17_left_join_empty_group": "LEFT JOIN from the one side",

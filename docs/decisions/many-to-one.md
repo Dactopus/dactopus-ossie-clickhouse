@@ -9,6 +9,8 @@ of several facts are stitched
 ([Stitch metrics of several facts](stitching.md)). A metric of the one
 side grouped by a dimension of the many side counts each of its rows
 once per group, over a spine of distinct keys ([A metric of the one side by the many side](one-side-by-many-side.md)).
+If the spec gains a cardinality attribute, the declaration replaces this
+inference.
 
 The spec calls `to_columns` "Primary/unique key columns"; covering, a
 superset of a key, is how the reference validator reads it

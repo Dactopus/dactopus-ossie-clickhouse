@@ -18,7 +18,7 @@ from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.access import Hidden, Policy, restrict
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
-from dactopus_ossie_clickhouse.translate import AGG_RULE, parse, untranslatable
+from dactopus_ossie_clickhouse.translate import AGG_RULE, AGG_SOURCE_RULE, parse, untranslatable
 from tests.conftest import FakeClickHouse
 
 
@@ -285,6 +285,28 @@ def test_agg_is_refused_in_a_field_and_a_dataset_metric(tmp_path, where, dialect
         "orders.x": f"AGG(orders.revenue) in {where} is not allowed; {AGG_RULE}: "
         "'AGG(orders.revenue)'"
     }
+
+
+@pytest.mark.parametrize("call", ["AGG(source.total_revenue)", "agg(SOURCE.total_revenue)"])
+def test_agg_of_a_source_column_in_a_dataset_metric_names_the_measures(tmp_path, call):
+    # Spec, "Metric Scoping" rules 7 and 9 (apache/ossie#726): allowed over a measure
+    # relation, which a ClickHouse table never is; refused, never run as SUM.
+    text = f"{call} / COUNT(DISTINCT id)"
+
+    def mutate(data):
+        data["datasets"][0]["metrics"].append(metric("per_order", text))
+        data["datasets"][0]["fields"].append(field("f", call))
+
+    model = build(tmp_path, mutate)
+    fields, metrics = untranslatable(model)
+    written = parse(call).sql()
+    assert metrics == {
+        "orders.per_order": f"{written} in a metric of a dataset is not allowed; "
+        f"{AGG_SOURCE_RULE}: {text!r}"
+    }
+    # in a field the spec allows no AGG at all
+    assert fields == {"orders.f": f"{written} in a field is not allowed; {AGG_RULE}: {call!r}"}
+    assert refusal(model, "orders.per_order") == metrics["orders.per_order"]
 
 
 def test_agg_in_an_ansi_sql_model_metric_is_read_as_in_sql(tmp_path):

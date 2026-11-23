@@ -406,6 +406,44 @@ def agg_refusal(tree: exp.Expression, where: str) -> str | None:
     return f"{call.sql()} in {where} is not allowed; {AGG_RULE}"
 
 
+# Spec, spec.md "Fields" and "Expression Object": a field's expression is scalar, with
+# no aggregation; a window function gives one value for each row and is allowed
+# (apache/ossie#792, validate_field_aggregates). Sent as written, an aggregate in a
+# field lands in GROUP BY, which ClickHouse refuses, or in a filter, which the planner
+# reads as a condition on groups (HAVING) and answers with another number
+# (docs/decisions/field-aggregates.md).
+FIELD_AGGREGATE_RULE = (
+    "a field's expression is scalar, without an aggregate outside a window (spec, "
+    '"Fields"); add OVER to make the aggregate a window function, or write it as a metric'
+)
+
+_WINDOWED_CALL = exp.Filter | exp.WithinGroup | exp.IgnoreNulls | exp.RespectNulls
+
+
+def unwindowed_aggregate(
+    tree: exp.Expression, aggregate: Callable[[str], bool] | None = None
+) -> exp.Expression | None:
+    """The first aggregate in ``tree`` that is not the function of a window, or None.
+
+    An aggregate in a window's PARTITION BY or ORDER BY, or in the argument of the
+    windowed call (SUM(SUM(x)) OVER ()), is one. APPROX_PERCENTILE is a plain call to
+    SQLGlot and counts by name; a function outside the spec counts when ``aggregate``
+    says its name is one (the planner types those as aggregates itself). AGG is
+    agg_refusal's."""
+    for node in tree.find_all(exp.AggFunc, exp.Anonymous, bfs=False):
+        if isinstance(node, exp.Anonymous) and not (
+            node.name.upper() == "APPROX_PERCENTILE"
+            or (aggregate is not None and outside_spec(node) and aggregate(node.name))
+        ):
+            continue
+        inner = node
+        while isinstance(inner.parent, _WINDOWED_CALL) and inner.arg_key == "this":
+            inner = inner.parent
+        if not (isinstance(inner.parent, exp.Window) and inner.arg_key == "this"):
+            return node
+    return None
+
+
 def _shape_problem(node: exp.Expression) -> str | None:
     """Spec shapes an argument count cannot express."""
     # SQLGlot reads ClickHouse's quantile(0.5)(x) as quantile(0.5) AS (x): SQL that
@@ -1112,7 +1150,8 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
 
     The executor hides them: an expression that does not parse cannot be shown
     to read only columns the user may see. A call of AGG is refused outside a model's
-    metric; the planner checks what one names."""
+    metric; the planner checks what one names. A field that aggregates outside a window
+    is refused too; the executor adds those whose aggregate only the server knows."""
 
     def problem(expression: OssieExpression, where: str | None) -> str | None:
         try:
@@ -1120,6 +1159,8 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
             tree = parse(text)
             if where and (refusal := agg_refusal(tree, where)):
                 return f"{refusal}: {text!r}"
+            if where == "a field" and unwindowed_aggregate(tree):
+                return f"{FIELD_AGGREGATE_RULE}: {text!r}"
             to_clickhouse(tree)
         except ValueError as e:
             return str(e)

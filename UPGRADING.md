@@ -12,8 +12,14 @@ release changed:
 new version hides, with the reason; run it on each model after an
 upgrade.
 
-## Unreleased
+## 0.19.0
 
+- Write a field that aggregates outside a window as a metric: a field
+  such as `total_amount: SUM(amount)` is hidden, with every metric and
+  question over it, and `validate` names it. A filter on it was a
+  condition on each group: on orders DE 10, DE 30 and FR 20, `revenue`
+  by country with `orders.total_amount > 15` gave DE 40 and FR 20, the
+  countries whose total is above 15, and is now refused.
 - Write a percentile of a date with `PERCENTILE_DISC`: `APPROX_PERCENTILE`
   over a `Date`, `DateTime` or `String` now fails the query, as the
   other percentiles do; over a `Decimal` it answers, where it failed.

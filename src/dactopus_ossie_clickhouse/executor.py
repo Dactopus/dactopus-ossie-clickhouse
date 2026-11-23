@@ -33,12 +33,14 @@ from dactopus_ossie_clickhouse.planner import (
     unanswerable_metrics,
 )
 from dactopus_ossie_clickhouse.translate import (
+    FIELD_AGGREGATE_RULE,
     parse,
     passthrough_functions,
     pick_expression,
     source_columns,
     to_clickhouse,
     untranslatable,
+    unwindowed_aggregate,
 )
 
 DEFAULT_URL = "http://127.0.0.1:8123"
@@ -299,17 +301,26 @@ class Executor:
 
     def _hide_unknown_functions(self) -> None:
         """A field or metric calling a function this server does not have is
-        hidden like one that does not translate, and reported the same way.
+        hidden like one that does not translate, and reported the same way. So is a
+        field calling, outside a window, a function the server says aggregates.
 
         Functions outside the spec reach ClickHouse as written (translate.py),
         so only the server can say whether they exist. Without system.functions
         nothing is checked."""
         if self.functions is None:
             return
+        aggregate = partial(self.functions.has, aggregate=True)
         for ds in self.full_model.datasets:
             for f, tree in list(self._parsed_fields(ds)):
                 if problem := self.functions.problem(tree):
                     self.untranslatable_fields[f"{ds.name}.{f.name}"] = problem
+                elif unwindowed_aggregate(tree, aggregate):
+                    # An aggregate outside the spec (countIf), which only the server
+                    # names; untranslatable() has refused the spec's.
+                    text = pick_expression(f.expression)
+                    self.untranslatable_fields[f"{ds.name}.{f.name}"] = (
+                        f"{FIELD_AGGREGATE_RULE}: {text!r}"
+                    )
         for name, m, _ in all_metrics(self.full_model):
             if name not in self.untranslatable_metrics:
                 if problem := self.functions.problem(parse(pick_expression(m.expression))):

@@ -718,3 +718,49 @@ def test_window_desc_ranks_a_null_key_first_and_results_keep_nulls_last(tpcds):
     q = Query(metrics=("total_sales",), dimensions=("date_dim.d_year",), order_by=("d_year desc",))
     years = [r[0] for r in ex.execute(q).rows]
     assert years[-1] is None and years[0] == max(y for y in years if y)
+
+
+def test_a_field_that_aggregates_is_hidden_and_reported(ex, tmp_path, capsys):
+    """A field's expression is scalar (spec, "Fields"; apache/ossie#792): a filter on
+    SUM(amount) was a condition on groups, and gave another number
+    (docs/decisions/field-aggregates.md). A window in a field is the spec's."""
+    fields = {
+        "total": "SUM(amount)",
+        "big": "sumIf(amount, amount > 15)",  # an aggregate only the server names
+        "share": "amount / SUM(amount) OVER ()",
+    }
+    text = FIXTURE.read_text().replace(
+        "      - name: country_code\n",
+        "".join(
+            f"      - name: {name}\n        expression: {{dialects: [{{dialect: ANSI_SQL, "
+            f'expression: "{expr}"}}]}}\n'
+            for name, expr in fields.items()
+        )
+        + "      - name: country_code\n",
+        1,
+    )
+    p = tmp_path / "field_aggregates.yaml"
+    p.write_text(text)
+    other = Executor(ex.client, load_model(p))
+    assert other.execute(Query(("revenue",))).rows == [(65.0,)]
+    for name in ("total", "big"):
+        with pytest.raises(PlanError, match=f"unknown field 'orders.{name}'"):
+            other.planner.sql(
+                Query(("revenue",), ("orders.country_code",), (f"orders.{name} > 15",))
+            )
+    with pytest.raises(PlanError, match="field orders.share is a window function"):
+        other.planner.sql(Query(("revenue",), ("orders.share",)))
+    # without a server only the spec's aggregate is known; the window stays valid
+    for args, hidden in (
+        (["validate", str(p)], ["total"]),
+        (["validate", str(p), "--url", server_url()], ["total", "big"]),
+    ):
+        assert main(args) == 1
+        err = capsys.readouterr().err
+        for name in hidden:
+            assert (
+                f"field orders.{name}: a field's expression is scalar, without an aggregate "
+                f'outside a window (spec, "Fields"); add OVER to make the aggregate a window '
+                f"function, or write it as a metric: {fields[name]!r}"
+            ) in err
+        assert "orders.share" not in err and ("orders.big" in err) == ("big" in hidden)

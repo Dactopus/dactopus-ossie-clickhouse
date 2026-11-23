@@ -42,6 +42,7 @@ from dactopus_ossie_clickhouse.model import (
 )
 from dactopus_ossie_clickhouse.translate import (
     AGG_RULE,
+    FIELD_AGGREGATE_RULE,
     agg_call,
     agg_refusal,
     outside_spec,
@@ -49,6 +50,7 @@ from dactopus_ossie_clickhouse.translate import (
     pick_expression,
     rewrite_tree,
     untranslatable,
+    unwindowed_aggregate,
 )
 
 
@@ -1333,9 +1335,22 @@ class Planner:
 
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
-        tree = self._parse(pick_expression(f.expression))
+        text = pick_expression(f.expression)
+        tree = self._parse(text)
         if refusal := agg_refusal(tree, "a field"):
             raise PlanError(f"field {ds.name}.{f.name}: {refusal}")
+        # _parse has typed the server's aggregates, so this covers countIf too; the
+        # executor hides such a field before a question reaches it.
+        if unwindowed_aggregate(tree):
+            raise PlanError(f"field {ds.name}.{f.name}: {FIELD_AGGREGATE_RULE}: {text!r}")
+        # The spec allows a window in a field, a value for each row of the dataset. One
+        # SELECT computes a window after GROUP BY and WHERE, so ClickHouse refuses it in
+        # either, and inside an aggregate (docs/decisions/field-aggregates.md).
+        if tree.find(exp.Window):
+            raise PlanError(
+                f"field {ds.name}.{f.name} is a window function, which this version cannot "
+                f"group, filter or aggregate by: {text!r}"
+            )
 
         def qualify(node: exp.Expression) -> exp.Expression:
             if isinstance(node, exp.Column) and not node.table:

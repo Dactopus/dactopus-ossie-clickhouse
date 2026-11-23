@@ -33,6 +33,10 @@ release history is in
 - [Source columns in a dataset's metric](decisions/source-columns.md):
   a dataset's metric may read its source's columns as `source.column`,
   checked and hidden like a field's column.
+- [Aggregates and windows in a field](decisions/field-aggregates.md): a
+  field that aggregates outside a window is hidden and reported by
+  `validate`; a question cannot group, filter or aggregate by a window
+  field yet.
 
 ## Translator
 

@@ -337,7 +337,9 @@ def _round_digits(node: exp.Round) -> int | None:
 # it as an anonymous function, which would reach ClickHouse: parse() checks the shape,
 # the planner expands the call into the dataset's metric and refuses it anywhere else,
 # and untranslatable() refuses it in a field or a dataset's metric
-# (docs/decisions/agg-dataset-metric.md).
+# (docs/decisions/agg-dataset-metric.md). AGG(source.x) in a dataset's metric, which the
+# spec allows over a measure relation (apache/ossie#726), has a reason of its own,
+# AGG_SOURCE_RULE.
 AGG_RULE = (
     "this executor allows AGG only in a model's metric, as AGG(dataset.metric): a single "
     "reference to a metric of a dataset, without FILTER, OVER or another modifier"
@@ -377,10 +379,31 @@ def _agg_shape_problem(node: exp.Anonymous) -> str | None:
     return None
 
 
+# Spec, spec.md "Metric Scoping" rules 7 and 9 (apache/ossie#726): a dataset's metric
+# may call AGG(source.measure) when its source is a measure relation; a consumer must
+# refuse AGG of a column that is no measure of the source, "including when the source
+# has no measures", and must not run it as a plain aggregate. A ClickHouse table
+# declares no measures (docs/decisions/agg-dataset-metric.md).
+AGG_SOURCE_RULE = (
+    'AGG(source.measure) needs a source that is a measure relation (spec, "Metric '
+    'Scoping" rules 7 and 9), and a ClickHouse table has no measure columns; aggregate '
+    "the column itself, as SUM(source.column), if that is what it holds"
+)
+
+
 def agg_refusal(tree: exp.Expression, where: str) -> str | None:
     """Why ``tree``, an expression in ``where``, cannot call AGG; None without a call."""
     calls = agg_calls(tree)
-    return f"{calls[0].sql()} in {where} is not allowed; {AGG_RULE}" if calls else None
+    if not calls:
+        return None
+    call, arg = calls[0], calls[0].expressions[0] if calls[0].expressions else None
+    if (
+        where == "a metric of a dataset"
+        and isinstance(arg, exp.Column)
+        and arg.table.upper() == SOURCE_QUALIFIER
+    ):
+        return f"{call.sql()} in {where} is not allowed; {AGG_SOURCE_RULE}"
+    return f"{call.sql()} in {where} is not allowed; {AGG_RULE}"
 
 
 def _shape_problem(node: exp.Expression) -> str | None:

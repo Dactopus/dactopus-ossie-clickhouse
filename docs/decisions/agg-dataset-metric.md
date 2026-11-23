@@ -25,7 +25,9 @@ call allowed, and this executor refused every call.
   same reason it refuses `IGNORE NULLS`, `RESPECT NULLS` and `WITHIN GROUP`
   on the call, which would land on the dataset metric's whole expression.
 - `untranslatable()` refuses a call in a field or a dataset's metric, so
-  `validate` reports it and the executor hides that field or metric.
+  `validate` reports it and the executor hides that field or metric. In a
+  dataset's metric, `AGG(source.x)` has a reason of its own (see
+  [Measures of a source](#measures-of-a-source)).
 - `Planner._agg` expands `AGG(D.m)` in a model's metric into `D.m` as the
   planner resolves it when a question names `D.m`, and refuses a call in a
   filter, naming `D.m` as what a filter writes. An unknown dataset, a field
@@ -68,9 +70,16 @@ one rule keeps a metric valid when its author moves it between `sql` and
 `ANSI_SQL`. A ClickHouse user-defined function named `agg` cannot be
 called from a model.
 
-## Next
+## Measures of a source
 
-apache/ossie#726 (open on 2026-11-16) would let a dataset's metric call
-`AGG(source.measure)` for a source that declares measures. A ClickHouse
-table declares none, so the refusal in a dataset's metric says what this
-executor allows rather than what the spec reserves.
+apache/ossie#726 (`1b1ebb6`; `spec.md`, "Metric Scoping" rules 7 and 9)
+lets a dataset's metric call `AGG(source.measure)` when the dataset's
+`source` is a measure relation, a source whose columns are measures. The
+document does not declare which columns those are, so a validator checks
+only the shape of the call; a consumer that builds SQL against the source
+"MUST reject" a call on a column that is no measure of the source,
+"including when the `source` has no measures", and must not run it as a
+plain aggregate. A ClickHouse table declares no measures, so the call is
+refused, with the reason that the source has no measure columns rather
+than that the spec reserves `AGG`. Any other call of `AGG` in a dataset's
+metric keeps the general reason.

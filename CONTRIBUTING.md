@@ -78,12 +78,13 @@ at `OSSIE_REPO` and skip without one: the canary that keeps
 `tests/fixtures/tpcds.yaml` equal to `examples/tpcds_semantic_model.yaml`;
 `tests/test_compliance.py`, which runs the query compliance cases of
 `compliance/query` on the server (the SCOTT data goes into a database
-`scott`, dropped afterwards); and `tests/test_expression_fixtures.py`,
-which parses the expressions of `compliance/expressions`. The weekly
-workflow runs them on Ossie's `main`.
+`scott`, dropped afterwards); `tests/test_expression_fixtures.py`,
+which parses the expressions of `compliance/expressions`; and
+`tests/test_portability.py`, which reads the models of
+`compliance/portability`. The weekly workflow runs them on Ossie's `main`.
 
 ```bash
-OSSIE_REPO=../ossie uv run pytest tests/test_compliance.py tests/test_expression_fixtures.py tests/test_canaries.py
+OSSIE_REPO=../ossie uv run pytest tests/test_compliance.py tests/test_expression_fixtures.py tests/test_portability.py tests/test_canaries.py
 ```
 
 ```bash

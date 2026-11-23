@@ -178,6 +178,7 @@ def cases() -> list[str]:
 
 def call(case: str) -> re.Match:
     """The one query of a case's script, with its expansion."""
+    cases()  # skips on a checkout without the scripts
     calls = list(CALL.finditer((suite() / f"{case}.ost").read_text()))
     assert len(calls) == 1, f"{case}.ost has {len(calls)} queries; a question asks one"
     return calls[0]

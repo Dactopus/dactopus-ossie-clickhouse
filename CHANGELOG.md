@@ -2,6 +2,27 @@
 
 The format follows [Common Changelog](https://common-changelog.org); versions follow [Semantic Versioning](https://semver.org), and while the major version is 0, a minor release may change the Python API. What to change and which answers move when you upgrade: [UPGRADING.md](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/UPGRADING.md). Why each change was made: [docs/decisions/](https://github.com/Dactopus/dactopus-ossie-clickhouse/tree/main/docs/decisions).
 
+## [0.19.0] - 2026-11-23
+
+_A field that aggregates is hidden, and `APPROX_PERCENTILE` of a date fails ([Upgrading](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/UPGRADING.md#0190))._
+
+### Changed
+
+- **Breaking:** Hide a field that aggregates outside a window, as the spec's fields are scalar; a filter on it was a condition on each group, so answers change ([#107](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/107), [apache/ossie#792](https://github.com/apache/ossie/pull/792), [decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/field-aggregates.md))
+- Require `sqlglot>=30.33` ([#107](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/107))
+- Say that a ClickHouse table has no measures when a dataset's metric calls `AGG(source.column)`, which the spec now allows over a measure relation ([#107](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/107), [apache/ossie#726](https://github.com/apache/ossie/pull/726), [decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/agg-dataset-metric.md#measures-of-a-source))
+- Refuse a question by a field with a window function with a message that names it; ClickHouse refused it ([#107](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/107), [decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/field-aggregates.md#windows))
+- Refuse a question's expression named with two leading underscores, which the planner uses for its own columns ([#105](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/105))
+
+### Added
+
+- Compute an expression over metrics in a question, `100 * returns / sales AS return_pct`, with a condition on each part, `customers FILTER (WHERE ...)`; the MCP instructions tell agents to ask for a share, ratio or difference this way instead of computing it ([#105](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/105), [decision](https://github.com/Dactopus/dactopus-ossie-clickhouse/blob/main/docs/decisions/expressions-over-metrics.md))
+
+### Fixed
+
+- Make the argument of `APPROX_PERCENTILE` a `Float64`, so it answers over a `Decimal` and fails over a date, as the other percentiles do ([#105](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/105))
+- Answer a filter on a metric whose aggregate has a `FILTER` on a field that is not a dimension of the question; it was refused ([#105](https://github.com/Dactopus/dactopus-ossie-clickhouse/pull/105))
+
 ## [0.18.0] - 2026-11-17
 
 ### Changed
@@ -429,6 +450,7 @@ _Rewritten functions take only the spec's signature ([Upgrading](https://github.
 
 _First release: Ossie schema `0.2.0.dev0`, tested on ClickHouse 26.x with the TPC-DS reference model._
 
+[0.19.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.19.0
 [0.18.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.18.0
 [0.17.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.17.0
 [0.16.0]: https://github.com/Dactopus/dactopus-ossie-clickhouse/releases/tag/v0.16.0

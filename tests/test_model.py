@@ -156,8 +156,10 @@ def test_empty_key(tmp_path, tpcds):
     tpcds["datasets"][0]["primary_key"] = []
     tpcds["datasets"][1]["unique_keys"] = [[]]
     ps = problems_of(tmp_path, tpcds)
-    assert any(p.startswith("datasets.0.primary_key: List should have at least 1") for p in ps)
-    assert any(p.startswith("datasets.1.unique_keys.0: List should have at least 1") for p in ps)
+    # Pydantic's wording depends on the validators on the field: "List should have"
+    # or "Value should have" (apache/ossie main, with a check for repeated columns).
+    for path in ("datasets.0.primary_key: ", "datasets.1.unique_keys.0: "):
+        assert any(p.startswith(path) and "should have at least 1 item" in p for p in ps), ps
 
 
 def test_missing_required_field(tmp_path, tpcds):

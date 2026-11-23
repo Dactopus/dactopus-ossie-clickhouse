@@ -1,17 +1,20 @@
 """The query compliance cases of apache/ossie (``compliance/query``), answered
 on ClickHouse.
 
-Each case is a Relational Query Interface query (``query.ossie.sql``, with
-``AGG()``) and its expected result as standard SQL over literals
-(``expected.sql``). This executor compiles questions of the Semantic Query
+Each case is a script for Ossie's ``ost`` test runner (``<case>.ost``,
+apache/ossie#769): a Relational Query Interface query with ``AGG()``, its
+expansion into a DuckDB query over the source tables, and the table that
+expansion returns. This executor compiles questions of the Semantic Query
 Interface straight to ClickHouse SQL and does not read ``AGG()`` SQL
-(docs/decisions/questions-only.md), so each case is written here
-as the question it asks. A case whose query has a form no question has is
-listed with that form (``NOT_ASKED``), a question the planner refuses is checked
-to be refused (``REFUSED``), and a case the checkout has and this file does not
-fails until it is added. The data and the model are the suite's own: ``scott.sql``
-loaded through DuckDB, the reference engine, and ``scott_model.ossie.yaml``
-as it is. Results are compared by the suite's README ("Comparing results").
+(docs/decisions/questions-only.md), so each case is written here as the
+question it asks, and its expected rows are the expansion run on DuckDB,
+which keeps whether each value is exact or approximate. A case whose query
+has a form no question has is listed with that form (``NOT_ASKED``), a
+question the planner refuses is checked to be refused (``REFUSED``), and a
+case the checkout has and this file does not fails until it is added. The
+data and the model are the suite's own: ``scott.sql`` loaded through DuckDB,
+the reference engine, and ``scott_model.ossie.yaml`` as it is. Results are
+compared by the suite's README ("Comparing results").
 
 Needs ``OSSIE_REPO``, a checkout of apache/ossie, and a ClickHouse server.
 """
@@ -22,7 +25,7 @@ import math
 import os
 import re
 from collections import Counter
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 import pytest
@@ -36,7 +39,7 @@ pytestmark = pytest.mark.skipif(
     "OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie"
 )
 
-# Case directory -> the question its query.ossie.sql asks.
+# Case script -> the question its query asks.
 CASES = {
     "a01_grand_total": Query(("emp.sum_sal", "emp.emp_count")),
     "a02_measure_per_group": Query(
@@ -155,8 +158,29 @@ NOT_ASKED = {
 TYPES = {"INTEGER": "Int32", "VARCHAR": "String", "DATE": "Date32"}
 
 
+# A call of executeExpand in a script: the query, then its expansion between {_| and |_}.
+CALL = re.compile(
+    r"^executeExpand\((?P<query>.*?)\);\n> \{_\|\n(?P<expansion>.*?)\n\|_\} : string\n",
+    re.S | re.M,
+)
+
+
 def suite() -> Path:
     return Path(os.environ["OSSIE_REPO"]) / "compliance" / "query"
+
+
+def cases() -> list[str]:
+    found = sorted(p.stem for p in suite().glob("*.ost"))
+    if not found:
+        pytest.skip("this checkout of apache/ossie predates its ost scripts (#769)")
+    return found
+
+
+def call(case: str) -> re.Match:
+    """The one query of a case's script, with its expansion."""
+    calls = list(CALL.finditer((suite() / f"{case}.ost").read_text()))
+    assert len(calls) == 1, f"{case}.ost has {len(calls)} queries; a question asks one"
+    return calls[0]
 
 
 def clickhouse_type(duckdb_type: str, nullable: bool) -> str:
@@ -199,21 +223,27 @@ def ex(clickhouse, scott_duck):
 
 
 def expected(scott_duck, case: str):
-    """Columns and rows of expected.sql, run on DuckDB: standard SQL over literals."""
-    res = scott_duck.execute((suite() / "cases" / case / "expected.sql").read_text())
+    """Columns and rows of the case's expansion, run on DuckDB over scott.sql: the
+    rows the script's table shows, with the types DuckDB gives them."""
+    res = scott_duck.execute(call(case)["expansion"])
     return [d[0] for d in res.description], res.fetchall()
+
+
+def _cents(x) -> Decimal:
+    """Rounded to 2 decimal places, halves away from zero."""
+    return Decimal(repr(float(x))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def values_match(actual, wanted) -> bool:
     """README, "Comparing results": NULL matches NULL, exact numerics are equal,
-    an approximate one within 1e-9 relative (1e-9 absolute near zero). Whether a
-    value is approximate is the expected literal's call: a float returned for an
-    exact one must equal it exactly."""
+    an approximate one rounded to 2 decimal places (halves away from zero) equals
+    the expected value, which the script's table shows rounded so. Whether a value
+    is approximate is the expansion's call: a float returned for an exact one must
+    equal it exactly."""
     if actual is None or wanted is None:
         return actual is None and wanted is None
     if isinstance(wanted, float) and isinstance(actual, (int, float, Decimal)):
-        a = float(actual)
-        return math.isfinite(a) and abs(a - wanted) <= 1e-9 * max(abs(a), abs(wanted), 1)
+        return math.isfinite(float(actual)) and _cents(actual) == _cents(wanted)
     if isinstance(actual, (int, float, Decimal)) and isinstance(wanted, (int, Decimal)):
         return Decimal(actual) == Decimal(wanted)
     return actual == wanted
@@ -245,12 +275,12 @@ def rows_match(actual: list[tuple], wanted: list[tuple], ordered: bool) -> bool:
 
 
 def test_every_case_has_its_question():
-    cases = sorted(p.name for p in (suite() / "cases").iterdir() if p.is_dir())
+    found = cases()
     known = [*CASES, *REFUSED, *NOT_ASKED]
     assert len(known) == len(set(known)), "a case is listed twice"
-    missing = [c for c in cases if c not in known]
+    missing = [c for c in found if c not in known]
     assert not missing, f"apache/ossie added cases without a question here: {missing}"
-    stale = [c for c in known if c not in cases]
+    stale = [c for c in known if c not in found]
     assert not stale, f"cases listed here that apache/ossie no longer has: {stale}"
 
 
@@ -262,7 +292,7 @@ def test_refused_case(ex, case):
 
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_case(ex, scott_duck, case):
-    query_sql = (suite() / "cases" / case / "query.ossie.sql").read_text()
+    query_sql = call(case)["query"]
     columns, rows = expected(scott_duck, case)
     result = ex.execute(CASES[case])
     # The case aliases each AGG(m) as m; this executor names a column dataset.metric.

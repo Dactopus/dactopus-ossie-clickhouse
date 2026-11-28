@@ -378,11 +378,13 @@ METRIC_RESERVED = (
     '"Metric Definition: METRIC (RESERVED)"); no Ossie SQL expression may call it, and this '
     "executor gives it no meaning"
 )
-# expression_choice reads an expression's `sql` before its `dialects`, so a CLICKHOUSE text
-# is read only when there is no `sql`.
+# expression_choice reads an expression's `sql`, then its `dialects` in the order of
+# SUPPORTED_DIALECTS (OSSIE_SQL_2026, ANSI_SQL, CLICKHOUSE): a CLICKHOUSE text is read
+# only when the expression has no `sql` and no OSSIE_SQL_2026 or ANSI_SQL text.
 METRIC_WAY_OUT = (
     "if the name is a server function's, rename the server function, or write the "
-    "expression in the CLICKHOUSE dialect only, without an Ossie SQL `sql` text"
+    "expression in the CLICKHOUSE dialect only, with no `sql` and no OSSIE_SQL_2026 or "
+    "ANSI_SQL text"
 )
 # In a metric, of a dataset or of the model: its expression is METRIC's operand. A field
 # gets METRIC_FIELD_RULE: a field is scalar, so that advice would be refused again.

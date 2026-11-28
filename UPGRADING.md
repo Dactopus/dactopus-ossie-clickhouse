@@ -14,13 +14,13 @@ upgrade.
 
 ## Unreleased
 
-- Replace the `sql` text of a field or metric that calls a server
+- Replace the Ossie SQL text of a field or metric that calls a server
   function named `metric` with a `CLICKHOUSE` one, or rename the
   function: the spec reserves the name `METRIC` in Ossie SQL, so such a
   field or metric is hidden, with every metric and question over it, and
   `validate` names it. A `CLICKHOUSE` text is read only when the
-  expression has no `sql`. A field, a metric or a column named `metric`
-  is not affected.
+  expression has no `sql` and no `OSSIE_SQL_2026` or `ANSI_SQL` text. A
+  field, a metric or a column named `metric` is not affected.
 - Name the metric in a question that calls a server function `metric(...)`
   in a filter or in a metric expression: it was sent to ClickHouse and
   answered, and is now refused. A question writes Ossie SQL only.

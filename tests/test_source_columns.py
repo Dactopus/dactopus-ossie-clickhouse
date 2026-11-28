@@ -381,7 +381,10 @@ def test_the_reason_says_ossie_sql_and_where_a_field_or_metric_may_call_metric(t
     # expression_choice reads `sql` before `dialects`, so a CLICKHOUSE text counts only
     # when the expression has no `sql`: the way out says so. A question has none.
     fields, metrics = untranslatable(build(tmp_path, with_metric_calls))
-    way_out = "write the expression in the CLICKHOUSE dialect only, without an Ossie SQL `sql` text"
+    way_out = (
+        "write the expression in the CLICKHOUSE dialect only, with no `sql` and no "
+        "OSSIE_SQL_2026 or ANSI_SQL text"
+    )
     for why in (*fields.values(), *metrics.values()):
         assert "no Ossie SQL expression may call it" in why and "no expression may call" not in why
         assert "rename the server function" in why and way_out in why
@@ -391,9 +394,17 @@ def test_the_reason_says_ossie_sql_and_where_a_field_or_metric_may_call_metric(t
     assert "CLICKHOUSE" not in found and "rename the server function" not in found
 
 
-def test_a_sql_text_beside_a_clickhouse_text_keeps_the_field_hidden(tmp_path):
+@pytest.mark.parametrize("other", ["sql", "OSSIE_SQL_2026", "ANSI_SQL"])
+def test_another_text_beside_a_clickhouse_text_keeps_the_field_hidden(tmp_path, other):
+    # expression_choice reads `sql`, then OSSIE_SQL_2026, ANSI_SQL and CLICKHOUSE.
     def mutate(data):
-        both = {"sql": "metric(amount)", **clickhouse_text("metric(amount)")}
+        text = "metric(amount)"
+        both = (
+            {"sql": text}
+            if other == "sql"
+            else {"dialects": [{"dialect": other, "expression": text}]}
+        )
+        both.setdefault("dialects", []).append({"dialect": "CLICKHOUSE", "expression": text})
         data["datasets"][0]["fields"].append({"name": "both", "expression": both})
 
     fields, _ = untranslatable(build(tmp_path, mutate))

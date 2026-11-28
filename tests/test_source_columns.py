@@ -473,29 +473,70 @@ def test_a_user_defined_function_named_metric_does_not_let_a_call_through(tmp_pa
         assert "spec reserves" in found
 
 
-def test_a_call_of_metric_in_the_clickhouse_dialect_is_hidden_and_never_sent(tmp_path):
-    def clickhouse(text: str) -> dict:
-        return {"dialects": [{"dialect": "CLICKHOUSE", "expression": text}]}
+def clickhouse_text(text: str) -> dict:
+    return {"dialects": [{"dialect": "CLICKHOUSE", "expression": text}]}
 
+
+def with_clickhouse_metric_calls(data):
+    # The spec reserves METRIC in OSSIE_SQL_2026 only, "not in vendor dialects or in SQL
+    # engines": a CLICKHOUSE text may call a server function of that name.
+    data["datasets"][0]["fields"].append(
+        {"name": "ch_field", "expression": clickhouse_text("metric(amount)")}
+    )
+    data["datasets"][0]["metrics"].append(
+        {"name": "ch_metric", "expression": clickhouse_text("SUM(metric(amount))")}
+    )
+    data["metrics"].append({"name": "ch_model", "expression": clickhouse_text("SUM(metric(1))")})
+
+
+COLUMNS = {"id", "amount", "status"}
+
+
+def test_a_call_of_metric_in_the_clickhouse_dialect_runs_when_the_server_has_it(tmp_path):
+    server = WithFunctions(tables(COLUMNS), [("metric", 0, 0), ("sum", 1, 1)])
+    model = build(tmp_path, with_clickhouse_metric_calls)
+    assert untranslatable(model) == ({}, {})
+    ex = Executor(server, model)
+    assert ex.untranslatable_fields == ex.untranslatable_metrics == {}
+    assert "ch_field" in {f.name for f in ex.model.datasets[0].fields}
+    sent = ex.planner.sql(Query(("orders.ch_metric", "ch_model"), dimensions=("orders.ch_field",)))
+    assert "SUM(metric(orders.amount * 100))" in sent and "metric(orders.amount) AS" in sent
+    assert "metric(1)" in sent
+
+
+@pytest.mark.parametrize("known", [None, []])
+def test_a_call_of_metric_in_the_clickhouse_dialect_passes_without_system_functions(
+    tmp_path, known
+):
+    # Nothing checks a function outside the spec without system.functions.
+    server = (
+        FakeClickHouse(tables(COLUMNS)) if known is None else WithFunctions(tables(COLUMNS), known)
+    )
+    ex = Executor(server, build(tmp_path, with_clickhouse_metric_calls))
+    assert ex.functions is None and ex.untranslatable_fields == {}
+
+
+def test_a_call_of_metric_in_the_clickhouse_dialect_is_hidden_when_the_server_lacks_it(tmp_path):
+    server = WithFunctions(tables(COLUMNS), [("sum", 1, 1), ("matches", 0, 0)])
+    ex = Executor(server, build(tmp_path, with_clickhouse_metric_calls))
+    assert set(ex.untranslatable_fields) == {"orders.ch_field"}
+    assert set(ex.untranslatable_metrics) == {"orders.ch_metric", "ch_model"}
+    for why in (*ex.untranslatable_fields.values(), *ex.untranslatable_metrics.values()):
+        assert why.startswith("calls ") and "a function this ClickHouse server does not have" in why
+        assert "spec reserves" not in why
+    assert "ch_field" not in {f.name for f in ex.model.datasets[0].fields}
+    assert "ch_model" not in {m.name for m in ex.model.metrics}
+
+
+def test_a_call_of_metric_in_ossie_sql_stays_refused_beside_a_clickhouse_one(tmp_path):
     def mutate(data):
-        data["datasets"][0]["fields"].append(
-            {"name": "ch_field", "expression": clickhouse("metric(amount)")}
-        )
-        data["datasets"][0]["metrics"].append(
-            {"name": "ch_metric", "expression": clickhouse("METRIC(sum(amount))")}
-        )
-        data["metrics"].append({"name": "ch_model", "expression": clickhouse("Metric(1)")})
+        with_clickhouse_metric_calls(data)
+        with_metric_calls(data)
 
     fields, metrics = untranslatable(build(tmp_path, mutate))
-    assert set(fields) == {"orders.ch_field"} and set(metrics) == {"orders.ch_metric", "ch_model"}
-    for why in (*fields.values(), *metrics.values()):
-        assert why.startswith("written for ClickHouse, read as Ossie SQL: ")
-        assert "spec reserves" in why
-    ex = Executor(FakeClickHouse(tables({"id", "amount", "status"})), build(tmp_path, mutate))
-    assert "ch_field" not in {f.name for f in ex.model.datasets[0].fields}
-    assert {m.name for m in ex.model.datasets[0].metrics}.isdisjoint({"ch_metric"})
-    assert "ch_model" not in {m.name for m in ex.model.metrics}
-    assert "metric(" not in refusal(ex.model, "orders.ch_metric").lower()
+    assert set(fields) == {"orders.bad_field"}
+    assert set(metrics) == {"orders.bad_metric", "bad_model_metric"}
+    assert all("spec reserves" in why for why in (*fields.values(), *metrics.values()))
 
 
 def metric_named_metric(data):

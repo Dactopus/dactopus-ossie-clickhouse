@@ -33,17 +33,25 @@ from dactopus_ossie_clickhouse.model import (
 )
 
 
+class ClickHouseText(str):
+    """An expression text in the CLICKHOUSE dialect. pick_expression is the one place
+    that knows which text was picked, and it hands the dialect on in the type: parse()
+    reads only the text of this type as one a vendor wrote, where the spec's reserved
+    METRIC is a function of the server like any other (see METRIC_RULE)."""
+
+
 def pick_expression(expression: OssieExpression) -> str:
     """The expression text we translate (model.expression_choice). A text in the
-    CLICKHOUSE dialect is refused unless it reaches ClickHouse as written
-    (clickhouse_problem), so every layer that reads an expression reads it here."""
+    CLICKHOUSE dialect is a ClickHouseText, and is refused unless it reaches ClickHouse
+    as written (clickhouse_problem), so every layer that reads an expression reads it
+    here."""
     choice = expression_choice(expression)
     if choice is None:
         raise ValueError(f"no expression in a supported dialect (has {dialects_of(expression)})")
     dialect, text = choice
     if dialect == CLICKHOUSE_DIALECT and (problem := clickhouse_problem(text)):
         raise ValueError(f"{problem}: {text!r}")
-    return text
+    return ClickHouseText(text) if dialect == CLICKHOUSE_DIALECT else text
 
 
 # --- parsing ----------------------------------------------------------------
@@ -358,10 +366,13 @@ def agg_calls(tree: exp.Expression) -> list[exp.Anonymous]:
 # Spec, expression_language.md "Metric Definition: METRIC (RESERVED)" (apache/ossie#774):
 # the name is reserved in every capitalization, an expression MUST NOT call it, and an
 # implementation MUST NOT give it another meaning. A field, a metric or a column named
-# metric stays allowed: only a call is reserved. SQLGlot parses the call as an anonymous
-# function, which would reach ClickHouse or be checked against system.functions, so
-# parse() refuses it, in every expression the executor reads: a field, a metric of a
-# dataset or of the model, a filter, an expression of a question.
+# metric stays allowed: only a call is reserved, and only in OSSIE_SQL_2026: the spec
+# "does not reserve METRIC in vendor dialects or in SQL engines". SQLGlot parses the call
+# as an anonymous function, which would reach ClickHouse or be checked against
+# system.functions, so parse() refuses it in every OSSIE_SQL_2026 expression the executor
+# reads: a field, a metric of a dataset or of the model, a filter, an expression of a
+# question. A CLICKHOUSE text (ClickHouseText) may call a server function of that name:
+# it is a function outside the spec, passed through and checked against system.functions.
 _METRIC_RESERVED = (
     "METRIC is a function name that the spec reserves (expression_language.md, "
     '"Metric Definition: METRIC (RESERVED)"); no expression may call it, and this '
@@ -558,7 +569,9 @@ def parse(expression: str, question: bool = False, named: bool = False) -> exp.E
                 f"{type(node).__name__} is not allowed in an Ossie expression: {expression!r}"
             )
         if metric_call(node):
-            raise ValueError(f"{metric_refusal(node, question or named)}: {expression!r}")
+            if not isinstance(expression, ClickHouseText):
+                raise ValueError(f"{metric_refusal(node, question or named)}: {expression!r}")
+            node.meta["vendor_call"] = True
         filtered_metric = (
             question and isinstance(node, exp.Filter) and isinstance(node.this, exp.Column)
         )
@@ -592,11 +605,11 @@ def source_columns(tree: exp.Expression, ds: OssieDataset) -> list[str]:
 def outside_spec(node: exp.Expression) -> bool:
     """A call, in a tree from parse(), of a function that is not the spec's. AGG is
     the spec's, and the planner expands it before any SQL is built. METRIC is reserved
-    and parse() refuses it, so it never reaches the server."""
-    return isinstance(node, exp.Anonymous) and node.name.upper() not in _CATALOG | {
-        "AGG",
-        "METRIC",
-    }
+    and parse() refuses it, unless the text is a vendor's (CLICKHOUSE), where a call is
+    one of the server's functions."""
+    return isinstance(node, exp.Anonymous) and (
+        node.name.upper() not in _CATALOG | {"AGG", "METRIC"} or bool(node.meta.get("vendor_call"))
+    )
 
 
 def passthrough_functions(tree: exp.Expression) -> set[str]:
@@ -1162,7 +1175,7 @@ def clickhouse_problem(text: str) -> str | None:
     text does, but for _same_as_written's rewrites and _canonical's spellings.
     A text parse() refuses is refused with parse()'s reason."""
     try:
-        tree = parse(text)
+        tree = parse(ClickHouseText(text))
         sent = rewrite_tree(tree, keep=_same_as_written).sql(dialect="clickhouse")
     except ValueError as e:
         if "`" in _STRING.sub("", text):

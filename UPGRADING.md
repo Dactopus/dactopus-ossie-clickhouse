@@ -12,6 +12,14 @@ release changed:
 new version hides, with the reason; run it on each model after an
 upgrade.
 
+## Unreleased
+
+- Rename a server function named `metric` that a field or metric calls in
+  Ossie SQL, or write that expression in the `CLICKHOUSE` dialect: the
+  spec reserves the name `METRIC` in Ossie SQL, so such a field or metric
+  is hidden, with every metric and question over it, and `validate`
+  names it. A field, a metric or a column named `metric` is not affected.
+
 ## 0.19.0
 
 - Write a field that aggregates outside a window as a metric: a field

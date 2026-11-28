@@ -163,6 +163,15 @@ def test_sqlglot_parses_agg_as_an_anonymous_function(call):
     )
 
 
+@pytest.mark.parametrize("call", ["METRIC(x)", "metric(x)", "Metric(x)", "METRIC(SUM(x))"])
+def test_sqlglot_parses_metric_as_an_anonymous_function(call):
+    node = sqlglot.parse_one(call, read=OssieSQL)
+    assert isinstance(node, exp.Anonymous) and node.name.upper() == "METRIC", (
+        f"SQLGlot {sqlglot.__version__} parses {call} as {type(node).__name__}: check metric_call "
+        "in translate.py, which looks for an anonymous function"
+    )
+
+
 def test_sqlglot_reads_bare_current_timestamp_in_clickhouse_as_a_column():
     tree = sqlglot.parse_one("CURRENT_TIMESTAMP", read="clickhouse")
     assert isinstance(tree, exp.Column), (
@@ -190,6 +199,21 @@ def test_ossie_lets_a_model_metric_evaluate_a_dataset_metric_with_agg():
         "Scoping, rule 6) or that no other expression calls it (expression_language.md, "
         "Measure Evaluation: AGG): check AGG_RULE and _agg_shape_problem in translate.py, "
         "Planner._agg and docs/decisions/agg-dataset-metric.md"
+    )
+
+
+@pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
+def test_ossie_reserves_metric():
+    language = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "expression_language.md").read_text()
+    if "Metric Definition: `METRIC` (RESERVED)" not in language:
+        pytest.skip("this checkout of apache/ossie predates the reservation of METRIC (#774)")
+    assert (
+        "`OSSIE_SQL_2026` expressions MUST NOT call `METRIC`" in language
+        and "a field, metric, or column can still be named `metric`" in language
+    ), (
+        "apache/ossie no longer says that no expression calls METRIC, or that a name may "
+        "still be metric (expression_language.md, Metric Definition: METRIC (RESERVED)): "
+        "check METRIC_RULE and metric_call in translate.py"
     )
 
 

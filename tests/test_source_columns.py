@@ -406,8 +406,9 @@ def test_metric_is_refused_in_every_capitalization_and_never_parsed_as_a_functio
 
 def test_a_call_of_metric_is_refused_in_a_question(model):
     # An expression of a question and a filter are parsed by the planner too. A question
-    # names the model's metrics and defines none, so the advice is to name the metric,
-    # by the call's own argument when it is a single column, and never SUM(.
+    # names the model's metrics and fields and defines none, so the advice is to name
+    # it (a filter's column may be a field, as orders.raw_amount is), by the call's own
+    # argument when it is a single column, and never SUM(.
     for found, advice in (
         (refusal(model, "metric(total) AS bad"), "write total, not METRIC(total)"),
         (
@@ -420,7 +421,7 @@ def test_a_call_of_metric_is_refused_in_a_question(model):
         ),
     ):
         assert "spec reserves" in found
-        assert f"A question names a metric of the model itself: {advice}" in found
+        assert f"A question names a metric or a field itself: {advice}" in found
         assert "SUM(amount)" not in found and "operand of METRIC" not in found
 
 

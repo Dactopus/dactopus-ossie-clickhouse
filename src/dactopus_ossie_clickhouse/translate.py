@@ -381,7 +381,7 @@ def metric_call(node: exp.Expression) -> bool:
 
 def metric_refusal(node: exp.Anonymous, named: bool = False) -> str:
     """Why a call of METRIC is refused. With ``named``, in a question's expression or
-    filter, which names a model's metric and defines none: the advice is to name it,
+    filter, which names a model's metrics and fields and defines none: the advice is to name it,
     by the call's own argument when that is a single column."""
     call = node.sql()
     if not named:
@@ -389,8 +389,8 @@ def metric_refusal(node: exp.Anonymous, named: bool = False) -> str:
     arg = node.expressions[0] if len(node.expressions) == 1 else None
     metric = arg.sql() if isinstance(arg, exp.Column) else "the metric's name"
     return (
-        f"{call} is not allowed; {_METRIC_RESERVED}. A question names a metric of the "
-        f"model itself: write {metric}, not {call}"
+        f"{call} is not allowed; {_METRIC_RESERVED}. A question names a metric or a "
+        f"field itself: write {metric}, not {call}"
     )
 
 

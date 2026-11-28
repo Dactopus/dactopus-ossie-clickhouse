@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from dactopus_ossie_clickhouse import load_model
+from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
 from dactopus_ossie_clickhouse.translate import METRIC_RESERVED, METRIC_RULE, parse, untranslatable
@@ -543,6 +544,30 @@ def test_a_call_of_metric_in_ossie_sql_stays_refused_beside_a_clickhouse_one(tmp
     assert set(fields) == {"orders.bad_field"}
     assert set(metrics) == {"orders.bad_metric", "bad_model_metric"}
     assert all("spec reserves" in why for why in (*fields.values(), *metrics.values()))
+
+
+@pytest.mark.parametrize(
+    "bad", ["METRIC(SUM(amount))", "SUM(amount", "REGEXP_COUNT(status, 'e', 1, 'i')"]
+)
+def test_a_metric_over_a_dataset_metric_that_does_not_parse_is_not_reported_again(
+    tmp_path, capsys, bad
+):
+    # untranslatable() reports the dataset's metric; the model's metric that evaluates it
+    # with AGG has no problem of its own, as one that reads an untranslatable field has none.
+    def mutate(data):
+        data["datasets"][0]["metrics"].append(metric("bad_metric", bad))
+        data["metrics"].append(metric("via_agg", "AGG(orders.bad_metric) + 1"))
+        data["metrics"].append(
+            metric("also_via_agg", "AGG(orders.bad_metric) / AGG(orders.via_field)")
+        )
+
+    model = build(tmp_path, mutate)
+    assert set(untranslatable(model)[1]) == {"orders.bad_metric"}
+    assert unanswerable_metrics(model) == {}
+    assert main(["validate", str(tmp_path / "m.yaml")]) == 1
+    err = capsys.readouterr().err
+    assert "metric 'orders.bad_metric'" in err and "via_agg" not in err
+    assert "1 problem(s)" in err
 
 
 def metric_named_metric(data):

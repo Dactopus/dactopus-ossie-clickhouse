@@ -16,7 +16,13 @@ from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
-from dactopus_ossie_clickhouse.translate import METRIC_RESERVED, METRIC_RULE, parse, untranslatable
+from dactopus_ossie_clickhouse.translate import (
+    METRIC_FIELD_RULE,
+    METRIC_RESERVED,
+    METRIC_RULE,
+    parse,
+    untranslatable,
+)
 from tests.conftest import FakeClickHouse
 
 
@@ -367,7 +373,30 @@ def metric_refusal(call: str, text: str, rule: str = METRIC_RULE) -> str:
 def field_refusal(call: str, text: str) -> str:
     """In a field only the reservation: a field is scalar, so SUM(amount), the advice
     for a metric, would be refused again as an aggregate in a field."""
-    return metric_refusal(call, text, METRIC_RESERVED)
+    return metric_refusal(call, text, METRIC_FIELD_RULE)
+
+
+def test_the_reason_says_ossie_sql_and_where_a_field_or_metric_may_call_metric(tmp_path):
+    # expression_choice reads `sql` before `dialects`, so a CLICKHOUSE text counts only
+    # when the expression has no `sql`: the way out says so. A question has none.
+    fields, metrics = untranslatable(build(tmp_path, with_metric_calls))
+    way_out = "write the expression in the CLICKHOUSE dialect only, without an Ossie SQL `sql` text"
+    for why in (*fields.values(), *metrics.values()):
+        assert "no Ossie SQL expression may call it" in why and "no expression may call" not in why
+        assert "rename the server function" in why and way_out in why
+    model = build(tmp_path)
+    found = refusal(model, "total", filters=("METRIC(orders.raw_amount) > 1",))
+    assert "no Ossie SQL expression may call it" in found
+    assert "CLICKHOUSE" not in found and "rename the server function" not in found
+
+
+def test_a_sql_text_beside_a_clickhouse_text_keeps_the_field_hidden(tmp_path):
+    def mutate(data):
+        both = {"sql": "metric(amount)", **clickhouse_text("metric(amount)")}
+        data["datasets"][0]["fields"].append({"name": "both", "expression": both})
+
+    fields, _ = untranslatable(build(tmp_path, mutate))
+    assert "no Ossie SQL expression may call it" in fields["orders.both"]
 
 
 def with_metric_calls(data):

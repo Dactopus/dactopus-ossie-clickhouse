@@ -17,6 +17,7 @@ from dactopus_ossie_clickhouse.cli import main
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
 from dactopus_ossie_clickhouse.translate import (
+    FIELD_AGGREGATE_RULE,
     METRIC_FIELD_RULE,
     METRIC_RESERVED,
     METRIC_RULE,
@@ -562,6 +563,28 @@ def test_a_call_of_metric_in_the_clickhouse_dialect_is_hidden_when_the_server_la
         assert "spec reserves" not in why
     assert "ch_field" not in {f.name for f in ex.model.datasets[0].fields}
     assert "ch_model" not in {m.name for m in ex.model.metrics}
+
+
+def test_an_aggregate_function_named_metric_in_the_clickhouse_dialect(tmp_path):
+    # A server aggregate `metric`: a CLICKHOUSE dataset metric calls it, a model metric
+    # evaluates that metric with AGG, and a field with the same text aggregates outside
+    # a window, so it is hidden as any aggregate in a field is.
+    def mutate(data):
+        data["datasets"][0]["metrics"].append(
+            {"name": "ch_agg", "expression": clickhouse_text("metric(amount)")}
+        )
+        data["datasets"][0]["fields"].append(
+            {"name": "ch_field", "expression": clickhouse_text("metric(amount)")}
+        )
+        data["metrics"].append(metric("via_agg", "AGG(orders.ch_agg) + 1"))
+
+    server = WithFunctions(tables(COLUMNS), [("metric", 0, 1), ("sum", 1, 1)])
+    ex = Executor(server, build(tmp_path, mutate))
+    assert set(ex.untranslatable_fields) == {"orders.ch_field"}
+    assert ex.untranslatable_fields["orders.ch_field"].startswith(FIELD_AGGREGATE_RULE)
+    assert ex.untranslatable_metrics == {}
+    assert "metric(orders.amount * 100) AS" in ex.planner.sql(Query(("orders.ch_agg",)))
+    assert "metric(orders.amount * 100) + 1 AS via_agg" in ex.planner.sql(Query(("via_agg",)))
 
 
 def test_a_call_of_metric_in_ossie_sql_stays_refused_beside_a_clickhouse_one(tmp_path):

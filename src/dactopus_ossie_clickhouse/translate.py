@@ -355,6 +355,26 @@ def agg_calls(tree: exp.Expression) -> list[exp.Anonymous]:
     return [node for node in tree.find_all(exp.Anonymous) if agg_call(node)]
 
 
+# Spec, expression_language.md "Metric Definition: METRIC (RESERVED)" (apache/ossie#774):
+# the name is reserved in every capitalization, an expression MUST NOT call it, and an
+# implementation MUST NOT give it another meaning. A field, a metric or a column named
+# metric stays allowed: only a call is reserved. SQLGlot parses the call as an anonymous
+# function, which would reach ClickHouse or be checked against system.functions, so
+# parse() refuses it, in every expression the executor reads: a field, a metric of a
+# dataset or of the model, a filter, an expression of a question.
+METRIC_RULE = (
+    "METRIC is a function name that the spec reserves (expression_language.md, "
+    '"Metric Definition: METRIC (RESERVED)"); no expression may call it, and this '
+    "executor gives it no meaning. A metric's expression is the operand of METRIC "
+    "already: write SUM(amount), not METRIC(SUM(amount))"
+)
+
+
+def metric_call(node: exp.Expression) -> bool:
+    """A call of METRIC, in any capitalization, in a tree from SQLGlot."""
+    return isinstance(node, exp.Anonymous) and node.name.upper() == "METRIC"
+
+
 def _agg_shape_problem(node: exp.Anonymous) -> str | None:
     """Why a call of AGG is not AGG(dataset.metric) without a modifier, or None."""
     args = node.expressions
@@ -454,6 +474,8 @@ def _shape_problem(node: exp.Expression) -> str | None:
         return "an alias (AS) is not allowed in an expression"
     if agg_call(node):
         return _agg_shape_problem(node)
+    if metric_call(node):
+        return f"{node.sql()} is not allowed; {METRIC_RULE}"
     if isinstance(node, exp.PercentileCont | exp.PercentileDisc):
         signature = _SIGNATURES[node.sql_name()][0]
         if not isinstance(node.parent, exp.WithinGroup):
@@ -549,8 +571,12 @@ def source_columns(tree: exp.Expression, ds: OssieDataset) -> list[str]:
 
 def outside_spec(node: exp.Expression) -> bool:
     """A call, in a tree from parse(), of a function that is not the spec's. AGG is
-    the spec's, and the planner expands it before any SQL is built."""
-    return isinstance(node, exp.Anonymous) and node.name.upper() not in _CATALOG | {"AGG"}
+    the spec's, and the planner expands it before any SQL is built. METRIC is reserved
+    and parse() refuses it, so it never reaches the server."""
+    return isinstance(node, exp.Anonymous) and node.name.upper() not in _CATALOG | {
+        "AGG",
+        "METRIC",
+    }
 
 
 def passthrough_functions(tree: exp.Expression) -> set[str]:
@@ -1150,7 +1176,8 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
 
     The executor hides them: an expression that does not parse cannot be shown
     to read only columns the user may see. A call of AGG is refused outside a model's
-    metric; the planner checks what one names. A field that aggregates outside a window
+    metric; the planner checks what one names. A call of METRIC is refused everywhere,
+    by parse(), before any server check. A field that aggregates outside a window
     is refused too; the executor adds those whose aggregate only the server knows."""
 
     def problem(expression: OssieExpression, where: str | None) -> str | None:

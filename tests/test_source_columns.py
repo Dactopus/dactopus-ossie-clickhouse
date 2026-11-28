@@ -1,4 +1,4 @@
-"""``source.column`` in a dataset's metric, and the reserved ``AGG``.
+"""``source.column`` in a dataset's metric, and the reserved ``AGG`` and ``METRIC``.
 
 Spec, "Metric Scoping" rules 1 to 3 and "Name Resolution" (apache/ossie#633): a dataset's
 metric reads a column of its source as ``source.column``, with the qualifier case
@@ -14,7 +14,7 @@ import yaml
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
-from dactopus_ossie_clickhouse.translate import untranslatable
+from dactopus_ossie_clickhouse.translate import METRIC_RULE, parse, untranslatable
 from tests.conftest import FakeClickHouse
 
 
@@ -349,3 +349,107 @@ def test_a_source_column_is_no_field_a_metric_reads(tmp_path):
 
     msg = refusal(build(tmp_path, mutate), "source.amount")
     assert msg.endswith("no metric reads it")
+
+
+# --- the reserved METRIC ----------------------------------------------------------
+
+# Spec, expression_language.md "Metric Definition: METRIC (RESERVED)" (apache/ossie#774):
+# a call is refused in every capitalization; a field, a metric or a column named metric
+# is allowed.
+
+
+def metric_refusal(call: str, text: str) -> str:
+    return f"{call} is not allowed; {METRIC_RULE}: {text!r}"
+
+
+def with_metric_calls(data):
+    data["datasets"][0]["fields"].append(field("bad_field", "metric(amount)"))
+    data["datasets"][0]["metrics"].append(metric("bad_metric", "METRIC(SUM(amount))"))
+    data["metrics"].append(metric("bad_model_metric", "Metric(orders.via_field)"))
+
+
+def test_a_call_of_metric_is_refused_in_a_field_and_in_each_kind_of_metric(tmp_path):
+    fields, metrics = untranslatable(build(tmp_path, with_metric_calls))
+    assert fields == {"orders.bad_field": metric_refusal("METRIC(amount)", "metric(amount)")}
+    assert metrics == {
+        "orders.bad_metric": metric_refusal("METRIC(SUM(amount))", "METRIC(SUM(amount))"),
+        "bad_model_metric": metric_refusal("METRIC(orders.via_field)", "Metric(orders.via_field)"),
+    }
+
+
+def test_a_call_of_metric_is_refused_without_system_functions(tmp_path):
+    # FakeClickHouse has no system.functions: nothing checks a function outside the spec,
+    # so only the refusal of METRIC itself hides these.
+    ex = Executor(
+        FakeClickHouse(tables({"id", "amount", "status"})), build(tmp_path, with_metric_calls)
+    )
+    assert ex.functions is None
+    assert set(ex.untranslatable_fields) == {"orders.bad_field"}
+    assert set(ex.untranslatable_metrics) == {"orders.bad_metric", "bad_model_metric"}
+    assert "bad_field" not in {f.name for f in ex.model.datasets[0].fields}
+    assert {m.name for m in ex.model.datasets[0].metrics}.isdisjoint({"bad_metric"})
+    assert "bad_model_metric" not in {m.name for m in ex.model.metrics}
+    msg = refusal(ex.model, "orders.bad_metric")
+    assert "METRIC(" not in msg and "SUM(amount)" not in msg
+
+
+@pytest.mark.parametrize(
+    "call", ["METRIC(x)", "metric(x)", "Metric(x)", "METRIC(SUM(x))", "METRIC()"]
+)
+def test_metric_is_refused_in_every_capitalization_and_never_parsed_as_a_function(call):
+    with pytest.raises(ValueError, match="spec reserves"):
+        parse(call)
+    with pytest.raises(ValueError, match="spec reserves"):
+        parse(f"SUM(x) + {call}", question=True)
+
+
+def test_a_call_of_metric_is_refused_in_a_question(model):
+    # An expression of a question and a filter are parsed by the planner too.
+    for found in (
+        refusal(model, "metric(total) AS bad"),
+        refusal(model, "total", filters=("METRIC(orders.raw_amount) > 1",)),
+    ):
+        assert "spec reserves" in found
+
+
+def metric_named_metric(data):
+    # A field `metric` of orders (a name is unique within a dataset), a metric `metric`
+    # of the model and of a second dataset.
+    data["datasets"][0]["fields"].append(field("metric", "amount"))
+    data["datasets"][0]["metrics"].append(metric("metric_sum", "SUM(metric)"))
+    data["datasets"].append(
+        {
+            "name": "other",
+            "source": "ossie_srccol.orders",
+            "primary_key": ["id"],
+            "fields": [field("id", "id"), field("amount", "amount")],
+            "metrics": [metric("metric", "SUM(amount)")],
+        }
+    )
+    data["metrics"].append(metric("metric", "SUM(orders.metric)"))
+
+
+def test_a_field_and_a_metric_named_metric_are_no_calls(tmp_path):
+    model = build(tmp_path, metric_named_metric)
+    assert untranslatable(model) == ({}, {})
+    assert "SUM(orders.amount) AS metric FROM" in sql(model, "metric")
+    assert 'SUM(other.amount) AS "other.metric" FROM' in sql(model, "other.metric")
+    by_field = sql(model, "orders.metric_sum", dimensions=("orders.metric",))
+    assert "SELECT orders.amount AS metric, SUM(orders.amount)" in by_field
+    assert parse("SUM(metric)").sql() == "SUM(metric)"
+    assert parse("orders.metric > 1").sql() == "orders.metric > 1"
+
+
+def test_values_of_a_field_and_a_metric_named_metric(clickhouse, tmp_path):
+    for stmt in SETUP:
+        clickhouse.command(stmt)
+    try:
+        ex = Executor(clickhouse, build(tmp_path, metric_named_metric))
+        assert ex.untranslatable_fields == ex.untranslatable_metrics == {}
+        # Hand-computed from the four rows of SETUP: 100 + 50 + 200 + 20.
+        for name in ("orders.metric_sum", "metric", "other.metric"):
+            assert ex.execute(Query((name,))).rows == [(370,)], name
+        rows = ex.execute(Query(("orders.metric_sum",), ("orders.status",))).rows
+        assert sorted(rows) == [("completed", 170), ("pending", 200)]
+    finally:
+        clickhouse.command("DROP DATABASE ossie_srccol")

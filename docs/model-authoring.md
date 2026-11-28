@@ -216,6 +216,13 @@ way, in every capitalization; a question's filter names the dataset's
 metric itself (`orders.revenue > 100`). A field, a metric or a column may
 be named `agg`.
 
+The spec reserves the function name `METRIC` as well, in every
+capitalization: no expression calls it, and a dataset's metric is the
+operand of `METRIC` already (`SUM(amount)`, not `METRIC(SUM(amount))`). A
+field or a metric that calls it is reported by `validate` and hidden, and
+a question's expression or filter that calls it is refused. A field, a
+metric or a column may be named `metric`.
+
 The spec's function catalog is translated to ClickHouse. Functions
 ClickHouse lacks (`DATEADD`, `DATEDIFF`, `DATE_PART`, `SPLIT_PART`,
 `CONTAINS`, `IFF`, `ZEROIFNULL` and others) are rewritten on the syntax

@@ -3,6 +3,8 @@
 `parse()` gives SQLGlot's typed nodes to the spec's function catalog only
 (`_CATALOG` in `translate.py`, the tables of `expression_language.md`);
 any other function name parses as `exp.Anonymous` and prints as written.
+Two names are the spec's and never pass through: `AGG`, which the planner
+expands, and the reserved `METRIC`, which `parse()` refuses.
 SQLGlot's default dialect knows the functions of many engines, and its
 ClickHouse generator renames 135 of them (counted on SQLGlot 30.23):
 `DAYOFWEEK(d)` became `DAY_OF_WEEK(d)` and `BOOL_AND(x)` became

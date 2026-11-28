@@ -907,13 +907,13 @@ class Planner:
         return ds, f
 
     def _parse(
-        self, expression: str, question: bool = False, named: bool = False
+        self, expression: str, question: bool = False, named: bool = False, field: bool = False
     ) -> exp.Expression:
         """parse(), with a call of a function outside the spec that the server
         says is an aggregate (countIf, uniqExactOrNull) typed as one, so every
         check on aggregates covers it. Without the server's word, SQLGlot's list
         of ClickHouse aggregates decides (_known_clickhouse_aggregate)."""
-        tree = parse(expression, question, named)
+        tree = parse(expression, question, named, field)
         # A plain dict has no aggregate; a catalog has None without system.functions.
         aggregate = getattr(self.catalog, "aggregate", None) or _known_clickhouse_aggregate
 
@@ -1346,7 +1346,7 @@ class Planner:
         """A field's expression with its bare columns qualified by the dataset alias."""
         text = pick_expression(f.expression)
         try:
-            tree = self._parse(text)
+            tree = self._parse(text, field=True)
         except ValueError as e:
             raise FieldError(f"field {ds.name}.{f.name}: {e}") from e
         if refusal := agg_refusal(tree, "a field"):

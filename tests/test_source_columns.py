@@ -15,7 +15,7 @@ import yaml
 from dactopus_ossie_clickhouse import load_model
 from dactopus_ossie_clickhouse.executor import Executor
 from dactopus_ossie_clickhouse.planner import PlanError, Planner, Query, unanswerable_metrics
-from dactopus_ossie_clickhouse.translate import METRIC_RULE, parse, untranslatable
+from dactopus_ossie_clickhouse.translate import METRIC_RESERVED, METRIC_RULE, parse, untranslatable
 from tests.conftest import FakeClickHouse
 
 
@@ -359,8 +359,14 @@ def test_a_source_column_is_no_field_a_metric_reads(tmp_path):
 # is allowed.
 
 
-def metric_refusal(call: str, text: str) -> str:
-    return f"{call} is not allowed; {METRIC_RULE}: {text!r}"
+def metric_refusal(call: str, text: str, rule: str = METRIC_RULE) -> str:
+    return f"{call} is not allowed; {rule}: {text!r}"
+
+
+def field_refusal(call: str, text: str) -> str:
+    """In a field only the reservation: a field is scalar, so SUM(amount), the advice
+    for a metric, would be refused again as an aggregate in a field."""
+    return metric_refusal(call, text, METRIC_RESERVED)
 
 
 def with_metric_calls(data):
@@ -371,7 +377,7 @@ def with_metric_calls(data):
 
 def test_a_call_of_metric_is_refused_in_a_field_and_in_each_kind_of_metric(tmp_path):
     fields, metrics = untranslatable(build(tmp_path, with_metric_calls))
-    assert fields == {"orders.bad_field": metric_refusal("METRIC(amount)", "metric(amount)")}
+    assert fields == {"orders.bad_field": field_refusal("METRIC(amount)", "metric(amount)")}
     assert metrics == {
         "orders.bad_metric": metric_refusal("METRIC(SUM(amount))", "METRIC(SUM(amount))"),
         "bad_model_metric": metric_refusal("METRIC(orders.via_field)", "Metric(orders.via_field)"),
@@ -430,7 +436,7 @@ def test_a_dimension_on_a_field_that_calls_metric_is_a_plan_error(tmp_path):
     model = build(tmp_path, with_metric_calls)
     msg = refusal(model, "total", dimensions=("orders.bad_field",))
     assert msg.startswith("field orders.bad_field: METRIC(amount) is not allowed; ")
-    assert METRIC_RULE in msg
+    assert METRIC_RESERVED in msg and "operand of METRIC" not in msg
 
 
 class WithFunctions(FakeClickHouse):
@@ -459,7 +465,7 @@ def test_a_user_defined_function_named_metric_does_not_let_a_call_through(tmp_pa
     ex = Executor(server, build(tmp_path, with_metric_calls))
     assert ex.functions is not None and ex.functions.has("metric")
     assert ex.untranslatable_fields == {
-        "orders.bad_field": metric_refusal("METRIC(amount)", "metric(amount)")
+        "orders.bad_field": field_refusal("METRIC(amount)", "metric(amount)")
     }
     assert ex.untranslatable_metrics == {
         "orders.bad_metric": metric_refusal("METRIC(SUM(amount))", "METRIC(SUM(amount))"),

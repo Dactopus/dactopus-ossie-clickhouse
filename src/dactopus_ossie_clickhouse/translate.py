@@ -373,14 +373,15 @@ def agg_calls(tree: exp.Expression) -> list[exp.Anonymous]:
 # reads: a field, a metric of a dataset or of the model, a filter, an expression of a
 # question. A CLICKHOUSE text (ClickHouseText) may call a server function of that name:
 # it is a function outside the spec, passed through and checked against system.functions.
-_METRIC_RESERVED = (
+METRIC_RESERVED = (
     "METRIC is a function name that the spec reserves (expression_language.md, "
     '"Metric Definition: METRIC (RESERVED)"); no expression may call it, and this '
     "executor gives it no meaning"
 )
-# In a field or a metric of the model: the metric's expression is METRIC's operand.
+# In a metric, of a dataset or of the model: its expression is METRIC's operand. A field
+# gets METRIC_RESERVED alone: a field is scalar, so that advice would be refused again.
 METRIC_RULE = (
-    f"{_METRIC_RESERVED}. A metric's expression is the operand of METRIC already: write "
+    f"{METRIC_RESERVED}. A metric's expression is the operand of METRIC already: write "
     "SUM(amount), not METRIC(SUM(amount))"
 )
 
@@ -390,17 +391,21 @@ def metric_call(node: exp.Expression) -> bool:
     return isinstance(node, exp.Anonymous) and node.name.upper() == "METRIC"
 
 
-def metric_refusal(node: exp.Anonymous, named: bool = False) -> str:
-    """Why a call of METRIC is refused. With ``named``, in a question's expression or
-    filter, which names a model's metrics and fields and defines none: the advice is to name it,
-    by the call's own argument when that is a single column."""
+def metric_refusal(node: exp.Anonymous, where: str = "metric") -> str:
+    """Why a call of METRIC is refused, by where it stands: "metric" (a metric of a
+    dataset or of the model: the expression is the operand), "field" (the reservation
+    alone) or "question" (an expression or filter of a question, which names a model's
+    metrics and fields and defines none: the advice is to name it, by the call's own
+    argument when that is a single column)."""
     call = node.sql()
-    if not named:
+    if where == "field":
+        return f"{call} is not allowed; {METRIC_RESERVED}"
+    if where == "metric":
         return f"{call} is not allowed; {METRIC_RULE}"
     arg = node.expressions[0] if len(node.expressions) == 1 else None
     metric = arg.sql() if isinstance(arg, exp.Column) else "the metric's name"
     return (
-        f"{call} is not allowed; {_METRIC_RESERVED}. A question names a metric or a "
+        f"{call} is not allowed; {METRIC_RESERVED}. A question names a metric or a "
         f"field itself: write {metric}, not {call}"
     )
 
@@ -554,11 +559,14 @@ def _shape_problem(node: exp.Expression) -> str | None:
     return None
 
 
-def parse(expression: str, question: bool = False, named: bool = False) -> exp.Expression:
+def parse(
+    expression: str, question: bool = False, named: bool = False, field: bool = False
+) -> exp.Expression:
     """Parse an Ossie expression, rejecting constructs the spec disallows. With
     ``question``, a metric name may take a FILTER (QuestionSQL): only an expression over
     metrics in a question does. ``question`` and ``named`` (a question's filter) say that
-    the text names the model's metrics, which changes the advice a call of METRIC gets."""
+    the text names the model's metrics, and ``field`` that it is a field's: they change
+    the advice a call of METRIC gets."""
     try:
         tree = sqlglot.parse_one(expression, read=QuestionSQL if question else OssieSQL)
     except sqlglot.errors.SqlglotError as e:
@@ -570,7 +578,8 @@ def parse(expression: str, question: bool = False, named: bool = False) -> exp.E
             )
         if metric_call(node):
             if not isinstance(expression, ClickHouseText):
-                raise ValueError(f"{metric_refusal(node, question or named)}: {expression!r}")
+                where = "question" if question or named else "field" if field else "metric"
+                raise ValueError(f"{metric_refusal(node, where)}: {expression!r}")
             node.meta["vendor_call"] = True
         filtered_metric = (
             question and isinstance(node, exp.Filter) and isinstance(node.this, exp.Column)
@@ -1216,7 +1225,7 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
     def problem(expression: OssieExpression, where: str | None) -> str | None:
         try:
             text = pick_expression(expression)
-            tree = parse(text)
+            tree = parse(text, field=where == "a field")
             if where and (refusal := agg_refusal(tree, where)):
                 return f"{refusal}: {text!r}"
             if where == "a field" and unwindowed_aggregate(tree):

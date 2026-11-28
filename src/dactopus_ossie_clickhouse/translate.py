@@ -374,16 +374,23 @@ def agg_calls(tree: exp.Expression) -> list[exp.Anonymous]:
 # question. A CLICKHOUSE text (ClickHouseText) may call a server function of that name:
 # it is a function outside the spec, passed through and checked against system.functions.
 METRIC_RESERVED = (
-    "METRIC is a function name that the spec reserves (expression_language.md, "
-    '"Metric Definition: METRIC (RESERVED)"); no expression may call it, and this '
+    "METRIC is a function name that the spec reserves in Ossie SQL (expression_language.md, "
+    '"Metric Definition: METRIC (RESERVED)"); no Ossie SQL expression may call it, and this '
     "executor gives it no meaning"
 )
+# expression_choice reads an expression's `sql` before its `dialects`, so a CLICKHOUSE text
+# is read only when there is no `sql`.
+METRIC_WAY_OUT = (
+    "if the name is a server function's, rename the server function, or write the "
+    "expression in the CLICKHOUSE dialect only, without an Ossie SQL `sql` text"
+)
 # In a metric, of a dataset or of the model: its expression is METRIC's operand. A field
-# gets METRIC_RESERVED alone: a field is scalar, so that advice would be refused again.
+# gets METRIC_FIELD_RULE: a field is scalar, so that advice would be refused again.
 METRIC_RULE = (
     f"{METRIC_RESERVED}. A metric's expression is the operand of METRIC already: write "
-    "SUM(amount), not METRIC(SUM(amount))"
+    f"SUM(amount), not METRIC(SUM(amount)); {METRIC_WAY_OUT}"
 )
+METRIC_FIELD_RULE = f"{METRIC_RESERVED}; {METRIC_WAY_OUT}"
 
 
 def metric_call(node: exp.Expression) -> bool:
@@ -399,7 +406,7 @@ def metric_refusal(node: exp.Anonymous, where: str = "metric") -> str:
     argument when that is a single column)."""
     call = node.sql()
     if where == "field":
-        return f"{call} is not allowed; {METRIC_RESERVED}"
+        return f"{call} is not allowed; {METRIC_FIELD_RULE}"
     if where == "metric":
         return f"{call} is not allowed; {METRIC_RULE}"
     arg = node.expressions[0] if len(node.expressions) == 1 else None

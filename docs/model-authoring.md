@@ -220,8 +220,11 @@ The spec reserves the function name `METRIC` as well, in every
 capitalization: no expression calls it, and a dataset's metric is the
 operand of `METRIC` already (`SUM(amount)`, not `METRIC(SUM(amount))`). A
 field or a metric that calls it is reported by `validate` and hidden, and
-a question's expression or filter that calls it is refused. A field, a
-metric or a column may be named `metric`.
+a question's expression or filter that calls it is refused. The spec
+reserves the name in Ossie SQL only: a `CLICKHOUSE` text may call a server
+function named `metric`, as it may call any function outside the spec, and
+it is hidden if the server lacks it. A field, a metric or a column may be
+named `metric`.
 
 The spec's function catalog is translated to ClickHouse. Functions
 ClickHouse lacks (`DATEADD`, `DATEDIFF`, `DATE_PART`, `SPLIT_PART`,

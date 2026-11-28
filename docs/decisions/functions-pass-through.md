@@ -4,7 +4,10 @@
 (`_CATALOG` in `translate.py`, the tables of `expression_language.md`);
 any other function name parses as `exp.Anonymous` and prints as written.
 Two names are the spec's and never pass through: `AGG`, which the planner
-expands, and the reserved `METRIC`, which `parse()` refuses.
+expands, and the reserved `METRIC`, which `parse()` refuses in Ossie SQL.
+The spec reserves `METRIC` in `OSSIE_SQL_2026` only, so a `CLICKHOUSE` text
+may call a server function of that name: `pick_expression` hands such a
+text on as a `ClickHouseText`, and the call passes through like any other.
 SQLGlot's default dialect knows the functions of many engines, and its
 ClickHouse generator renames 135 of them (counted on SQLGlot 30.23):
 `DAYOFWEEK(d)` became `DAY_OF_WEEK(d)` and `BOOL_AND(x)` became

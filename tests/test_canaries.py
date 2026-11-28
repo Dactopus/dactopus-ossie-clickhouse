@@ -205,15 +205,18 @@ def test_ossie_lets_a_model_metric_evaluate_a_dataset_metric_with_agg():
 @pytest.mark.skipif("OSSIE_REPO" not in os.environ, reason="OSSIE_REPO: a checkout of apache/ossie")
 def test_ossie_reserves_metric():
     language = (Path(os.environ["OSSIE_REPO"]) / "core-spec" / "expression_language.md").read_text()
-    if "Metric Definition: `METRIC` (RESERVED)" not in language:
+    if "METRIC" not in language:
         pytest.skip("this checkout of apache/ossie predates the reservation of METRIC (#774)")
     assert (
-        "`OSSIE_SQL_2026` expressions MUST NOT call `METRIC`" in language
+        "Metric Definition: `METRIC` (RESERVED)" in language
+        and "`OSSIE_SQL_2026` expressions MUST NOT call `METRIC`" in language
+        and "It does not reserve `METRIC` in vendor dialects" in language
         and "a field, metric, or column can still be named `metric`" in language
     ), (
-        "apache/ossie no longer says that no expression calls METRIC, or that a name may "
-        "still be metric (expression_language.md, Metric Definition: METRIC (RESERVED)): "
-        "check METRIC_RULE and metric_call in translate.py"
+        "apache/ossie no longer says that no OSSIE_SQL_2026 expression calls METRIC, that "
+        "vendor dialects are free to, or that a name may still be metric "
+        "(expression_language.md, Metric Definition: METRIC (RESERVED)): check METRIC_RULE, "
+        "metric_call and ClickHouseText in translate.py"
     )
 
 

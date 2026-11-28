@@ -1338,7 +1338,10 @@ class Planner:
     def _field_expr(self, ds: OssieDataset, f: OssieField) -> exp.Expression:
         """A field's expression with its bare columns qualified by the dataset alias."""
         text = pick_expression(f.expression)
-        tree = self._parse(text)
+        try:
+            tree = self._parse(text)
+        except ValueError as e:
+            raise PlanError(f"field {ds.name}.{f.name}: {e}") from e
         if refusal := agg_refusal(tree, "a field"):
             raise PlanError(f"field {ds.name}.{f.name}: {refusal}")
         # _parse has typed the server's aggregates, so this covers countIf too; the

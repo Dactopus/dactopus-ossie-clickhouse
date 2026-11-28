@@ -423,6 +423,14 @@ def test_a_call_of_metric_is_refused_in_a_question(model):
         assert "SUM(amount)" not in found and "operand of METRIC" not in found
 
 
+def test_a_dimension_on_a_field_that_calls_metric_is_a_plan_error(tmp_path):
+    # The Executor hides such a field; the Planner alone, given the model, refuses it.
+    model = build(tmp_path, with_metric_calls)
+    msg = refusal(model, "total", dimensions=("orders.bad_field",))
+    assert msg.startswith("field orders.bad_field: METRIC(amount) is not allowed; ")
+    assert METRIC_RULE in msg
+
+
 def metric_named_metric(data):
     # A field `metric` of orders (a name is unique within a dataset), a metric `metric`
     # of the model and of a second dataset.

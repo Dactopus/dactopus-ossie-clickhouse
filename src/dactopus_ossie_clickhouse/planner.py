@@ -899,12 +899,14 @@ class Planner:
             raise PlanError(f"unknown field {ref!r}{suggest(ref, names)}")
         return ds, f
 
-    def _parse(self, expression: str, question: bool = False) -> exp.Expression:
+    def _parse(
+        self, expression: str, question: bool = False, named: bool = False
+    ) -> exp.Expression:
         """parse(), with a call of a function outside the spec that the server
         says is an aggregate (countIf, uniqExactOrNull) typed as one, so every
         check on aggregates covers it. Without the server's word, SQLGlot's list
         of ClickHouse aggregates decides (_known_clickhouse_aggregate)."""
-        tree = parse(expression, question)
+        tree = parse(expression, question, named)
         # A plain dict has no aggregate; a catalog has None without system.functions.
         aggregate = getattr(self.catalog, "aggregate", None) or _known_clickhouse_aggregate
 
@@ -941,7 +943,7 @@ class Planner:
             tree = parsed
         else:
             try:
-                tree = self._parse(expression)
+                tree = self._parse(expression, named=metrics)
             except ValueError as e:
                 raise PlanError(str(e)) from e
             self._time_strings(tree, metrics, scope)
@@ -2504,7 +2506,7 @@ class Planner:
         on its own, as a selected metric: in ``total_sales > store_count`` the
         filter as a whole reads the root, and one join would count stores over
         the sales rows."""
-        tree = self._parse(f)
+        tree = self._parse(f, named=True)
         metrics: dict[str, OssieMetric] = {}
         for col in tree.find_all(exp.Column):
             if m := self._named_metric(col):
@@ -2543,7 +2545,7 @@ class Planner:
         names = list(dict.fromkeys(self.metric(n).name for n in q.metrics))
         trees = []
         for f in having:
-            tree = self._parse(f)
+            tree = self._parse(f, named=True)
             self._time_strings(tree, metrics=True)
             for col in tree.find_all(exp.Column):
                 m = self._named_metric(col)

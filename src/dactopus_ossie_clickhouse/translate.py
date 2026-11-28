@@ -362,17 +362,36 @@ def agg_calls(tree: exp.Expression) -> list[exp.Anonymous]:
 # function, which would reach ClickHouse or be checked against system.functions, so
 # parse() refuses it, in every expression the executor reads: a field, a metric of a
 # dataset or of the model, a filter, an expression of a question.
-METRIC_RULE = (
+_METRIC_RESERVED = (
     "METRIC is a function name that the spec reserves (expression_language.md, "
     '"Metric Definition: METRIC (RESERVED)"); no expression may call it, and this '
-    "executor gives it no meaning. A metric's expression is the operand of METRIC "
-    "already: write SUM(amount), not METRIC(SUM(amount))"
+    "executor gives it no meaning"
+)
+# In a field or a metric of the model: the metric's expression is METRIC's operand.
+METRIC_RULE = (
+    f"{_METRIC_RESERVED}. A metric's expression is the operand of METRIC already: write "
+    "SUM(amount), not METRIC(SUM(amount))"
 )
 
 
 def metric_call(node: exp.Expression) -> bool:
     """A call of METRIC, in any capitalization, in a tree from SQLGlot."""
     return isinstance(node, exp.Anonymous) and node.name.upper() == "METRIC"
+
+
+def metric_refusal(node: exp.Anonymous, named: bool = False) -> str:
+    """Why a call of METRIC is refused. With ``named``, in a question's expression or
+    filter, which names a model's metric and defines none: the advice is to name it,
+    by the call's own argument when that is a single column."""
+    call = node.sql()
+    if not named:
+        return f"{call} is not allowed; {METRIC_RULE}"
+    arg = node.expressions[0] if len(node.expressions) == 1 else None
+    metric = arg.sql() if isinstance(arg, exp.Column) else "the metric's name"
+    return (
+        f"{call} is not allowed; {_METRIC_RESERVED}. A question names a metric of the "
+        f"model itself: write {metric}, not {call}"
+    )
 
 
 def _agg_shape_problem(node: exp.Anonymous) -> str | None:
@@ -474,8 +493,6 @@ def _shape_problem(node: exp.Expression) -> str | None:
         return "an alias (AS) is not allowed in an expression"
     if agg_call(node):
         return _agg_shape_problem(node)
-    if metric_call(node):
-        return f"{node.sql()} is not allowed; {METRIC_RULE}"
     if isinstance(node, exp.PercentileCont | exp.PercentileDisc):
         signature = _SIGNATURES[node.sql_name()][0]
         if not isinstance(node.parent, exp.WithinGroup):
@@ -526,10 +543,11 @@ def _shape_problem(node: exp.Expression) -> str | None:
     return None
 
 
-def parse(expression: str, question: bool = False) -> exp.Expression:
+def parse(expression: str, question: bool = False, named: bool = False) -> exp.Expression:
     """Parse an Ossie expression, rejecting constructs the spec disallows. With
     ``question``, a metric name may take a FILTER (QuestionSQL): only an expression over
-    metrics in a question does."""
+    metrics in a question does. ``question`` and ``named`` (a question's filter) say that
+    the text names the model's metrics, which changes the advice a call of METRIC gets."""
     try:
         tree = sqlglot.parse_one(expression, read=QuestionSQL if question else OssieSQL)
     except sqlglot.errors.SqlglotError as e:
@@ -539,6 +557,8 @@ def parse(expression: str, question: bool = False) -> exp.Expression:
             raise ValueError(
                 f"{type(node).__name__} is not allowed in an Ossie expression: {expression!r}"
             )
+        if metric_call(node):
+            raise ValueError(f"{metric_refusal(node, question or named)}: {expression!r}")
         filtered_metric = (
             question and isinstance(node, exp.Filter) and isinstance(node.this, exp.Column)
         )

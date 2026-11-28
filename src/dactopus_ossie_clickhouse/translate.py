@@ -1225,8 +1225,9 @@ def untranslatable(model: OssieDocument) -> tuple[dict[str, str], dict[str, str]
 
     The executor hides them: an expression that does not parse cannot be shown
     to read only columns the user may see. A call of AGG is refused outside a model's
-    metric; the planner checks what one names. A call of METRIC is refused everywhere,
-    by parse(), before any server check. A field that aggregates outside a window
+    metric; the planner checks what one names. A call of METRIC is refused in Ossie SQL,
+    by parse(), before any server check; a CLICKHOUSE text may call a server function of
+    that name. A field that aggregates outside a window
     is refused too; the executor adds those whose aggregate only the server knows."""
 
     def problem(expression: OssieExpression, where: str | None) -> str | None:

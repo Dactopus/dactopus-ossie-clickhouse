@@ -7,6 +7,7 @@ named ``source`` has no such access."""
 
 import copy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -429,6 +430,71 @@ def test_a_dimension_on_a_field_that_calls_metric_is_a_plan_error(tmp_path):
     msg = refusal(model, "total", dimensions=("orders.bad_field",))
     assert msg.startswith("field orders.bad_field: METRIC(amount) is not allowed; ")
     assert METRIC_RULE in msg
+
+
+class WithFunctions(FakeClickHouse):
+    """A server whose system.functions lists what ``rows`` say, as (name,
+    case_insensitive, is_aggregate)."""
+
+    def __init__(self, tables, rows):
+        super().__init__(tables)
+        self.rows = rows
+
+    def query(self, sql, parameters=None):
+        if "system.functions" in sql:
+            return SimpleNamespace(result_rows=self.rows)
+        if "aggregate_function_combinators" in sql:
+            return SimpleNamespace(result_rows=[("If",)])
+        return super().query(sql, parameters)
+
+
+@pytest.mark.parametrize("is_aggregate", [0, 1])
+def test_a_user_defined_function_named_metric_does_not_let_a_call_through(tmp_path, is_aggregate):
+    # A server that has a function (a UDF) metric: the reservation still wins, with
+    # the spec's reason, and a question that calls it is refused.
+    server = WithFunctions(
+        tables({"id", "amount", "status"}), [("metric", 0, is_aggregate), ("sum", 1, 1)]
+    )
+    ex = Executor(server, build(tmp_path, with_metric_calls))
+    assert ex.functions is not None and ex.functions.has("metric")
+    assert ex.untranslatable_fields == {
+        "orders.bad_field": metric_refusal("METRIC(amount)", "metric(amount)")
+    }
+    assert ex.untranslatable_metrics == {
+        "orders.bad_metric": metric_refusal("METRIC(SUM(amount))", "METRIC(SUM(amount))"),
+        "bad_model_metric": metric_refusal("METRIC(orders.via_field)", "Metric(orders.via_field)"),
+    }
+    assert "bad_field" not in {f.name for f in ex.model.datasets[0].fields}
+    for found in (
+        refusal(ex.model, "metric(total) AS t"),
+        refusal(ex.model, "total", filters=("metric(orders.status) > 1",)),
+    ):
+        assert "spec reserves" in found
+
+
+def test_a_call_of_metric_in_the_clickhouse_dialect_is_hidden_and_never_sent(tmp_path):
+    def clickhouse(text: str) -> dict:
+        return {"dialects": [{"dialect": "CLICKHOUSE", "expression": text}]}
+
+    def mutate(data):
+        data["datasets"][0]["fields"].append(
+            {"name": "ch_field", "expression": clickhouse("metric(amount)")}
+        )
+        data["datasets"][0]["metrics"].append(
+            {"name": "ch_metric", "expression": clickhouse("METRIC(sum(amount))")}
+        )
+        data["metrics"].append({"name": "ch_model", "expression": clickhouse("Metric(1)")})
+
+    fields, metrics = untranslatable(build(tmp_path, mutate))
+    assert set(fields) == {"orders.ch_field"} and set(metrics) == {"orders.ch_metric", "ch_model"}
+    for why in (*fields.values(), *metrics.values()):
+        assert why.startswith("written for ClickHouse, read as Ossie SQL: ")
+        assert "spec reserves" in why
+    ex = Executor(FakeClickHouse(tables({"id", "amount", "status"})), build(tmp_path, mutate))
+    assert "ch_field" not in {f.name for f in ex.model.datasets[0].fields}
+    assert {m.name for m in ex.model.datasets[0].metrics}.isdisjoint({"ch_metric"})
+    assert "ch_model" not in {m.name for m in ex.model.metrics}
+    assert "metric(" not in refusal(ex.model, "orders.ch_metric").lower()
 
 
 def metric_named_metric(data):

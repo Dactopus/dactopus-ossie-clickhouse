@@ -58,6 +58,11 @@ class PlanError(ValueError):
     pass
 
 
+class FieldError(PlanError):
+    """A field's own expression does not parse. untranslatable() reports the field;
+    a metric that reads it is not reported again (unanswerable_metrics)."""
+
+
 # An item of a question's metrics is a metric name, or an expression over metric names
 # with the name of its column (docs/decisions/expressions-over-metrics.md).
 _OPERATORS = re.compile(r"[-+*/()]")
@@ -662,10 +667,12 @@ def unanswerable_metrics(model: OssieDocument, catalog: Catalog | None = None) -
             inputs = _aggregate_inputs(tree)
             try:
                 planner.plan(Query((name,)))
-            except _BlendError:
+            except (_BlendError, FieldError):
                 raise
             except PlanError:
                 pass  # refused in this question only, or for a reason found below
+        except FieldError:
+            continue  # reads an untranslatable field, reported as such
         except PlanError as e:
             out[name] = str(e)
             continue
@@ -1341,7 +1348,7 @@ class Planner:
         try:
             tree = self._parse(text)
         except ValueError as e:
-            raise PlanError(f"field {ds.name}.{f.name}: {e}") from e
+            raise FieldError(f"field {ds.name}.{f.name}: {e}") from e
         if refusal := agg_refusal(tree, "a field"):
             raise PlanError(f"field {ds.name}.{f.name}: {refusal}")
         # _parse has typed the server's aggregates, so this covers countIf too; the
